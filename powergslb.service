@@ -1,0 +1,14 @@
+# PowerGSLB systemd service
+
+[Unit]
+Description=PowerGSLB service
+
+[Service]
+Type=notify
+ExecStart=/usr/sbin/powergslb -c /etc/powergslb/powergslb.conf
+WatchdogSec=3
+Restart=on-failure
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

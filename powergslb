@@ -1,0 +1,377 @@
+#!/usr/bin/python
+
+"""PowerGSLB
+
+PowerDNS Remote GSLB Backend
+"""
+
+import abc
+import argparse
+import ast
+import BaseHTTPServer
+import ConfigParser
+import json
+import logging
+import os
+import socket
+import SocketServer
+import threading
+import time
+import urllib2
+
+import mysql.connector
+import pyping
+import subprocess32
+import systemd.daemon
+
+
+__author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
+__date__ = '16 Jan 2016'
+__version__ = '1.0.0'
+
+
+class AbstractThread(threading.Thread):
+
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self, **kwargs):
+        super(AbstractThread, self).__init__(**kwargs)
+        self.__shutdown_event = threading.Event()
+        self.__shutdown_request = False
+        self.daemon = True
+        self.sleep_interval = 0
+
+    def run(self):
+        logging.debug('{} thread started'.format(self.name))
+        try:
+            while not self.__shutdown_request:
+                self.task()
+                time.sleep(self.sleep_interval)
+        finally:
+            logging.debug('{} thread stopped'.format(self.name))
+            self.__shutdown_event.set()
+
+    def shutdown(self, timeout=0):
+        logging.debug('{} thread shutdown'.format(self.name))
+        self.__shutdown_request = True
+        self.__shutdown_event.wait(timeout)
+
+    @abc.abstractmethod
+    def task(self):
+        pass
+
+
+class Check(AbstractThread):
+
+    id = 0
+    check = None
+    fall = 0
+    rise = 0
+
+    def check_fall(self):
+        self.fall += 1
+        self.rise = 0
+
+        if self.fall >= self.check['fall'] and self.id not in Monitor.status:
+            logging.error('{}: {}: status fall'.format(self.name, self.check))
+            Monitor.status[self.id] = 0
+
+    def check_rise(self):
+        self.fall = 0
+        self.rise += 1
+
+        if self.rise >= self.check['rise'] and self.id in Monitor.status:
+            logging.info('{}: {}: status rise'.format(self.name, self.check))
+            del Monitor.status[self.id]
+
+    def do_command(self):
+        return subprocess32.call((self.check['path'], self.check['argument']), timeout=self.check['timeout']) == 0
+
+    def do_http(self):
+        urllib2.urlopen(self.check['url'], timeout=self.check['timeout']).close()
+        return True
+
+    def do_icmp(self):
+        return pyping.ping(self.check['ip'], timeout=self.check['timeout'] * 1000, count=1).ret_code == 0
+
+    def do_tcp(self):
+        socket.create_connection((self.check['ip'], self.check['port']), self.check['timeout']).close()
+        return True
+
+    def task(self):
+        self.sleep_interval = self.check['interval']
+        try:
+            if getattr(self, 'do_' + self.check['type'])():
+                logging.debug('{}: {}: return True'.format(self.name, self.check))
+                self.check_rise()
+            else:
+                logging.debug('{}: {}: return False'.format(self.name, self.check))
+                self.check_fall()
+        except Exception as e:
+            logging.debug('{}: {}: return Exception: {}'.format(self.name, self.check, e))
+            self.check_fall()
+
+
+class Database(mysql.connector.MySQLConnection):
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.disconnect()
+
+    def __init__(self):
+        super(Database, self).__init__(**dict(PowerGSLB.config.items('mysql')))
+
+    def get_checks(self):
+        query = ("SELECT records.id, records.content, checks.check FROM records, checks "
+                 "WHERE records.check_id IS NOT NULL AND records.check_id = checks.id")
+
+        logging.debug('{}: {}'.format(type(self).__name__, query))
+
+        cursor = self.cursor()
+        cursor.execute(query)
+
+        result = [dict(zip(('id', 'content', 'check'), row)) for row in cursor]
+        cursor.close()
+
+        return result
+
+    def get_records(self, qname, qtype):
+        if qtype == 'ANY':
+            query = ("SELECT id, name, type, content, ttl, priority FROM records "
+                     "WHERE name = %s AND disabled = 0")
+            params = (qname,)
+        else:
+            query = ("SELECT id, name, type, content, ttl, priority FROM records "
+                     "WHERE name = %s AND type = %s AND disabled = 0")
+            params = (qname, qtype)
+
+        logging.debug('{}: {}, {}'.format(type(self).__name__, query, params))
+
+        cursor = self.cursor()
+        cursor.execute(query, params)
+
+        result = [dict(zip(('id', 'qname', 'qtype', 'content', 'ttl', 'priority'), row)) for row in cursor]
+        cursor.close()
+
+        return result
+
+
+class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
+
+    close_connection = 0
+    database = None
+    protocol_version = 'HTTP/1.1'
+    server_version = 'PowerGSLB/' + __version__
+    rbufsize = -1
+    wbufsize = -1
+
+    def do_GET(self):
+        query = self.path.split('/')
+        if len(query) == 5 and query[1] == 'dns':
+            content = self.get_content(*query[2:])
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+            self.send_header('Content-Length', len(content))
+            self.end_headers()
+            self.wfile.write(content)
+            logging.debug('{}: {}'.format(type(self).__name__, content))
+        else:
+            self.send_error(404)
+
+    def get_content(self, method, qname, qtype):
+        if method == 'lookup':
+            records = []
+            try:
+                records = self.database.get_records(qname, qtype)
+            except Exception as e:
+                logging.error('{}: {}'.format(type(self).__name__, e))
+                self.close_connection = 1
+            result = [record for record in records if record['id'] not in Monitor.status]
+        else:
+            result = False
+
+        return json.dumps({'result': result})
+
+    def handle(self):
+        try:
+            with Database() as self.database:
+                while not self.close_connection:
+                    self.handle_one_request()
+        except Exception as e:
+            logging.error('{}: {}'.format(type(self).__name__, e))
+
+
+class Monitor(AbstractThread):
+
+    check_threads = []
+    checks = []
+    status = {}
+
+    def clean_status(self):
+        check_ids = {check['id']: 0 for check in self.checks}
+        stale_ids = [check_id for check_id in Monitor.status if check_id not in check_ids]
+
+        if stale_ids:
+            logging.debug('{}: clean status for check id: {}'.format(type(self).__name__, stale_ids))
+            for stale_id in stale_ids:
+                del Monitor.status[stale_id]
+
+    def parse_checks(self, raw_checks):
+        checks = []
+        params = (('type', str), ('interval', int), ('timeout', int), ('fall', int), ('rise', int))
+
+        for raw_check in raw_checks:
+            try:
+                raw_check['check'] = raw_check['check'] % {'content': raw_check['content']}
+                raw_check['check'] = dict(ast.literal_eval(raw_check['check']))
+            except Exception as e:
+                logging.error('{}: check id {}: parsing error: {}'.format(type(self).__name__, raw_check['id'], e))
+                continue
+
+            param = None
+            if not all([param[0] in raw_check['check'] and type(raw_check['check'][param[0]]) == param[1]
+                        for param in params]):
+                logging.error("{}: check id {}: required parameter '{}' missing or invalid".format(
+                        type(self).__name__, raw_check['id'], param[0]))
+                continue
+
+            if raw_check['check']['timeout'] > raw_check['check']['interval']:
+                logging.error("{}: check id {}: 'timeout' is greater than 'interval'".format(
+                        type(self).__name__, raw_check['id']))
+                raw_check['check']['timeout'] = raw_check['check']['interval']
+
+            checks.append(raw_check)
+
+        if self.checks == checks:
+            return False
+        else:
+            logging.debug('{}: checks updated: {}'.format(type(self).__name__, checks))
+            self.checks = checks
+            return True
+
+    def shutdown_check_threads(self):
+        if not self.check_threads:
+            logging.info('{}: check threads not running'.format(type(self).__name__))
+            return
+
+        logging.debug('{}: shutdown threads: {}'.format(type(self).__name__, self.check_threads))
+
+        alive_threads = []
+        shutdown_timeout = 0
+
+        for check_thread in self.check_threads:
+            if check_thread.is_alive():
+                check_thread.shutdown()
+                alive_threads.append(check_thread)
+                if check_thread.sleep_interval > shutdown_timeout:
+                    shutdown_timeout = check_thread.sleep_interval
+
+        shutdown_time = time.time()
+        shutdown_timeout *= 2
+
+        while alive_threads and time.time() - shutdown_time < shutdown_timeout:
+            time.sleep(1)
+            alive_threads = [alive_thread for alive_thread in alive_threads if alive_thread.is_alive()]
+
+        self.check_threads = alive_threads
+
+    def start_check_threads(self):
+        if self.check_threads:
+            logging.info('{}: check threads already running: {}'.format(type(self).__name__, self.check_threads))
+            return
+
+        check_threads = []
+        for check in self.checks:
+            check_thread = Check(name='Check-{}'.format(check['id']))
+            check_thread.id = check['id']
+            check_thread.check = check['check']
+            check_thread.start()
+            check_threads.append(check_thread)
+
+        logging.debug('{}: started threads: {}'.format(type(self).__name__, check_threads))
+
+        self.check_threads = check_threads
+
+    def task(self):
+        self.sleep_interval = PowerGSLB.config.getint('monitor', 'update')
+
+        if self.update_checks():
+            self.shutdown_check_threads()
+            self.clean_status()
+            self.start_check_threads()
+
+    def update_checks(self):
+        logging.info('{}: update checks from database'.format(type(self).__name__))
+        try:
+            with Database() as database:
+                raw_checks = database.get_checks()
+        except Exception as e:
+            logging.error('{}: {}'.format(type(self).__name__, e))
+            return False
+
+        return self.parse_checks(raw_checks)
+
+
+class Server(AbstractThread):
+
+    def task(self):
+        server_address = (PowerGSLB.config.get('server', 'address'), PowerGSLB.config.getint('server', 'port'))
+        logging.info('{}: listening on {}:{}'.format(type(self).__name__, server_address[0], server_address[1]))
+        http_server = ThreadingHTTPServer(server_address, HTTPRequestHandler)
+        http_server.serve_forever()
+
+
+class Service(object):
+
+    def __init__(self, service_threads):
+        self.service_threads = service_threads
+        self.sleep_interval = self.watchdog_interval()
+
+    def start(self):
+        [service_thread.start() for service_thread in self.service_threads]
+
+        if systemd.daemon.booted():
+            systemd.daemon.notify('READY=1')
+
+        while all([service_thread.is_alive() for service_thread in self.service_threads]):
+            if systemd.daemon.booted():
+                systemd.daemon.notify('STATUS=Total threads: {}; Service threads: {}\nWATCHDOG=1'.format(
+                        threading.active_count(), len(self.service_threads)))
+            time.sleep(self.sleep_interval)
+
+    @staticmethod
+    def watchdog_interval(interval=1):
+        if 'WATCHDOG_USEC' in os.environ:
+            interval = min(interval, int(os.environ['WATCHDOG_USEC']) / 1000000 / 2)
+        return interval
+
+
+class ThreadingHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+    pass
+
+
+class PowerGSLB(object):
+
+    config = None
+
+    @classmethod
+    def main(cls):
+        args_parser = argparse.ArgumentParser()
+        args_parser.add_argument('-c', '--config', default='powergslb.conf')
+        args = args_parser.parse_args()
+
+        cls.config = ConfigParser.RawConfigParser()
+        cls.config.read(args.config)
+
+        logging.basicConfig(format=cls.config.get('logging', 'format'),
+                            level=logging.getLevelName(cls.config.get('logging', 'level')))
+
+        service_threads = (Monitor(name='Monitor'), Server(name='Server'))
+        service = Service(service_threads)
+        service.start()
+
+
+if __name__ == '__main__':
+    PowerGSLB.main()

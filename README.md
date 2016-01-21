@@ -17,6 +17,10 @@ Main features:
 
 *Please request new features!*
 
+## Database diagram
+
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/database.png?raw=true)
+
 ## Installation on CentOS 7
 
 ### Setup PowerDNS

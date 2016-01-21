@@ -1,6 +1,23 @@
 # PowerGSLB - PowerDNS Remote GSLB Backend
 
-## Setup instructions for CentOS 7
+PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution.
+
+Main features:
+* Written in Python 2.7
+* Built as [PowerDNS Authoritative Server Remote Backend] (https://doc.powerdns.com/3/authoritative/backend-remote/)
+* All DNS GSLB configuration stored in a MySQL / MariaDB database
+* Extendable health checks:
+    * ICMP ping
+    * TCP connect
+    * HTTP request
+    * Arbitrary commands execution
+* Fallback if all the checks failed
+* Weighted (priority) records
+* Client IP / Subnet persistence
+
+*Please request new features!*
+
+## Installation on CentOS 7
 
 ### Setup PowerDNS
 
@@ -40,7 +57,7 @@ mysql_secure_installation
 ### Setup PowerGSLB
 
 ```shell
-yum -y install gcc mysql-connector-python python-devel python-pip systemd-python
+yum -y install gcc mysql-connector-python python-devel python-netaddr python-pip systemd-python
 pip install pyping
 pip install subprocess32
 
@@ -68,5 +85,8 @@ systemctl status powergslb.service
 ```
 yum -y install bind-utils
 
+dig @127.0.0.1 example.com SOA
+dig @127.0.0.1 example.com A
+dig @127.0.0.1 example.com AAAA
 dig @127.0.0.1 example.com ANY
 ```

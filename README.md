@@ -3,14 +3,17 @@
 PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution.
 
 Main features:
-* Written in Python 2.7
 * Built as [PowerDNS Authoritative Server Remote Backend] (https://doc.powerdns.com/3/authoritative/backend-remote/)
-* All DNS GSLB configuration stored in a MySQL / MariaDB database
+* Written in Python 2.7
+* DNS GSLB configuration stored in a MySQL / MariaDB database
+* Multi-Master DNS GSLB using native MySQL / MariaDB database replication
+* Multithreaded design
+* Systemd status and watchdog support
 * Extendable health checks:
     * ICMP ping
     * TCP connect
     * HTTP request
-    * Arbitrary commands execution
+    * Arbitrary command execution
 * Fallback if all the checks failed
 * Weighted (priority) records
 * Client IP / Subnet persistence

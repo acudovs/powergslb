@@ -27,8 +27,8 @@ import systemd.daemon
 
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '21 Jan 2016'
-__version__ = '1.1.0'
+__date__ = '23 Jan 2016'
+__version__ = '1.2.0'
 
 
 class AbstractThread(threading.Thread):
@@ -78,7 +78,7 @@ class Check(AbstractThread):
 
         if self.fall >= self.monitor['fall'] and self.record_id not in Monitor.status:
             logging.error('{}: {}: status fall'.format(self.name, self.monitor))
-            Monitor.status[self.record_id] = 0
+            Monitor.status.add(self.record_id)
 
     def check_rise(self):
         self.fall = 0
@@ -86,7 +86,7 @@ class Check(AbstractThread):
 
         if self.rise >= self.monitor['rise'] and self.record_id in Monitor.status:
             logging.info('{}: {}: status rise'.format(self.name, self.monitor))
-            del Monitor.status[self.record_id]
+            Monitor.status.remove(self.record_id)
 
     def do_exec(self):
         return subprocess32.call(self.monitor['args'], timeout=self.monitor['timeout']) == 0
@@ -96,7 +96,10 @@ class Check(AbstractThread):
         return True
 
     def do_icmp(self):
-        return pyping.ping(self.monitor['ip'], timeout=self.monitor['timeout'] * 1000, count=1).ret_code == 0
+        try:
+            return pyping.ping(self.monitor['ip'], timeout=self.monitor['timeout'] * 1000, count=1).ret_code == 0
+        except SystemExit:
+            raise PingError('unknown host: {}'.format(self.monitor['ip']))
 
     def do_tcp(self):
         socket.create_connection((self.monitor['ip'], self.monitor['port']), self.monitor['timeout']).close()
@@ -110,7 +113,7 @@ class Check(AbstractThread):
             else:
                 logging.debug('{}: {}: return False'.format(self.name, self.monitor))
                 self.check_fall()
-        except (Exception, SystemExit) as e:
+        except Exception as e:
             logging.debug('{}: {}: return Exception: {}: {}'.format(self.name, self.monitor, type(e).__name__, e))
             self.check_fall()
 
@@ -129,7 +132,10 @@ class Database(mysql.connector.MySQLConnection):
         super(Database, self).__init__(**dict(PowerGSLB.config.items('mysql')))
 
     def execute(self, query, params=()):
-        logging.debug('{}: {}, {}'.format(type(self).__name__, query, params))
+        if params:
+            logging.debug('{}: "{}" % {}'.format(type(self).__name__, query, params))
+        else:
+            logging.debug('{}: "{}"'.format(type(self).__name__, query))
 
         cursor = self.cursor()
         cursor.execute(query, params)
@@ -158,6 +164,12 @@ class Database(mysql.connector.MySQLConnection):
 
         return self.execute(query, params)
 
+    def get_status(self, record_ids):
+        joined_ids = ', '.join(map(str, record_ids))
+        query = "SELECT name, type, content, ttl FROM records WHERE id IN ({})".format(joined_ids)
+
+        return self.execute(query)
+
 
 class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
 
@@ -177,12 +189,19 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
         query = self.path.split('/')
         if len(query) == 5 and query[1] == 'dns':
             self.send_response(200)
-            content = self.get_content(*query[2:])
+            content = self.get_result(*query[2:])
             self.send_header('Content-Type', 'text/javascript; charset=utf-8')
             self.send_header('Content-Length', len(content))
             self.end_headers()
             self.wfile.write(content)
             logging.debug('{}: {}'.format(type(self).__name__, content))
+        elif len(query) == 2 and query[1] == 'status':
+            self.send_response(200)
+            content = self.get_status()
+            self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+            self.send_header('Content-Length', len(content))
+            self.end_headers()
+            self.wfile.write(content)
         else:
             self.send_error(404)
 
@@ -232,23 +251,35 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
 
         return records
 
-    def get_content(self, method, qname, qtype):
+    def get_result(self, method, qname, qtype):
         result = False
         if method == 'lookup':
             try:
                 records = self.database.get_records(qname, qtype)
-                if records:
-                    result = self.get_result(records)
             except Database.Error as e:
                 logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
                 self.close_connection = 1
+            else:
+                if records:
+                    qtype_records = self.split_records(records)
+                    filtered_records = self.filter_records(qtype_records)
+                    result = self.strip_records(filtered_records)
 
-        return json.dumps({'result': result})
+        return json.dumps({'result': result}, separators=(',', ':'))
 
-    def get_result(self, records):
-        qtype_records = self.split_records(records)
-        filtered_records = self.filter_records(qtype_records)
-        return self.strip_records(filtered_records)
+    def get_status(self):
+        status = True
+        failed_ids = Monitor.status.copy()
+
+        if failed_ids:
+            try:
+                status = self.database.get_status(failed_ids)
+            except Database.Error as e:
+                logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
+                self.close_connection = 1
+                status = False
+
+        return json.dumps({'status': status}, separators=(',', ':'))
 
     def handle(self):
         try:
@@ -312,6 +343,21 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
         return result
 
 
+class LockSet(set):
+
+    def __init__(self, seq=()):
+        super(LockSet, self).__init__(seq)
+        self.__lock = threading.RLock()
+
+    def add(self, elem):
+        with self.__lock:
+            return super(LockSet, self).add(elem)
+
+    def remove(self, elem):
+        with self.__lock:
+            return super(LockSet, self).add(elem)
+
+
 class Monitor(AbstractThread):
 
     check_params = {
@@ -321,22 +367,23 @@ class Monitor(AbstractThread):
         'tcp': [('ip', str), ('port', int), ('interval', int), ('timeout', int), ('fall', int), ('rise', int)]
     }
 
-    status = {}
+    status = LockSet()
 
     def __init__(self, **kwargs):
         super(Monitor, self).__init__(**kwargs)
         self.check_threads = []
         self.checks = []
-        self.sleep_interval = PowerGSLB.config.get('monitor', 'update')
+        self.refresh_threads = False
+        self.sleep_interval = PowerGSLB.config.get('monitor', 'update_interval')
 
     def clean_status(self):
-        check_ids = {check['id']: 0 for check in self.checks}
-        stale_ids = [record_id for record_id in Monitor.status if record_id not in check_ids]
+        check_ids = set([check['id'] for check in self.checks])
+        stale_ids = Monitor.status.difference(check_ids)
 
         if stale_ids:
-            logging.debug('{}: clean status for records: {}'.format(type(self).__name__, stale_ids))
-            for stale_id in stale_ids:
-                del Monitor.status[stale_id]
+            logging.debug('{}: clean status for records: {}'.format(
+                    type(self).__name__, ', '.join(map(str, stale_ids))))
+            Monitor.status.intersection_update(check_ids)
 
     def parse(self, check):
         parse_status = False
@@ -351,7 +398,7 @@ class Monitor(AbstractThread):
 
     def shutdown_check_threads(self):
         if not self.check_threads:
-            logging.info('{}: check threads not running'.format(type(self).__name__))
+            logging.info('{}: check threads are not running'.format(type(self).__name__))
             return
 
         logging.debug('{}: shutdown threads: {}'.format(type(self).__name__, self.check_threads))
@@ -377,7 +424,7 @@ class Monitor(AbstractThread):
 
     def start_check_threads(self):
         if self.check_threads:
-            logging.info('{}: check threads already running: {}'.format(type(self).__name__, self.check_threads))
+            logging.error('{}: check threads already running: {}'.format(type(self).__name__, self.check_threads))
             return
 
         check_threads = []
@@ -391,14 +438,16 @@ class Monitor(AbstractThread):
         self.check_threads = check_threads
 
     def task(self):
-        if self.update_checks():
+        self.update_checks()
+        self.verify_check_threads()
+        if self.refresh_threads:
             self.shutdown_check_threads()
             self.clean_status()
             self.start_check_threads()
 
     def update_checks(self):
-        logging.info('{}: update checks from database'.format(type(self).__name__))
-        update_status = False
+        logging.info('{}: update checks from the database'.format(type(self).__name__))
+        refresh_threads = False
         try:
             with Database() as database:
                 raw_checks = database.get_checks()
@@ -409,9 +458,9 @@ class Monitor(AbstractThread):
             if self.checks != checks:
                 logging.debug('{}: checks updated: {}'.format(type(self).__name__, checks))
                 self.checks = checks
-                update_status = True
+                refresh_threads = True
 
-        return update_status
+        self.refresh_threads = refresh_threads
 
     def validate(self, check):
         validate_status = False
@@ -432,6 +481,31 @@ class Monitor(AbstractThread):
             validate_status = True
 
         return validate_status
+
+    def verify_check_threads(self):
+        if self.refresh_threads:
+            return
+
+        check_ids = set(check['id'] for check in self.checks)
+        check_thread_ids = set(thread.record_id for thread in self.check_threads if thread.is_alive())
+
+        if check_ids != check_thread_ids:
+            running_thread_ids = check_thread_ids.difference(check_ids)
+            stopped_thread_ids = check_ids.difference(check_thread_ids)
+
+            if running_thread_ids:
+                logging.error('{}: unexpectedly running threads: {}'.format(
+                        type(self).__name__, ', '.join(map('Check-{}'.format, running_thread_ids))))
+
+            if stopped_thread_ids:
+                logging.error('{}: unexpectedly stopped threads: {}'.format(
+                        type(self).__name__, ', '.join(map('Check-{}'.format, stopped_thread_ids))))
+
+            self.refresh_threads = True
+
+
+class PingError(Exception):
+    pass
 
 
 class Server(AbstractThread):

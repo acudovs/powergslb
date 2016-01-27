@@ -27,8 +27,8 @@ import systemd.daemon
 
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '23 Jan 2016'
-__version__ = '1.2.0'
+__date__ = '27 Jan 2016'
+__version__ = '1.2.1'
 
 
 class AbstractThread(threading.Thread):
@@ -62,10 +62,10 @@ class AbstractThread(threading.Thread):
         pass
 
 
-class Check(AbstractThread):
+class CheckThread(AbstractThread):
 
     def __init__(self, monitor, record_id, **kwargs):
-        super(Check, self).__init__(**kwargs)
+        super(CheckThread, self).__init__(**kwargs)
         self.monitor = monitor
         self.record_id = record_id
         self.sleep_interval = self.monitor['interval']
@@ -195,6 +195,7 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
             self.end_headers()
             self.wfile.write(content)
             logging.debug('{}: {}'.format(type(self).__name__, content))
+
         elif len(query) == 2 and query[1] == 'status':
             self.send_response(200)
             content = self.get_status()
@@ -291,19 +292,21 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
 
     def remote_ip_persistence(self, records):
         ip_value = 0
-        try:
-            remote_ip = self.headers.get('X-Remotebackend-Real-Remote')
-            if remote_ip:
+        remote_ip = self.headers.get('X-Remotebackend-Real-Remote')
+
+        if remote_ip is None:
+            logging.error("{}: 'X-Remotebackend-Real-Remote' header missing".format(type(self).__name__))
+        else:
+            try:
                 network = netaddr.IPNetwork(remote_ip)
+            except netaddr.AddrFormatError as e:
+                logging.error("{}: 'X-Remotebackend-Real-Remote' header invalid: {}: {}".format(
+                        type(self).__name__, type(e).__name__, e))
+            else:
                 if network.version == 4:
-                    first_ip = netaddr.IPNetwork('{}/{}'.format(network.ip, self.ipv4_prefix)).first
-                    ip_value = first_ip >> self.ipv4_prefix
+                    ip_value = network.ip.value >> self.ipv4_prefix
                 elif network.version == 6:
-                    first_ip = netaddr.IPNetwork('{}/{}'.format(network.ip, self.ipv6_prefix)).first
-                    ip_value = first_ip >> self.ipv6_prefix
-        except netaddr.AddrFormatError as e:
-            logging.error('{}: remote ip persistence error: {}: {}'.format(
-                    type(self).__name__, type(e).__name__, e))
+                    ip_value = network.ip.value >> self.ipv6_prefix
 
         return records[hash(ip_value) % len(records)]
 
@@ -429,7 +432,7 @@ class Monitor(AbstractThread):
 
         check_threads = []
         for check in self.checks:
-            check_thread = Check(check['monitor'], check['id'], name='Check-{}'.format(check['id']))
+            check_thread = CheckThread(check['monitor'], check['id'], name='Check-{}'.format(check['id']))
             check_thread.start()
             check_threads.append(check_thread)
 
@@ -514,6 +517,7 @@ class Server(AbstractThread):
         server_address = (PowerGSLB.config.get('server', 'address'), PowerGSLB.config.get('server', 'port'))
         logging.info('{}: listening on {}:{}'.format(type(self).__name__, server_address[0], server_address[1]))
         http_server = ThreadingHTTPServer(server_address, HTTPRequestHandler)
+        http_server.daemon_threads = True
         http_server.serve_forever()
 
 
@@ -529,7 +533,7 @@ class Service(object):
         if systemd.daemon.booted():
             systemd.daemon.notify('READY=1')
 
-        while all([service_thread.is_alive() for service_thread in self.service_threads]):
+        while all(service_thread.is_alive() for service_thread in self.service_threads):
             if systemd.daemon.booted():
                 systemd.daemon.notify('STATUS=Total threads: {}; Service threads: {}\nWATCHDOG=1'.format(
                         threading.active_count(), len(self.service_threads)))

@@ -2,7 +2,7 @@
 
 """PowerGSLB
 
-PowerDNS Remote GSLB Backend
+PowerDNS Remote GSLB Backend https://github.com/AlekseyChudov/powergslb
 """
 
 import abc
@@ -13,6 +13,7 @@ import ConfigParser
 import json
 import logging
 import os
+import SimpleHTTPServer
 import socket
 import SocketServer
 import threading
@@ -27,8 +28,8 @@ import systemd.daemon
 
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '27 Jan 2016'
-__version__ = '1.2.1'
+__date__ = '31 Jan 2016'
+__version__ = '1.3.0'
 
 
 class AbstractThread(threading.Thread):
@@ -64,10 +65,10 @@ class AbstractThread(threading.Thread):
 
 class CheckThread(AbstractThread):
 
-    def __init__(self, monitor, record_id, **kwargs):
+    def __init__(self, monitor, content_id, **kwargs):
         super(CheckThread, self).__init__(**kwargs)
         self.monitor = monitor
-        self.record_id = record_id
+        self.content_id = content_id
         self.sleep_interval = self.monitor['interval']
         self.fall = 0
         self.rise = 0
@@ -76,17 +77,17 @@ class CheckThread(AbstractThread):
         self.fall += 1
         self.rise = 0
 
-        if self.fall >= self.monitor['fall'] and self.record_id not in Monitor.status:
+        if self.fall >= self.monitor['fall'] and self.content_id not in Monitor.status:
             logging.error('{}: {}: status fall'.format(self.name, self.monitor))
-            Monitor.status.add(self.record_id)
+            Monitor.status.add(self.content_id)
 
     def check_rise(self):
         self.fall = 0
         self.rise += 1
 
-        if self.rise >= self.monitor['rise'] and self.record_id in Monitor.status:
+        if self.rise >= self.monitor['rise'] and self.content_id in Monitor.status:
             logging.info('{}: {}: status rise'.format(self.name, self.monitor))
-            Monitor.status.remove(self.record_id)
+            Monitor.status.remove(self.content_id)
 
     def do_exec(self):
         return subprocess32.call(self.monitor['args'], timeout=self.monitor['timeout']) == 0
@@ -132,6 +133,8 @@ class Database(mysql.connector.MySQLConnection):
         super(Database, self).__init__(**dict(PowerGSLB.config.items('mysql')))
 
     def execute(self, query, params=()):
+        query = ' '.join(filter(bool, (line.strip() for line in query.splitlines())))
+
         if params:
             logging.debug('{}: "{}" % {}'.format(type(self).__name__, query, params))
         else:
@@ -147,31 +150,80 @@ class Database(mysql.connector.MySQLConnection):
         return result
 
     def get_checks(self):
-        query = ("SELECT id, name, type, content, ttl, monitor "
-                 "FROM records WHERE monitor IS NOT NULL AND disabled = 0")
+        query = """
+            SELECT contents.id,
+                   contents.content,
+                   monitors.monitor
+            FROM contents
+            JOIN monitors ON contents.monitor_id = monitors.id
+            WHERE monitors.monitor <> ''
+        """
 
         return self.execute(query)
 
     def get_records(self, qname, qtype):
         if qtype == 'ANY':
-            query = ("SELECT id, name AS qname, type AS qtype, content, ttl, fallback, persistence, weight "
-                     "FROM records WHERE name = %s AND disabled = 0")
+            query = """
+                SELECT records.name AS qname,
+                       records.type AS qtype,
+                       records.ttl,
+                       records.persistence,
+                       contents.id,
+                       contents.content,
+                       contents.fallback,
+                       contents.weight
+                FROM records
+                JOIN records_contents ON records.id = records_contents.record_id
+                JOIN contents ON records_contents.content_id = contents.id
+                WHERE records.name = %s
+                  AND records.disabled = 0
+            """
             params = (qname,)
         else:
-            query = ("SELECT id, name AS qname, type AS qtype, content, ttl, fallback, persistence, weight "
-                     "FROM records WHERE name = %s AND type = %s AND disabled = 0")
+            query = """
+                SELECT records.name AS qname,
+                       records.type AS qtype,
+                       records.ttl,
+                       records.persistence,
+                       contents.id,
+                       contents.content,
+                       contents.fallback,
+                       contents.weight
+                FROM records
+                JOIN records_contents ON records.id = records_contents.record_id
+                JOIN contents ON records_contents.content_id = contents.id
+                WHERE records.name = %s
+                  AND records.type = %s
+                  AND records.disabled = 0
+            """
             params = (qname, qtype)
 
         return self.execute(query, params)
 
-    def get_status(self, record_ids):
-        joined_ids = ', '.join(map(str, record_ids))
-        query = "SELECT name, type, content, ttl FROM records WHERE id IN ({})".format(joined_ids)
+    def get_status(self):
+        query = """
+            SELECT domains.domain,
+                   records.name,
+                   records.type,
+                   records.ttl,
+                   records.disabled,
+                   records.persistence,
+                   contents.id,
+                   contents.content,
+                   contents.fallback,
+                   contents.weight,
+                   monitors.description AS monitor
+            FROM domains
+            JOIN records ON domains.id = records.domain_id
+            JOIN records_contents ON records.id = records_contents.record_id
+            JOIN contents ON records_contents.content_id = contents.id
+            JOIN monitors ON contents.monitor_id = monitors.id
+        """
 
         return self.execute(query)
 
 
-class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
+class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
 
     close_connection = 0
     protocol_version = 'HTTP/1.1'
@@ -186,17 +238,33 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
         super(HTTPRequestHandler, self).__init__(*args)
 
     def do_GET(self):
-        query = self.path.split('/')
-        if len(query) == 5 and query[1] == 'dns':
+        query = self.path.split('?', 1)[0]
+        query = query.split('/')[1:]
+
+        if not query:
+            self.send_error(501)
+
+        elif query[0] == 'admin':
+            path = self.translate_path(self.path)
+
+            if os.path.isdir(path) and not self.path.endswith('/'):
+                self.send_response(301)
+                self.send_header('Location', self.path + '/')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+            else:
+                super(HTTPRequestHandler, self).do_GET()
+
+        elif query[0] == 'dns':
             self.send_response(200)
-            content = self.get_result(*query[2:])
+            content = self.get_result(query[1:])
             self.send_header('Content-Type', 'text/javascript; charset=utf-8')
             self.send_header('Content-Length', len(content))
             self.end_headers()
             self.wfile.write(content)
             logging.debug('{}: {}'.format(type(self).__name__, content))
 
-        elif len(query) == 2 and query[1] == 'status':
+        elif query[0] == 'status':
             self.send_response(200)
             content = self.get_status()
             self.send_header('Content-Type', 'text/javascript; charset=utf-8')
@@ -210,53 +278,43 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
         records = []
         for qtype in qtype_records:
 
-            fallback_max_weight = 0
-            fallback_records = []
-            live_max_weight = 0
-            live_records = []
+            fallback_records = {}
+            live_records = {}
 
             for record in qtype_records[qtype]:
                 if record['fallback']:
-                    fallback_records.append(record)
-                    if record['weight'] > fallback_max_weight:
-                        fallback_max_weight = record['weight']
+                    if record['weight'] not in fallback_records:
+                        fallback_records[record['weight']] = []
+
+                    fallback_records[record['weight']].append(record)
 
                 if record['id'] not in Monitor.status:
-                    live_records.append(record)
-                    if record['weight'] > live_max_weight:
-                        live_max_weight = record['weight']
+                    if record['weight'] not in live_records:
+                        live_records[record['weight']] = []
 
-            persistence = True
-            filtered_records = []
+                    live_records[record['weight']].append(record)
 
             if live_records:
-                for record in live_records:
-                    if record['weight'] == live_max_weight:
-                        filtered_records.append(record)
-                        if persistence and not record['persistence']:
-                            persistence = False
+                filtered_records = live_records[max(live_records)]
             else:
-                for record in fallback_records:
-                    if record['weight'] == fallback_max_weight:
-                        filtered_records.append(record)
-                        if persistence and not record['persistence']:
-                            persistence = False
+                filtered_records = fallback_records[max(fallback_records)]
 
             if not filtered_records:
                 continue
 
-            if persistence:
+            if any(record['persistence'] for record in filtered_records):
                 records.append(self.remote_ip_persistence(filtered_records))
             else:
                 records.extend(filtered_records)
 
         return records
 
-    def get_result(self, method, qname, qtype):
+    def get_result(self, query):
         result = False
-        if method == 'lookup':
+
+        if len(query) == 3 and query[0] == 'lookup':
             try:
-                records = self.database.get_records(qname, qtype)
+                records = self.database.get_records(*query[1:])
             except Database.Error as e:
                 logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
                 self.close_connection = 1
@@ -269,18 +327,24 @@ class HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler, object):
         return json.dumps({'result': result}, separators=(',', ':'))
 
     def get_status(self):
-        status = True
-        failed_ids = Monitor.status.copy()
+        try:
+            records = self.database.get_status()
+        except Database.Error as e:
+            logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
+            status = {'status': 'error', 'message': e}
+            self.close_connection = 1
+        else:
+            for record in records:
+                if record['disabled'] or record['id'] in Monitor.status:
+                    record['status'] = 'OFF'
+                else:
+                    record['status'] = 'ON'
 
-        if failed_ids:
-            try:
-                status = self.database.get_status(failed_ids)
-            except Database.Error as e:
-                logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
-                self.close_connection = 1
-                status = False
+                del record['id']
 
-        return json.dumps({'status': status}, separators=(',', ':'))
+            status = {'status': 'success', 'total': len(records), 'records': records}
+
+        return json.dumps(status, separators=(',', ':'))
 
     def handle(self):
         try:
@@ -380,7 +444,7 @@ class Monitor(AbstractThread):
         self.sleep_interval = PowerGSLB.config.get('monitor', 'update_interval')
 
     def clean_status(self):
-        check_ids = set([check['id'] for check in self.checks])
+        check_ids = set(check['id'] for check in self.checks)
         stale_ids = Monitor.status.difference(check_ids)
 
         if stale_ids:
@@ -490,7 +554,7 @@ class Monitor(AbstractThread):
             return
 
         check_ids = set(check['id'] for check in self.checks)
-        check_thread_ids = set(thread.record_id for thread in self.check_threads if thread.is_alive())
+        check_thread_ids = set(thread.content_id for thread in self.check_threads if thread.is_alive())
 
         if check_ids != check_thread_ids:
             running_thread_ids = check_thread_ids.difference(check_ids)
@@ -513,10 +577,17 @@ class PingError(Exception):
 
 class Server(AbstractThread):
 
+    def __init__(self, **kwargs):
+        super(Server, self).__init__(**kwargs)
+        self.address = PowerGSLB.config.get('server', 'address')
+        self.port = PowerGSLB.config.get('server', 'port')
+        self.root = PowerGSLB.config.get('server', 'root')
+
+        os.chdir(self.root)
+
     def task(self):
-        server_address = (PowerGSLB.config.get('server', 'address'), PowerGSLB.config.get('server', 'port'))
-        logging.info('{}: listening on {}:{}'.format(type(self).__name__, server_address[0], server_address[1]))
-        http_server = ThreadingHTTPServer(server_address, HTTPRequestHandler)
+        logging.info('{}: listening on {}:{}'.format(type(self).__name__, self.address, self.port))
+        http_server = ThreadingHTTPServer((self.address, self.port), HTTPRequestHandler)
         http_server.daemon_threads = True
         http_server.serve_forever()
 
@@ -528,7 +599,8 @@ class Service(object):
         self.sleep_interval = self.watchdog_interval()
 
     def start(self):
-        [service_thread.start() for service_thread in self.service_threads]
+        for service_thread in self.service_threads:
+            service_thread.start()
 
         if systemd.daemon.booted():
             systemd.daemon.notify('READY=1')

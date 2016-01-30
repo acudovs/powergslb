@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PowerGSLB: Admin</title>
+    <link rel="stylesheet" type="text/css" href="src/w2ui-1.4.3.min.css" />
+    <script type="text/javascript" src="src/jquery-2.2.0.min.js"></script>
+    <script type="text/javascript" src="src/w2ui-1.4.3.min.js"></script>
+</head>
+<body>
+
+<div id="grid" style="width: 100%; height: 700px"></div>
+
+<script type="text/javascript">
+$(function () {
+    $('#grid').w2grid({
+        name: 'grid',
+        url: '/status',
+        method: 'GET',
+        columns: [
+            { field: 'status', caption: 'Status', size: '55px', resizable: true },
+            { field: 'domain', caption: 'Domain', size: '100px', resizable: true },
+            { field: 'name', caption: 'Name', size: '150px', resizable: true },
+            { field: 'type', caption: 'Type', size: '60px', resizable: true },
+            { field: 'content', caption: 'Content', size: '510px', resizable: true },
+            { field: 'ttl', caption: 'TTL', size: '55px', resizable: true },
+            { field: 'disabled', caption: 'Disabled', size: '65px', resizable: true },
+            { field: 'fallback', caption: 'Fallback', size: '60px', resizable: true },
+            { field: 'persistence', caption: 'Persistence', size: '80px', resizable: true },
+            { field: 'weight', caption: 'Weight', size: '55px', resizable: true },
+            { field: 'monitor', caption: 'Monitor', size: '100%', resizable: true }
+        ]
+    });
+});
+</script>
+
+</body>
+</html>

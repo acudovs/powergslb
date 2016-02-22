@@ -48,7 +48,6 @@ cd powergslb
 ```
 yum -y install mariadb-server
 
-systemctl daemon-reload
 systemctl enable mariadb.service
 systemctl start mariadb.service
 systemctl status mariadb.service
@@ -69,6 +68,7 @@ cp powergslb/powergslb /usr/sbin/
 chmod 0755 /usr/sbin/powergslb
 cp powergslb/powergslb.service /etc/systemd/system/powergslb.service
 cp -r admin /usr/share/powergslb/
+cp powergslb/queryparser.py /usr/lib/python2.7/site-packages/
 
 mysql -p << EOF
 CREATE DATABASE powergslb;
@@ -77,6 +77,8 @@ USE powergslb;
 source database/scheme.sql
 source database/data.sql
 EOF
+
+sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
 
 systemctl daemon-reload
 systemctl enable powergslb.service
@@ -92,7 +94,6 @@ yum -y install pdns pdns-backend-remote
 cp /etc/pdns/pdns.conf /etc/pdns/pdns.conf~
 cp pdns/pdns.conf /etc/pdns/
 
-systemctl daemon-reload
 systemctl enable pdns.service
 systemctl start pdns.service
 systemctl status pdns.service

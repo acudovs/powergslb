@@ -12,6 +12,7 @@ import BaseHTTPServer
 import ConfigParser
 import json
 import logging
+import operator
 import os
 import SimpleHTTPServer
 import socket
@@ -26,14 +27,33 @@ import pyping
 import subprocess32
 import systemd.daemon
 
+import queryparser
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '31 Jan 2016'
-__version__ = '1.3.0'
+__date__ = '22 Feb 2016'
+__version__ = '1.4.0'
+
+
+class PowerGSLBError(Exception):
+    pass
+
+
+class HTTPRequestError(PowerGSLBError):
+    pass
+
+
+class MonitorValidateError(PowerGSLBError):
+    pass
+
+
+class PingError(PowerGSLBError):
+    pass
 
 
 class AbstractThread(threading.Thread):
-
+    """
+    Abstract thread
+    """
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, **kwargs):
@@ -63,64 +83,10 @@ class AbstractThread(threading.Thread):
         pass
 
 
-class CheckThread(AbstractThread):
-
-    def __init__(self, monitor, content_id, **kwargs):
-        super(CheckThread, self).__init__(**kwargs)
-        self.monitor = monitor
-        self.content_id = content_id
-        self.sleep_interval = self.monitor['interval']
-        self.fall = 0
-        self.rise = 0
-
-    def check_fall(self):
-        self.fall += 1
-        self.rise = 0
-
-        if self.fall >= self.monitor['fall'] and self.content_id not in Monitor.status:
-            logging.error('{}: {}: status fall'.format(self.name, self.monitor))
-            Monitor.status.add(self.content_id)
-
-    def check_rise(self):
-        self.fall = 0
-        self.rise += 1
-
-        if self.rise >= self.monitor['rise'] and self.content_id in Monitor.status:
-            logging.info('{}: {}: status rise'.format(self.name, self.monitor))
-            Monitor.status.remove(self.content_id)
-
-    def do_exec(self):
-        return subprocess32.call(self.monitor['args'], timeout=self.monitor['timeout']) == 0
-
-    def do_http(self):
-        urllib2.urlopen(self.monitor['url'], timeout=self.monitor['timeout']).close()
-        return True
-
-    def do_icmp(self):
-        try:
-            return pyping.ping(self.monitor['ip'], timeout=self.monitor['timeout'] * 1000, count=1).ret_code == 0
-        except SystemExit:
-            raise PingError('unknown host: {}'.format(self.monitor['ip']))
-
-    def do_tcp(self):
-        socket.create_connection((self.monitor['ip'], self.monitor['port']), self.monitor['timeout']).close()
-        return True
-
-    def task(self):
-        try:
-            if getattr(self, 'do_' + self.monitor['type'])():
-                logging.debug('{}: {}: return True'.format(self.name, self.monitor))
-                self.check_rise()
-            else:
-                logging.debug('{}: {}: return False'.format(self.name, self.monitor))
-                self.check_fall()
-        except Exception as e:
-            logging.debug('{}: {}: return Exception: {}: {}'.format(self.name, self.monitor, type(e).__name__, e))
-            self.check_fall()
-
-
-class Database(mysql.connector.MySQLConnection):
-
+class PowerGSLBDatabase(mysql.connector.MySQLConnection):
+    """
+    PowerGSLB database
+    """
     Error = mysql.connector.Error
 
     def __enter__(self):
@@ -129,150 +95,496 @@ class Database(mysql.connector.MySQLConnection):
     def __exit__(self, *_):
         self.disconnect()
 
-    def __init__(self):
-        super(Database, self).__init__(**dict(PowerGSLB.config.items('mysql')))
+    @staticmethod
+    def join_operation(operation):
+        return ' '.join(filter(bool, (line.strip() for line in operation.splitlines())))
 
-    def execute(self, query, params=()):
-        query = ' '.join(filter(bool, (line.strip() for line in query.splitlines())))
-
+    def execute(self, operation, params=()):
+        operation = self.join_operation(operation)
         if params:
-            logging.debug('{}: "{}" % {}'.format(type(self).__name__, query, params))
+            logging.debug('{}: "{}" % {}'.format(type(self).__name__, operation, params))
         else:
-            logging.debug('{}: "{}"'.format(type(self).__name__, query))
+            logging.debug('{}: "{}"'.format(type(self).__name__, operation))
 
-        cursor = self.cursor()
-        cursor.execute(query, params)
-
-        column_names = [description[0] for description in cursor.description]
-        result = [dict(zip(column_names, row)) for row in cursor]
-        cursor.close()
+        cursor = self.cursor(buffered=True)
+        try:
+            cursor.execute(operation, params)
+            if operation.startswith('SELECT'):
+                logging.debug('{}: {} rows returned'.format(type(self).__name__, cursor.rowcount))
+                column_names = [description[0] for description in cursor.description]
+                result = [dict(zip(column_names, row)) for row in cursor]
+            else:
+                logging.debug('{}: {} rows affected'.format(type(self).__name__, cursor.rowcount))
+                result = cursor.rowcount
+        finally:
+            cursor.close()
 
         return result
 
-    def get_checks(self):
-        query = """
-            SELECT contents.id,
-                   contents.content,
-                   monitors.monitor
-            FROM contents
-            JOIN monitors ON contents.monitor_id = monitors.id
-            WHERE monitors.monitor <> ''
+    def clean_contents(self, content_monitor_id):
+        operation = """
+            DELETE IGNORE `contents_monitors`,
+               `contents`
+            FROM `contents_monitors`
+              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+            WHERE `contents_monitors`.`id` = %s
+        """
+        params = (content_monitor_id,)
+
+        return self.execute(operation, params)
+
+    def clean_names(self, name_type_id):
+        operation = """
+            DELETE IGNORE `names_types`,
+               `names`
+            FROM `names_types`
+              JOIN `names` ON `names_types`.`name_id` = `names`.`id`
+            WHERE `names_types`.`id` = %s
+        """
+        params = (name_type_id,)
+
+        return self.execute(operation, params)
+
+    def delete_domains(self, ids):
+        params = tuple(ids)
+        params_format = ', '.join(['%s'] * len(params))
+        operation = """
+            DELETE FROM `domains`
+            WHERE `id` IN ({})
+        """.format(params_format)
+
+        return self.execute(operation, params)
+
+    def delete_monitors(self, ids):
+        params = tuple(ids)
+        params_format = ', '.join(['%s'] * len(params))
+        operation = """
+            DELETE FROM `monitors`
+            WHERE `id` IN ({})
+        """.format(params_format)
+
+        return self.execute(operation, params)
+
+    def delete_records(self, ids):
+        params = tuple(ids)
+        params_format = ', '.join(['%s'] * len(params))
+        operation = """
+            DELETE IGNORE `records`,
+              `names_types`,
+              `names`,
+              `contents_monitors`,
+              `contents`
+            FROM `records`
+              JOIN `names_types` ON `records`.`name_type_id` = `names_types`.`id`
+              JOIN `names` ON `names_types`.`name_id` = `names`.`id`
+              JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
+              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+            WHERE `records`.`id` IN ({})
+        """.format(params_format)
+
+        return self.execute(operation, params)
+
+    def delete_types(self, values):
+        params = tuple(values)
+        params_format = ', '.join(['%s'] * len(params))
+        operation = """
+            DELETE FROM `types`
+            WHERE `value` IN ({})
+        """.format(params_format)
+
+        return self.execute(operation, params)
+
+    def get_status(self):
+        operation = """
+            SELECT `domains`.`domain`,
+              `names`.`name`,
+              `names_types`.`ttl`,
+              `names_types`.`persistence`,
+              `types`.`type` AS `name_type`,
+              `records`.`disabled`,
+              `records`.`fallback`,
+              `records`.`weight`,
+              `contents_monitors`.`id`,
+              `contents`.`content`,
+              `monitors`.`monitor`
+            FROM `domains`
+              JOIN `names` ON `domains`.`id` = `names`.`domain_id`
+              JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
+              JOIN `types` ON `names_types`.`type_value` = `types`.`value`
+              JOIN `records` ON `names_types`.`id` = `records`.`name_type_id`
+              JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
+              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+              JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
         """
 
-        return self.execute(query)
+        return self.execute(operation)
 
-    def get_records(self, qname, qtype):
+    def get_domains(self, recid=0):
+        operation = """
+            SELECT `id` AS `recid`,
+              `domain`
+            FROM `domains`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `id` = %s
+            """
+            params += (recid,)
+
+        return self.execute(operation, params)
+
+    def get_monitors(self, recid=0):
+        operation = """
+            SELECT `id` AS `recid`,
+              `monitor`,
+              `monitor_json`
+            FROM `monitors`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `id` = %s
+            """
+            params += (recid,)
+
+        return self.execute(operation, params)
+
+    def get_records(self, recid=0):
+        operation = """
+            SELECT `domains`.`domain`,
+              `names`.`name`,
+              `names_types`.`ttl`,
+              `names_types`.`persistence`,
+              `types`.`type` AS `name_type`,
+              `records`.`id` AS `recid`,
+              `records`.`disabled`,
+              `records`.`fallback`,
+              `records`.`weight`,
+              `contents`.`content`,
+              `monitors`.`monitor`
+            FROM `domains`
+              JOIN `names` ON `domains`.`id` = `names`.`domain_id`
+              JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
+              JOIN `types` ON `names_types`.`type_value` = `types`.`value`
+              JOIN `records` ON `names_types`.`id` = `records`.`name_type_id`
+              JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
+              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+              JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `records`.`id` = %s
+            """
+            params += (recid,)
+
+        return self.execute(operation, params)
+
+    def get_types(self, recid=0):
+        operation = """
+            SELECT `value` AS `recid`,
+              `type` AS `name_type`,
+              `description`
+            FROM `types`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `value` = %s
+            """
+            params += (recid,)
+
+        return self.execute(operation, params)
+
+    def gslb_checks(self):
+        operation = """
+            SELECT `contents_monitors`.`id`,
+              `contents`.`content`,
+              `monitors`.`monitor_json`
+            FROM `contents_monitors`
+              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+              JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+        """
+
+        return self.execute(operation)
+
+    def gslb_records(self, qname, qtype):
+        operation = """
+            SELECT `names`.`name` AS `qname`,
+              `types`.`type` AS `qtype`,
+              `names_types`.`ttl`,
+              `names_types`.`persistence`,
+              `records`.`fallback`,
+              `records`.`weight`,
+              `contents_monitors`.`id`,
+              `contents`.`content`
+            FROM `names`
+              JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
+              JOIN `types` ON `names_types`.`type_value` = `types`.`value`
+              JOIN `records` ON `names_types`.`id` = `records`.`name_type_id`
+              JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
+              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+        """
+
         if qtype == 'ANY':
-            query = """
-                SELECT records.name AS qname,
-                       records.type AS qtype,
-                       records.ttl,
-                       records.persistence,
-                       contents.id,
-                       contents.content,
-                       contents.fallback,
-                       contents.weight
-                FROM records
-                JOIN records_contents ON records.id = records_contents.record_id
-                JOIN contents ON records_contents.content_id = contents.id
-                WHERE records.name = %s
-                  AND records.disabled = 0
+            operation += """
+                WHERE `names`.`name` = %s
+                  AND `records`.`disabled` = 0
             """
             params = (qname,)
         else:
-            query = """
-                SELECT records.name AS qname,
-                       records.type AS qtype,
-                       records.ttl,
-                       records.persistence,
-                       contents.id,
-                       contents.content,
-                       contents.fallback,
-                       contents.weight
-                FROM records
-                JOIN records_contents ON records.id = records_contents.record_id
-                JOIN contents ON records_contents.content_id = contents.id
-                WHERE records.name = %s
-                  AND records.type = %s
-                  AND records.disabled = 0
+            operation += """
+                WHERE `names`.`name` = %s
+                  AND `types`.`type` = %s
+                  AND `records`.`disabled` = 0
             """
             params = (qname, qtype)
 
-        return self.execute(query, params)
+        return self.execute(operation, params)
 
-    def get_status(self):
-        query = """
-            SELECT domains.domain,
-                   records.name,
-                   records.type,
-                   records.ttl,
-                   records.disabled,
-                   records.persistence,
-                   contents.id,
-                   contents.content,
-                   contents.fallback,
-                   contents.weight,
-                   monitors.description AS monitor
-            FROM domains
-            JOIN records ON domains.id = records.domain_id
-            JOIN records_contents ON records.id = records_contents.record_id
-            JOIN contents ON records_contents.content_id = contents.id
-            JOIN monitors ON contents.monitor_id = monitors.id
+    def insert_names(self, domain, name):
+        operation = """
+            INSERT IGNORE INTO `names` (`domain_id`, `name`)
+              SELECT
+                (SELECT `id`
+                 FROM `domains`
+                 WHERE `domain` = %s) AS `domain_id`,
+                %s AS `name`
         """
+        params = (domain, name)
 
-        return self.execute(query)
+        return self.execute(operation, params)
+
+    def insert_names_types(self, domain, name, name_type, ttl, persistence):
+        operation = """
+            INSERT INTO `names_types` (`name_id`, `type_value`, `ttl`, `persistence`)
+              SELECT
+                (SELECT `names`.`id`
+                 FROM `names`
+                   JOIN `domains` ON `names`.`domain_id` = `domains`.`id`
+                 WHERE `name` = %s
+                   AND `domains`.`domain` = %s) AS `name_id`,
+                (SELECT `value`
+                 FROM `types`
+                 WHERE `type` = %s) AS `type_value`,
+                %s AS `ttl`,
+                %s AS `persistence`
+            ON DUPLICATE KEY UPDATE
+              `ttl` = %s,
+              `persistence` = %s
+        """
+        params = (name, domain, name_type, ttl, persistence, ttl, persistence)
+
+        return self.execute(operation, params)
+
+    def insert_contents(self, content):
+        operation = """
+            INSERT IGNORE INTO `contents` (`content`)
+            VALUES (%s)
+        """
+        params = (content,)
+
+        return self.execute(operation, params)
+
+    def insert_contents_monitors(self, content, monitor):
+        operation = """
+            INSERT IGNORE INTO `contents_monitors` (`content_id`, `monitor_id`)
+              SELECT
+                (SELECT `id`
+                 FROM `contents`
+                 WHERE `content` = %s) AS `content_id`,
+                (SELECT `id`
+                 FROM `monitors`
+                 WHERE `monitor` = %s) AS `monitor_id`
+        """
+        params = (content, monitor)
+
+        return self.execute(operation, params)
+
+    def save_domains(self, save_recid, domain, **_):
+        if save_recid:
+            operation = """
+                UPDATE `domains`
+                SET `domain` = %s
+                WHERE `id` = %s
+            """
+            params = (domain, save_recid)
+        else:
+            operation = """
+                INSERT INTO `domains` (`domain`)
+                VALUES (%s)
+            """
+            params = (domain,)
+
+        return self.execute(operation, params)
+
+    def save_monitors(self, save_recid, monitor, monitor_json, **_):
+        if save_recid:
+            operation = """
+                UPDATE `monitors`
+                SET `monitor` = %s,
+                  `monitor_json` = %s
+                WHERE `id` = %s
+
+            """
+            params = (monitor, monitor_json, save_recid)
+        else:
+            operation = """
+                INSERT INTO `monitors` (`monitor`, `monitor_json`)
+                VALUES (%s, %s)
+            """
+            params = (monitor, monitor_json)
+
+        return self.execute(operation, params)
+
+    def save_records(self, save_recid, domain, name, name_type, ttl, content, monitor, disabled=0, fallback=0,
+                     persistence=0, weight=0, **_):
+
+        count = self.insert_names(domain, name)
+        count += self.insert_names_types(domain, name, name_type, ttl, persistence)
+        count += self.insert_contents(content)
+        count += self.insert_contents_monitors(content, monitor)
+
+        save_recids = None
+
+        if save_recid:
+            operation = """
+                SELECT `names_types`.`id` AS `name_type_id`,
+                  `contents_monitors`.`id` AS `content_monitor_id`
+                FROM `records`
+                  JOIN `names_types` ON `records`.`name_type_id` = `names_types`.`id`
+                  JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
+                WHERE `records`.`id` = %s
+            """
+            params = (save_recid,)
+
+            save_recids = self.execute(operation, params)[0]
+
+            operation = """
+                UPDATE `records`
+                SET
+                  `name_type_id` =
+                    (SELECT `names_types`.`id`
+                     FROM `names_types`
+                       JOIN `names` ON `names_types`.`name_id` = `names`.`id`
+                       JOIN `domains` ON `names`.`domain_id` = `domains`.`id`
+                       JOIN `types` ON `names_types`.`type_value` = `types`.`value`
+                     WHERE `names`.`name` = %s
+                       AND `domains`.`domain` = %s
+                       AND `types`.`type` = %s),
+                  `content_monitor_id` =
+                    (SELECT `contents_monitors`.`id`
+                     FROM `contents_monitors`
+                       JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+                       JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+                     WHERE `contents`.`content` = %s
+                       AND `monitors`.`monitor` = %s),
+                  `disabled` = %s,
+                  `fallback` = %s,
+                  `weight` = %s
+                WHERE `records`.`id` = %s
+            """
+            params = (name, domain, name_type, content, monitor, disabled, fallback, weight, save_recid)
+        else:
+            operation = """
+                INSERT INTO `records` (`name_type_id`, `content_monitor_id`, `disabled`, `fallback`, `weight`)
+                  SELECT
+                    (SELECT `names_types`.`id`
+                     FROM `names_types`
+                       JOIN `names` ON `names_types`.`name_id` = `names`.`id`
+                       JOIN `types` ON `names_types`.`type_value` = `types`.`value`
+                     WHERE `names`.`name` = %s
+                       AND `types`.`type` = %s) AS `name_type_id`,
+                    (SELECT `contents_monitors`.`id`
+                     FROM `contents_monitors`
+                       JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+                       JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+                     WHERE `contents`.`content` = %s
+                       AND `monitors`.`monitor` = %s) AS `content_monitor_id`,
+                    %s AS `disabled`,
+                    %s AS `fallback`,
+                    %s AS `weight`
+            """
+            params = (name, name_type, content, monitor, disabled, fallback, weight)
+
+        count += self.execute(operation, params)
+
+        if save_recids:
+            count += self.clean_names(save_recids.get('name_type_id'))
+            count += self.clean_contents(save_recids.get('content_monitor_id'))
+
+        return count
+
+    def save_types(self, save_recid, description, name_type, recid):
+        if save_recid:
+            operation = """
+                UPDATE `types`
+                SET `value` = %s,
+                  `type` = %s,
+                  `description` = %s
+                WHERE `value` = %s
+
+            """
+            params = (recid, name_type, description, save_recid)
+        else:
+            operation = """
+                INSERT INTO `types` (`value`, `type`, `description`)
+                VALUES (%s, %s, %s)
+            """
+            params = (recid, name_type, description)
+
+        return self.execute(operation, params)
 
 
-class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
+class AbstractContentHandler(object):
+    """
+    Abstract content handler
+    """
+    __metaclass__ = abc.ABCMeta
 
-    close_connection = 0
-    protocol_version = 'HTTP/1.1'
-    server_version = 'PowerGSLB/' + __version__
-    rbufsize = -1
-    wbufsize = -1
+    def __init__(self, request_handler):
+        self.body = request_handler.body
+        self.database = request_handler.database
+        self.dirs = request_handler.dirs
+        self.headers = request_handler.headers
+        self.path = request_handler.path
+        self.query = request_handler.query
 
-    def __init__(self, *args):
-        self.database = None
+    @abc.abstractmethod
+    def content(self):
+        pass
+
+
+class PowerDNSContentHandler(AbstractContentHandler):
+    """
+    PowerDNS content handler
+    """
+
+    def __init__(self, request_handler):
+        super(PowerDNSContentHandler, self).__init__(request_handler)
         self.ipv4_prefix = PowerGSLB.config.get('persistence', 'ipv4_prefix')
         self.ipv6_prefix = PowerGSLB.config.get('persistence', 'ipv6_prefix')
-        super(HTTPRequestHandler, self).__init__(*args)
 
-    def do_GET(self):
-        query = self.path.split('?', 1)[0]
-        query = query.split('/')[1:]
-
-        if not query:
-            self.send_error(501)
-
-        elif query[0] == 'admin':
-            path = self.translate_path(self.path)
-
-            if os.path.isdir(path) and not self.path.endswith('/'):
-                self.send_response(301)
-                self.send_header('Location', self.path + '/')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-            else:
-                super(HTTPRequestHandler, self).do_GET()
-
-        elif query[0] == 'dns':
-            self.send_response(200)
-            content = self.get_result(query[1:])
-            self.send_header('Content-Type', 'text/javascript; charset=utf-8')
-            self.send_header('Content-Length', len(content))
-            self.end_headers()
-            self.wfile.write(content)
-            logging.debug('{}: {}'.format(type(self).__name__, content))
-
-        elif query[0] == 'status':
-            self.send_response(200)
-            content = self.get_status()
-            self.send_header('Content-Type', 'text/javascript; charset=utf-8')
-            self.send_header('Content-Length', len(content))
-            self.end_headers()
-            self.wfile.write(content)
+    def content(self):
+        if len(self.dirs) == 4 and self.dirs[1] == 'lookup':
+            content = self.get_lookup()
         else:
-            self.send_error(404)
+            content = {'result': False}
+
+        return json.dumps(content, separators=(',', ':'))
+
+    def get_lookup(self):
+        records = self.database.gslb_records(*self.dirs[2:])
+        qtype_records = self.split_records(records)
+        filtered_records = self.filter_records(qtype_records)
+        result = self.strip_records(filtered_records)
+
+        return {'result': result}
 
     def filter_records(self, qtype_records):
         records = []
@@ -288,7 +600,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
 
                     fallback_records[record['weight']].append(record)
 
-                if record['id'] not in Monitor.status:
+                if record['id'] not in PowerGSLBMonitorThread.status:
                     if record['weight'] not in live_records:
                         live_records[record['weight']] = []
 
@@ -296,8 +608,10 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
 
             if live_records:
                 filtered_records = live_records[max(live_records)]
-            else:
+            elif fallback_records:
                 filtered_records = fallback_records[max(fallback_records)]
+            else:
+                filtered_records = []
 
             if not filtered_records:
                 continue
@@ -308,51 +622,6 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
                 records.extend(filtered_records)
 
         return records
-
-    def get_result(self, query):
-        result = False
-
-        if len(query) == 3 and query[0] == 'lookup':
-            try:
-                records = self.database.get_records(*query[1:])
-            except Database.Error as e:
-                logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
-                self.close_connection = 1
-            else:
-                if records:
-                    qtype_records = self.split_records(records)
-                    filtered_records = self.filter_records(qtype_records)
-                    result = self.strip_records(filtered_records)
-
-        return json.dumps({'result': result}, separators=(',', ':'))
-
-    def get_status(self):
-        try:
-            records = self.database.get_status()
-        except Database.Error as e:
-            logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
-            status = {'status': 'error', 'message': e}
-            self.close_connection = 1
-        else:
-            for record in records:
-                if record['disabled'] or record['id'] in Monitor.status:
-                    record['status'] = 'OFF'
-                else:
-                    record['status'] = 'ON'
-
-                del record['id']
-
-            status = {'status': 'success', 'total': len(records), 'records': records}
-
-        return json.dumps(status, separators=(',', ':'))
-
-    def handle(self):
-        try:
-            with Database() as self.database:
-                while not self.close_connection:
-                    self.handle_one_request()
-        except Database.Error as e:
-            logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
 
     def remote_ip_persistence(self, records):
         ip_value = 0
@@ -410,34 +679,369 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
         return result
 
 
-class LockSet(set):
-
-    def __init__(self, seq=()):
-        super(LockSet, self).__init__(seq)
-        self.__lock = threading.RLock()
-
-    def add(self, elem):
-        with self.__lock:
-            return super(LockSet, self).add(elem)
-
-    def remove(self, elem):
-        with self.__lock:
-            return super(LockSet, self).add(elem)
-
-
-class Monitor(AbstractThread):
-
-    check_params = {
-        'exec': [('args', list), ('interval', int), ('timeout', int), ('fall', int), ('rise', int)],
-        'icmp': [('ip', str), ('interval', int), ('timeout', int), ('fall', int), ('rise', int)],
-        'http': [('url', str), ('interval', int), ('timeout', int), ('fall', int), ('rise', int)],
-        'tcp': [('ip', str), ('port', int), ('interval', int), ('timeout', int), ('fall', int), ('rise', int)]
+class W2UIContentHandler(AbstractContentHandler):
+    """
+    w2ui content handler
+    """
+    commands = {
+        'delete-records': 'delete_records',
+        'get-items': 'get_items',
+        'get-record': 'get_record',
+        'get-records': 'get_records',
+        'save-record': 'save_record'
     }
 
-    status = LockSet()
+    search_functions = {
+        'int': {
+            'is': lambda x, y: int(x) == int(y),
+            'in': lambda x, y: (isinstance(y, list) and int(x) in y) or (int(x) in [int(y)]),
+            'not in': lambda x, y: (isinstance(y, list) and int(x) not in y) or (int(x) not in [int(y)]),
+            'between': lambda x, y: int(y[0]) <= int(x) <= int(y[1])
+        },
+        'text': {
+            'is': lambda x, y: str(x).lower() == str(y).lower(),
+            'begins': lambda x, y: str(x).lower().startswith(str(y).lower()),
+            'contains': lambda x, y: str(y).lower() in str(x).lower(),
+            'ends': lambda x, y: str(x).lower().endswith(str(y).lower())
+        }
+    }
+
+    def content(self):
+        self.parse_query()
+        command = self.query.get('cmd')
+
+        if self.commands.get(command) is None:
+            content = {'status': 'error', 'message': "command '{}' not implemented".format(command)}
+        else:
+            try:
+                content = getattr(self, self.commands.get(command))()
+            except PowerGSLBDatabase.Error as e:
+                logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
+                content = {'status': 'error', 'message': str(e)}
+
+        return json.dumps(content, separators=(',', ':'))
+
+    def delete_records(self):
+        data = self.query.get('data')
+        selected = self.query.get('selected')
+        if not isinstance(selected, list):
+            selected = [selected]
+
+        if not hasattr(self.database, 'delete_' + data):
+            content = {'status': 'error', 'message': "delete-records '{}' not implemented".format(data)}
+        else:
+            count = getattr(self.database, 'delete_' + data)(selected)
+            if not count:
+                content = {'status': 'error', 'message': 'records not deleted'}
+            else:
+                content = {'status': 'success'}
+
+        return content
+
+    def get_items(self):
+        data = self.query.get('data')
+        field = self.query.get('field')
+
+        if not hasattr(self.database, 'get_' + data):
+            content = {'status': 'error', 'message': "get-items '{}' not implemented".format(data)}
+        else:
+            records = getattr(self.database, 'get_' + data)()
+            items = [record.get(field) for record in self.limit_records(records) if record.get(field) is not None]
+            content = {'status': 'success', 'items': items}
+
+        return content
+
+    def get_record(self):
+        data = self.query.get('data')
+        recid = int(self.query.get('recid'))
+
+        if not hasattr(self.database, 'get_' + data):
+            content = {'status': 'error', 'message': "get-record '{}' not implemented".format(data)}
+        else:
+            records = getattr(self.database, 'get_' + data)(recid)
+            content = {'status': 'success', 'record': records[0]}
+
+        return content
+
+    def get_records(self):
+        data = self.query.get('data')
+
+        if not hasattr(self.database, 'get_' + data):
+            content = {'status': 'error', 'message': "get-records '{}' not implemented".format(data)}
+        else:
+            records = getattr(self.database, 'get_' + data)()
+            if data == 'status':
+                self.update_status(records)
+            records = self.search_records(records)
+            self.sort_records(records)
+            content = {'status': 'success', 'total': len(records), 'records': self.limit_records(records)}
+
+        return content
+
+    def limit_records(self, records):
+        if 'limit' in self.query and 'offset' in self.query:
+            limit = int(self.query['limit'])
+            offset = int(self.query['offset'])
+            records = records[offset:offset + limit]
+        elif 'max' in self.query:
+            limit = int(self.query['max'])
+            records = records[:limit]
+
+        return records
+
+    def parse_query(self):
+        if self.query:
+            self.query = queryparser.parse(self.query)
+
+        elif self.body:
+            self.query = queryparser.parse(self.body)
+
+        logging.debug('{}: query: {}'.format(type(self).__name__, self.query))
+
+    def save_record(self):
+        data = self.query.get('data')
+        recid = int(self.query.get('recid'))
+        record = self.query.get('record')
+
+        if not hasattr(self.database, 'save_' + data):
+            content = {'status': 'error', 'message': "save-record '{}' not implemented".format(data)}
+        else:
+            count = getattr(self.database, 'save_' + data)(recid, **record)
+            if not count:
+                content = {'status': 'error', 'message': 'record not changed'}
+            else:
+                content = {'status': 'success'}
+
+        return content
+
+    def search_records(self, records):
+        if 'search' not in self.query:
+            return records
+
+        final_records = []
+        for search in self.query['search']:
+            func = self.search_functions[search['type']][search['operator']]
+            if not callable(func):
+                continue
+
+            search_records = []
+            for record in records:
+                if func(record[search['field']], search['value']):
+                    search_records.append(record)
+
+            if self.query['searchLogic'] == 'AND':
+                records = search_records
+
+            elif self.query['searchLogic'] == 'OR':
+                final_records.extend(search_records)
+
+        if self.query['searchLogic'] == 'AND':
+            final_records = records
+
+        return final_records
+
+    def sort_records(self, records):
+        if 'sort' in self.query:
+            for sort in self.query['sort']:
+                reverse = False if sort['direction'] == 'asc' else True
+                records.sort(key=operator.itemgetter(sort['field']), reverse=reverse)
+
+    @staticmethod
+    def update_status(records):
+        for record in records:
+            if record['disabled'] or record['id'] in PowerGSLBMonitorThread.status:
+                record['status'] = 'Off'
+                record['style'] = 'color: red'
+            else:
+                record['status'] = 'On'
+
+            del record['id']
+
+
+class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
+    """
+    HTTP request handler
+    """
+    protocol_version = 'HTTP/1.1'
+    server_version = 'PowerGSLB/' + __version__
+    rbufsize = -1
+    wbufsize = -1
+
+    def __init__(self, *args):
+        self.body = None
+        self.close_connection = 0
+        self.database = None
+        self.dirs = None
+        self.path = None
+        self.query = None
+        super(HTTPRequestHandler, self).__init__(*args)
+
+    def do_GET(self):
+        self.path, self.query = urllib2.httplib.urlsplit(self.path)[2:4]
+        self.dirs = self.path.split('/')[1:]
+
+        if not self.dirs:
+            self.send_error(501)
+
+        elif self.dirs[0] == 'admin':
+            local_path = self.translate_path(self.path)
+            if os.path.isdir(local_path) and not self.path.endswith('/'):
+                self.send_redirect(self.path + '/')
+            else:
+                super(HTTPRequestHandler, self).do_GET()
+
+        elif self.dirs[0] == 'dns':
+            self.send_response(200)
+            content = PowerDNSContentHandler(self).content()
+            self.send_content(content)
+
+        elif self.dirs[0] == 'w2ui':
+            self.send_response(200)
+            content = W2UIContentHandler(self).content()
+            self.send_content(content)
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        self.read_body()
+        self.path, self.query = urllib2.httplib.urlsplit(self.path)[2:4]
+        self.dirs = self.path.split('/')[1:]
+
+        if not self.dirs:
+            self.send_error(501)
+
+        elif self.dirs[0] == 'w2ui':
+            self.send_response(200)
+            content = W2UIContentHandler(self).content()
+            self.send_content(content, log=False)
+        else:
+            self.send_error(404)
+
+    def handle(self):
+        try:
+            with PowerGSLBDatabase(**dict(PowerGSLB.config.items('mysql'))) as self.database:
+                while not self.close_connection:
+                    self.handle_one_request()
+        except PowerGSLBDatabase.Error as e:
+            logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
+
+    def read_body(self):
+        try:
+            content_length = int(self.headers.get('Content-Length'), 0)
+        except ValueError:
+            raise HTTPRequestError("'Content-Length' header invalid: '{}'".format(
+                    self.headers['Content-Length']))
+        else:
+            # TODO: add body read timeout
+            self.body = self.rfile.read(content_length)
+
+    def send_content(self, content, log=True):
+        self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+        self.send_header('Content-Length', len(content))
+        self.end_headers()
+        self.wfile.write(content)
+        if log:
+            logging.debug('{}: {}'.format(type(self).__name__, content))
+
+    def send_redirect(self, location):
+        self.send_response(301)
+        self.send_header('Location', location)
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        logging.debug('{}: {}'.format(type(self).__name__, location))
+
+
+class ThreadSafeSet(set):
+    """
+    Thread-safe set locks all public attributes
+    """
+
+    def __init__(self, seq=()):
+        super(ThreadSafeSet, self).__init__(seq)
+        self.__lock = threading.RLock()
+
+    def __getattribute__(self, name):
+        if not name.startswith('_'):
+            with self.__lock:
+                return super(ThreadSafeSet, self).__getattribute__(name)
+        else:
+            return super(ThreadSafeSet, self).__getattribute__(name)
+
+
+class PowerGSLBCheckThread(AbstractThread):
+    """
+    PowerGSLB check thread
+    """
+
+    def __init__(self, monitor, content_id, **kwargs):
+        super(PowerGSLBCheckThread, self).__init__(**kwargs)
+        self.monitor = monitor
+        self.content_id = content_id
+        self.sleep_interval = self.monitor['interval']
+        self.fall = 0
+        self.rise = 0
+
+    def check_fall(self):
+        self.fall += 1
+        self.rise = 0
+
+        if self.fall >= self.monitor['fall'] and self.content_id not in PowerGSLBMonitorThread.status:
+            logging.error('{}: {}: status fall'.format(self.name, self.monitor))
+            PowerGSLBMonitorThread.status.add(self.content_id)
+
+    def check_rise(self):
+        self.fall = 0
+        self.rise += 1
+
+        if self.rise >= self.monitor['rise'] and self.content_id in PowerGSLBMonitorThread.status:
+            logging.info('{}: {}: status rise'.format(self.name, self.monitor))
+            PowerGSLBMonitorThread.status.remove(self.content_id)
+
+    def do_exec(self):
+        return subprocess32.call(self.monitor['args'], timeout=self.monitor['timeout']) == 0
+
+    def do_http(self):
+        urllib2.urlopen(self.monitor['url'], timeout=self.monitor['timeout']).close()
+        return True
+
+    def do_icmp(self):
+        try:
+            return pyping.ping(self.monitor['ip'], timeout=self.monitor['timeout'] * 1000, count=1).ret_code == 0
+        except SystemExit:
+            raise PingError('unknown host: {}'.format(self.monitor['ip']))
+
+    def do_tcp(self):
+        socket.create_connection((self.monitor['ip'], self.monitor['port']), self.monitor['timeout']).close()
+        return True
+
+    def task(self):
+        try:
+            if getattr(self, 'do_' + self.monitor['type'])():
+                logging.debug('{}: {}: return True'.format(self.name, self.monitor))
+                self.check_rise()
+            else:
+                logging.debug('{}: {}: return False'.format(self.name, self.monitor))
+                self.check_fall()
+        except Exception as e:
+            logging.debug('{}: {}: return Exception: {}: {}'.format(self.name, self.monitor, type(e).__name__, e))
+            self.check_fall()
+
+
+class PowerGSLBMonitorThread(AbstractThread):
+    """
+    PowerGSLB monitor thread
+    """
+    check_params_types = {
+        'exec': {'type': str, 'args': list, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
+        'icmp': {'type': str, 'ip': str, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
+        'http': {'type': str, 'url': str, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
+        'tcp': {'type': str, 'ip': str, 'port': int, 'interval': int, 'timeout': int, 'fall': int, 'rise': int}
+    }
+
+    status = ThreadSafeSet()
 
     def __init__(self, **kwargs):
-        super(Monitor, self).__init__(**kwargs)
+        super(PowerGSLBMonitorThread, self).__init__(**kwargs)
         self.check_threads = []
         self.checks = []
         self.refresh_threads = False
@@ -445,20 +1049,20 @@ class Monitor(AbstractThread):
 
     def clean_status(self):
         check_ids = set(check['id'] for check in self.checks)
-        stale_ids = Monitor.status.difference(check_ids)
+        stale_ids = PowerGSLBMonitorThread.status.difference(check_ids)
 
         if stale_ids:
             logging.debug('{}: clean status for records: {}'.format(
                     type(self).__name__, ', '.join(map(str, stale_ids))))
-            Monitor.status.intersection_update(check_ids)
+            PowerGSLBMonitorThread.status.intersection_update(check_ids)
 
     def parse(self, check):
         parse_status = False
         try:
-            check['monitor'] = dict(ast.literal_eval(check['monitor'] % check))
+            check['monitor_json'] = dict(ast.literal_eval(check['monitor_json'] % check))
             parse_status = True
         except (SyntaxError, ValueError) as e:
-            logging.error('{}: record id {}: check parsing error: {}: {}'.format(
+            logging.error('{}: content id {}: check parsing error: {}: {}'.format(
                     type(self).__name__, check['id'], type(e).__name__, e))
 
         return parse_status
@@ -496,7 +1100,8 @@ class Monitor(AbstractThread):
 
         check_threads = []
         for check in self.checks:
-            check_thread = CheckThread(check['monitor'], check['id'], name='Check-{}'.format(check['id']))
+            thread_name = 'Check-{}'.format(check['id'])
+            check_thread = PowerGSLBCheckThread(check['monitor_json'], check['id'], name=thread_name)
             check_thread.start()
             check_threads.append(check_thread)
 
@@ -516,9 +1121,9 @@ class Monitor(AbstractThread):
         logging.info('{}: update checks from the database'.format(type(self).__name__))
         refresh_threads = False
         try:
-            with Database() as database:
-                raw_checks = database.get_checks()
-        except Database.Error as e:
+            with PowerGSLBDatabase(**dict(PowerGSLB.config.items('mysql'))) as database:
+                raw_checks = database.gslb_checks()
+        except PowerGSLBDatabase.Error as e:
             logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
         else:
             checks = [check for check in raw_checks if self.parse(check) and self.validate(check)]
@@ -530,20 +1135,45 @@ class Monitor(AbstractThread):
         self.refresh_threads = refresh_threads
 
     def validate(self, check):
+        # TODO: simplify
         validate_status = False
         try:
-            for param in self.check_params[check['monitor']['type']]:
-                if type(check['monitor'][param[0]]) != param[1]:
-                    logging.error("{}: record id {}: check parameter '{}' invalid".format(
-                            type(self).__name__, check['id'], param[0]))
+            monitor_type = check['monitor_json']['type']
+
+            if not monitor_type:
+                return validate_status
+
+            check_params = set(self.check_params_types[monitor_type])
+            monitor_params = set(check['monitor_json'])
+
+            if check_params != monitor_params:
+                missing_params = check_params.difference(monitor_params)
+                unexpected_params = monitor_params.difference(check_params)
+
+                if missing_params:
+                    raise MonitorValidateError("{}: content id {}: missing check parameters: {}".format(
+                            type(self).__name__, check['id'], ', '.join(map(str, missing_params))))
+
+                if unexpected_params:
+                    raise MonitorValidateError("{}: content id {}: unexpected check parameters: {}".format(
+                            type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
+
+            for param, param_type in self.check_params_types[monitor_type].items():
+                if type(check['monitor_json'][param]) != param_type:
+                    raise MonitorValidateError("{}: content id {}: check parameter '{}' invalid".format(
+                            type(self).__name__, check['id'], param))
+
         except KeyError as e:
-            logging.error("{}: record id {}: check parameter '{}' missing".format(
+            logging.error("{}: content id {}: check parameter '{}' missing".format(
                     type(self).__name__, check['id'], e.message))
+
+        except MonitorValidateError as e:
+            logging.error(e)
         else:
-            if check['monitor']['timeout'] > check['monitor']['interval']:
-                logging.warning("{}: record id {}: check 'timeout' is greater than 'interval': fixed".format(
+            if check['monitor_json']['timeout'] > check['monitor_json']['interval']:
+                logging.warning("{}: content id {}: check 'timeout' is greater than 'interval': fixed".format(
                         type(self).__name__, check['id']))
-                check['monitor']['timeout'] = check['monitor']['interval']
+                check['monitor_json']['timeout'] = check['monitor_json']['interval']
 
             validate_status = True
 
@@ -571,14 +1201,13 @@ class Monitor(AbstractThread):
             self.refresh_threads = True
 
 
-class PingError(Exception):
-    pass
-
-
-class Server(AbstractThread):
+class PowerGSLBServerThread(AbstractThread):
+    """
+    PowerGSLB server thread
+    """
 
     def __init__(self, **kwargs):
-        super(Server, self).__init__(**kwargs)
+        super(PowerGSLBServerThread, self).__init__(**kwargs)
         self.address = PowerGSLB.config.get('server', 'address')
         self.port = PowerGSLB.config.get('server', 'port')
         self.root = PowerGSLB.config.get('server', 'root')
@@ -586,13 +1215,19 @@ class Server(AbstractThread):
         os.chdir(self.root)
 
     def task(self):
-        logging.info('{}: listening on {}:{}'.format(type(self).__name__, self.address, self.port))
+        class ThreadingHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+            pass
+
         http_server = ThreadingHTTPServer((self.address, self.port), HTTPRequestHandler)
         http_server.daemon_threads = True
+        logging.info('{}: listening on {}:{}'.format(type(self).__name__, self.address, self.port))
         http_server.serve_forever()
 
 
-class Service(object):
+class PowerGSLBService(object):
+    """
+    PowerGSLB system service
+    """
 
     def __init__(self, service_threads):
         self.service_threads = service_threads
@@ -609,20 +1244,25 @@ class Service(object):
             if systemd.daemon.booted():
                 systemd.daemon.notify('STATUS=Total threads: {}; Service threads: {}\nWATCHDOG=1'.format(
                         threading.active_count(), len(self.service_threads)))
+
             time.sleep(self.sleep_interval)
 
     @staticmethod
     def watchdog_interval(interval=1):
         if 'WATCHDOG_USEC' in os.environ:
             interval = min(interval, int(os.environ['WATCHDOG_USEC']) / 1000000 / 2)
+
         return interval
 
 
 class SmartConfigParser(ConfigParser.RawConfigParser, object):
+    """
+    Smart parse config file values
+    """
 
-    def __init__(self, filenames, **kwargs):
+    def __init__(self, files, **kwargs):
         super(SmartConfigParser, self).__init__(**kwargs)
-        self.read(filenames)
+        self.read(files)
 
     def get(self, section, option):
         value = super(SmartConfigParser, self).get(section, option)
@@ -646,18 +1286,16 @@ class SmartConfigParser(ConfigParser.RawConfigParser, object):
         return smart_items
 
 
-class ThreadingHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
-    pass
-
-
 class PowerGSLB(object):
-
+    """
+    PowerGSLB main program
+    """
     config = None
 
     @classmethod
     def main(cls):
         args_parser = argparse.ArgumentParser()
-        args_parser.add_argument('-c', '--config', default='powergslb.conf')
+        args_parser.add_argument('-c', '--config')
         args = args_parser.parse_args()
 
         cls.config = SmartConfigParser(args.config)
@@ -665,8 +1303,8 @@ class PowerGSLB(object):
         logging.basicConfig(format=cls.config.get('logging', 'format'),
                             level=logging.getLevelName(cls.config.get('logging', 'level')))
 
-        service_threads = [Monitor(name='Monitor'), Server(name='Server')]
-        service = Service(service_threads)
+        service_threads = [PowerGSLBMonitorThread(name='Monitor'), PowerGSLBServerThread(name='Server')]
+        service = PowerGSLBService(service_threads)
         service.start()
 
 

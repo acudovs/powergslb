@@ -18,7 +18,7 @@ Main features:
     * Arbitrary command execution
 * Fallback if all the checks failed
 * Weighted (priority) records
-* Client IP / Subnet persistence
+* Per record client IP / subnet persistence
 
 *Please request new features!*
 
@@ -134,3 +134,6 @@ dig @127.0.0.1 example.com ANY
 ### Web based administration interface
 
 Open URL https://SERVER/admin/.
+
+* Default username: admin
+* Default password: admin

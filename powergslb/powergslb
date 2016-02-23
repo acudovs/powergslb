@@ -8,6 +8,7 @@ PowerDNS Remote GSLB Backend https://github.com/AlekseyChudov/powergslb
 import abc
 import argparse
 import ast
+import base64
 import BaseHTTPServer
 import ConfigParser
 import json
@@ -30,8 +31,8 @@ import systemd.daemon
 import queryparser
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '22 Feb 2016'
-__version__ = '1.4.0'
+__date__ = '23 Feb 2016'
+__version__ = '1.4.1'
 
 
 class PowerGSLBError(Exception):
@@ -99,7 +100,14 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
     def join_operation(operation):
         return ' '.join(filter(bool, (line.strip() for line in operation.splitlines())))
 
-    def execute(self, operation, params=()):
+    def _delete(self, operation, ids):
+        params = tuple(ids)
+        params_format = ', '.join(['%s'] * len(params))
+        operation % params_format
+
+        return self._execute(operation, params)
+
+    def _execute(self, operation, params=()):
         operation = self.join_operation(operation)
         if params:
             logging.debug('{}: "{}" % {}'.format(type(self).__name__, operation, params))
@@ -121,7 +129,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
 
         return result
 
-    def clean_contents(self, content_monitor_id):
+    def _clean_contents(self, content_monitor_id):
         operation = """
             DELETE IGNORE `contents_monitors`,
                `contents`
@@ -131,9 +139,9 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
         """
         params = (content_monitor_id,)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
 
-    def clean_names(self, name_type_id):
+    def _clean_names(self, name_type_id):
         operation = """
             DELETE IGNORE `names_types`,
                `names`
@@ -143,31 +151,94 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
         """
         params = (name_type_id,)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
+
+    def _insert_names(self, domain, name):
+        operation = """
+            INSERT IGNORE INTO `names` (`domain_id`, `name`)
+              SELECT
+                (SELECT `id`
+                 FROM `domains`
+                 WHERE `domain` = %s) AS `domain_id`,
+                %s AS `name`
+        """
+        params = (domain, name)
+
+        return self._execute(operation, params)
+
+    def _insert_names_types(self, domain, name, name_type, ttl, persistence):
+        operation = """
+            INSERT INTO `names_types` (`name_id`, `type_value`, `ttl`, `persistence`)
+              SELECT
+                (SELECT `names`.`id`
+                 FROM `names`
+                   JOIN `domains` ON `names`.`domain_id` = `domains`.`id`
+                 WHERE `name` = %s
+                   AND `domains`.`domain` = %s) AS `name_id`,
+                (SELECT `value`
+                 FROM `types`
+                 WHERE `type` = %s) AS `type_value`,
+                %s AS `ttl`,
+                %s AS `persistence`
+            ON DUPLICATE KEY UPDATE
+              `ttl` = %s,
+              `persistence` = %s
+        """
+        params = (name, domain, name_type, ttl, persistence, ttl, persistence)
+
+        return self._execute(operation, params)
+
+    def _insert_contents(self, content):
+        operation = """
+            INSERT IGNORE INTO `contents` (`content`)
+            VALUES (%s)
+        """
+        params = (content,)
+
+        return self._execute(operation, params)
+
+    def _insert_contents_monitors(self, content, monitor):
+        operation = """
+            INSERT IGNORE INTO `contents_monitors` (`content_id`, `monitor_id`)
+              SELECT
+                (SELECT `id`
+                 FROM `contents`
+                 WHERE `content` = %s) AS `content_id`,
+                (SELECT `id`
+                 FROM `monitors`
+                 WHERE `monitor` = %s) AS `monitor_id`
+        """
+        params = (content, monitor)
+
+        return self._execute(operation, params)
+
+    def check_user(self, user, password):
+        operation = """
+            SELECT 1 FROM `users`
+            WHERE `user` = %s
+              AND `password` = PASSWORD(%s)
+        """
+        params = (user, password)
+
+        return self._execute(operation, params)
 
     def delete_domains(self, ids):
-        params = tuple(ids)
-        params_format = ', '.join(['%s'] * len(params))
         operation = """
             DELETE FROM `domains`
-            WHERE `id` IN ({})
-        """.format(params_format)
+            WHERE `id` IN (%s)
+        """
 
-        return self.execute(operation, params)
+        return self._delete(operation, ids)
 
     def delete_monitors(self, ids):
-        params = tuple(ids)
-        params_format = ', '.join(['%s'] * len(params))
         operation = """
             DELETE FROM `monitors`
-            WHERE `id` IN ({})
-        """.format(params_format)
+            WHERE `id` IN (%s)
+        """
 
-        return self.execute(operation, params)
+        return self._delete(operation, ids)
 
     def delete_records(self, ids):
-        params = tuple(ids)
-        params_format = ', '.join(['%s'] * len(params))
         operation = """
             DELETE IGNORE `records`,
               `names_types`,
@@ -179,20 +250,26 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
               JOIN `names` ON `names_types`.`name_id` = `names`.`id`
               JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-            WHERE `records`.`id` IN ({})
-        """.format(params_format)
+            WHERE `records`.`id` IN (%s)
+        """
 
-        return self.execute(operation, params)
+        return self._delete(operation, ids)
 
     def delete_types(self, values):
-        params = tuple(values)
-        params_format = ', '.join(['%s'] * len(params))
         operation = """
             DELETE FROM `types`
-            WHERE `value` IN ({})
-        """.format(params_format)
+            WHERE `value` IN (%s)
+        """
 
-        return self.execute(operation, params)
+        return self._delete(operation, values)
+
+    def delete_users(self, ids):
+        operation = """
+            DELETE FROM `users`
+            WHERE `id` IN (%s)
+        """
+
+        return self._delete(operation, ids)
 
     def get_status(self):
         operation = """
@@ -217,7 +294,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
               JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
         """
 
-        return self.execute(operation)
+        return self._execute(operation)
 
     def get_domains(self, recid=0):
         operation = """
@@ -233,7 +310,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params += (recid,)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
 
     def get_monitors(self, recid=0):
         operation = """
@@ -250,7 +327,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params += (recid,)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
 
     def get_records(self, recid=0):
         operation = """
@@ -282,7 +359,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params += (recid,)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
 
     def get_types(self, recid=0):
         operation = """
@@ -299,7 +376,25 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params += (recid,)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
+
+    def get_users(self, recid=0):
+        operation = """
+            SELECT `id` AS `recid`,
+              `user`,
+              `name`,
+              `password`
+            FROM `users`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `id` = %s
+            """
+            params += (recid,)
+
+        return self._execute(operation, params)
 
     def gslb_checks(self):
         operation = """
@@ -311,7 +406,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
               JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
         """
 
-        return self.execute(operation)
+        return self._execute(operation)
 
     def gslb_records(self, qname, qtype):
         operation = """
@@ -345,66 +440,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params = (qname, qtype)
 
-        return self.execute(operation, params)
-
-    def insert_names(self, domain, name):
-        operation = """
-            INSERT IGNORE INTO `names` (`domain_id`, `name`)
-              SELECT
-                (SELECT `id`
-                 FROM `domains`
-                 WHERE `domain` = %s) AS `domain_id`,
-                %s AS `name`
-        """
-        params = (domain, name)
-
-        return self.execute(operation, params)
-
-    def insert_names_types(self, domain, name, name_type, ttl, persistence):
-        operation = """
-            INSERT INTO `names_types` (`name_id`, `type_value`, `ttl`, `persistence`)
-              SELECT
-                (SELECT `names`.`id`
-                 FROM `names`
-                   JOIN `domains` ON `names`.`domain_id` = `domains`.`id`
-                 WHERE `name` = %s
-                   AND `domains`.`domain` = %s) AS `name_id`,
-                (SELECT `value`
-                 FROM `types`
-                 WHERE `type` = %s) AS `type_value`,
-                %s AS `ttl`,
-                %s AS `persistence`
-            ON DUPLICATE KEY UPDATE
-              `ttl` = %s,
-              `persistence` = %s
-        """
-        params = (name, domain, name_type, ttl, persistence, ttl, persistence)
-
-        return self.execute(operation, params)
-
-    def insert_contents(self, content):
-        operation = """
-            INSERT IGNORE INTO `contents` (`content`)
-            VALUES (%s)
-        """
-        params = (content,)
-
-        return self.execute(operation, params)
-
-    def insert_contents_monitors(self, content, monitor):
-        operation = """
-            INSERT IGNORE INTO `contents_monitors` (`content_id`, `monitor_id`)
-              SELECT
-                (SELECT `id`
-                 FROM `contents`
-                 WHERE `content` = %s) AS `content_id`,
-                (SELECT `id`
-                 FROM `monitors`
-                 WHERE `monitor` = %s) AS `monitor_id`
-        """
-        params = (content, monitor)
-
-        return self.execute(operation, params)
+        return self._execute(operation, params)
 
     def save_domains(self, save_recid, domain, **_):
         if save_recid:
@@ -421,7 +457,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params = (domain,)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
 
     def save_monitors(self, save_recid, monitor, monitor_json, **_):
         if save_recid:
@@ -440,15 +476,15 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params = (monitor, monitor_json)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
 
     def save_records(self, save_recid, domain, name, name_type, ttl, content, monitor, disabled=0, fallback=0,
                      persistence=0, weight=0, **_):
 
-        count = self.insert_names(domain, name)
-        count += self.insert_names_types(domain, name, name_type, ttl, persistence)
-        count += self.insert_contents(content)
-        count += self.insert_contents_monitors(content, monitor)
+        count = self._insert_names(domain, name)
+        count += self._insert_names_types(domain, name, name_type, ttl, persistence)
+        count += self._insert_contents(content)
+        count += self._insert_contents_monitors(content, monitor)
 
         save_recids = None
 
@@ -463,7 +499,7 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params = (save_recid,)
 
-            save_recids = self.execute(operation, params)[0]
+            save_recids = self._execute(operation, params)[0]
 
             operation = """
                 UPDATE `records`
@@ -512,11 +548,11 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params = (name, name_type, content, monitor, disabled, fallback, weight)
 
-        count += self.execute(operation, params)
+        count += self._execute(operation, params)
 
         if save_recids:
-            count += self.clean_names(save_recids.get('name_type_id'))
-            count += self.clean_contents(save_recids.get('content_monitor_id'))
+            count += self._clean_names(save_recids.get('name_type_id'))
+            count += self._clean_contents(save_recids.get('content_monitor_id'))
 
         return count
 
@@ -538,7 +574,27 @@ class PowerGSLBDatabase(mysql.connector.MySQLConnection):
             """
             params = (recid, name_type, description)
 
-        return self.execute(operation, params)
+        return self._execute(operation, params)
+
+    def save_users(self, save_recid, user, name, password, **_):
+        if save_recid:
+            operation = """
+                UPDATE `users`
+                SET `user` = %s,
+                  `name` = %s,
+                  `password` = PASSWORD(%s)
+                WHERE `id` = %s
+
+            """
+            params = (user, name, password, save_recid)
+        else:
+            operation = """
+                INSERT INTO `users` (`user`, `name`, `password`)
+                VALUES (%s, %s, PASSWORD(%s))
+            """
+            params = (user, name, password)
+
+        return self._execute(operation, params)
 
 
 class AbstractContentHandler(object):
@@ -564,11 +620,6 @@ class PowerDNSContentHandler(AbstractContentHandler):
     """
     PowerDNS content handler
     """
-
-    def __init__(self, request_handler):
-        super(PowerDNSContentHandler, self).__init__(request_handler)
-        self.ipv4_prefix = PowerGSLB.config.get('persistence', 'ipv4_prefix')
-        self.ipv6_prefix = PowerGSLB.config.get('persistence', 'ipv6_prefix')
 
     def content(self):
         if len(self.dirs) == 4 and self.dirs[1] == 'lookup':
@@ -616,7 +667,7 @@ class PowerDNSContentHandler(AbstractContentHandler):
             if not filtered_records:
                 continue
 
-            if any(record['persistence'] for record in filtered_records):
+            if filtered_records[0]['persistence']:
                 records.append(self.remote_ip_persistence(filtered_records))
             else:
                 records.extend(filtered_records)
@@ -637,9 +688,9 @@ class PowerDNSContentHandler(AbstractContentHandler):
                         type(self).__name__, type(e).__name__, e))
             else:
                 if network.version == 4:
-                    ip_value = network.ip.value >> self.ipv4_prefix
+                    ip_value = network.ip.value >> records[0]['persistence']
                 elif network.version == 6:
-                    ip_value = network.ip.value >> self.ipv6_prefix
+                    ip_value = network.ip.value >> records[0]['persistence']
 
         return records[hash(ip_value) % len(records)]
 
@@ -843,7 +894,7 @@ class W2UIContentHandler(AbstractContentHandler):
     def sort_records(self, records):
         if 'sort' in self.query:
             for sort in self.query['sort']:
-                reverse = False if sort['direction'] == 'asc' else True
+                reverse = sort['direction'] == 'desc'
                 records.sort(key=operator.itemgetter(sort['field']), reverse=reverse)
 
     @staticmethod
@@ -868,6 +919,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
     wbufsize = -1
 
     def __init__(self, *args):
+        self._authorization_header = None
         self.body = None
         self.close_connection = 0
         self.database = None
@@ -876,46 +928,101 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
         self.query = None
         super(HTTPRequestHandler, self).__init__(*args)
 
-    def do_GET(self):
-        self.path, self.query = urllib2.httplib.urlsplit(self.path)[2:4]
-        self.dirs = self.path.split('/')[1:]
+    def _is_authorized(self):
+        authorized = False
+        authorization_header = self.headers.get('Authorization')
+
+        if self._authorization_header:
+            authorized = self._authorization_header == authorization_header
+
+        elif authorization_header:
+            try:
+                scheme, base64_user_password = authorization_header.split(' ')
+                user, password = base64.b64decode(base64_user_password).split(':')
+            except Exception as e:
+                logging.error('{}: authorization error: {}'.format(type(self).__name__, e))
+            else:
+                authorized = scheme == 'Basic' and self.database.check_user(user, password)
+                if authorized:
+                    logging.debug("{}: user '{}' authorized".format(type(self).__name__, user))
+                    self._authorization_header = authorization_header
+                else:
+                    logging.error("{}: user '{}' not authorized".format(type(self).__name__, user))
+
+        return authorized
+
+    def _handle_request(self):
+        self._urlsplit()
 
         if not self.dirs:
             self.send_error(501)
 
-        elif self.dirs[0] == 'admin':
-            local_path = self.translate_path(self.path)
-            if os.path.isdir(local_path) and not self.path.endswith('/'):
-                self.send_redirect(self.path + '/')
+        elif self.command == 'GET' and self.dirs[0] == 'dns':
+            content_handler = PowerDNSContentHandler(self)
+            self._send_content(content_handler.content())
+
+        elif self.command in ['GET', 'POST'] and self.dirs[0] == 'admin':
+            if not self._is_authorized():
+                self._send_authenticate()
+
+            elif len(self.dirs) == 2 and self.dirs[1] == 'w2ui':
+                content_handler = W2UIContentHandler(self)
+                self._send_content(content_handler.content(), debug=self.command == 'GET')
             else:
-                super(HTTPRequestHandler, self).do_GET()
-
-        elif self.dirs[0] == 'dns':
-            self.send_response(200)
-            content = PowerDNSContentHandler(self).content()
-            self.send_content(content)
-
-        elif self.dirs[0] == 'w2ui':
-            self.send_response(200)
-            content = W2UIContentHandler(self).content()
-            self.send_content(content)
+                local_path = self.translate_path(self.path)
+                if os.path.isdir(local_path) and not self.path.endswith('/'):
+                    self._send_redirect(self.path + '/')
+                else:
+                    super(HTTPRequestHandler, self).do_GET()
         else:
             self.send_error(404)
+
+    def _read_body(self):
+        try:
+            content_length = int(self.headers.get('Content-Length'), 0)
+        except ValueError:
+            raise HTTPRequestError("'Content-Length' header invalid: '{}'".format(
+                    self.headers.get('Content-Length')))
+        else:
+            # TODO: handle body read timeout
+            self.body = self.rfile.read(content_length)
+
+    def _send_authenticate(self, code=401):
+        message, explain = self.responses[code]
+        content = self.error_message_format % {'code': code, 'message': message, 'explain': explain}
+        self.send_response(code)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', len(content))
+        self.send_header('WWW-Authenticate', 'Basic realm="{}"'.format(self.server_version))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def _send_content(self, content, code=200, debug=True):
+        self.send_response(code)
+        self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+        self.send_header('Content-Length', len(content))
+        self.end_headers()
+        self.wfile.write(content)
+        if debug:
+            logging.debug('{}: {}'.format(type(self).__name__, content))
+
+    def _send_redirect(self, location, code=301):
+        self.send_response(code)
+        self.send_header('Location', location)
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        logging.debug('{}: {}'.format(type(self).__name__, location))
+
+    def _urlsplit(self):
+        self.path, self.query = urllib2.httplib.urlsplit(self.path)[2:4]
+        self.dirs = self.path.split('/')[1:]
+
+    def do_GET(self):
+        self._handle_request()
 
     def do_POST(self):
-        self.read_body()
-        self.path, self.query = urllib2.httplib.urlsplit(self.path)[2:4]
-        self.dirs = self.path.split('/')[1:]
-
-        if not self.dirs:
-            self.send_error(501)
-
-        elif self.dirs[0] == 'w2ui':
-            self.send_response(200)
-            content = W2UIContentHandler(self).content()
-            self.send_content(content, log=False)
-        else:
-            self.send_error(404)
+        self._read_body()
+        self._handle_request()
 
     def handle(self):
         try:
@@ -924,31 +1031,6 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
                     self.handle_one_request()
         except PowerGSLBDatabase.Error as e:
             logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
-
-    def read_body(self):
-        try:
-            content_length = int(self.headers.get('Content-Length'), 0)
-        except ValueError:
-            raise HTTPRequestError("'Content-Length' header invalid: '{}'".format(
-                    self.headers['Content-Length']))
-        else:
-            # TODO: add body read timeout
-            self.body = self.rfile.read(content_length)
-
-    def send_content(self, content, log=True):
-        self.send_header('Content-Type', 'text/javascript; charset=utf-8')
-        self.send_header('Content-Length', len(content))
-        self.end_headers()
-        self.wfile.write(content)
-        if log:
-            logging.debug('{}: {}'.format(type(self).__name__, content))
-
-    def send_redirect(self, location):
-        self.send_response(301)
-        self.send_header('Location', location)
-        self.send_header('Connection', 'close')
-        self.end_headers()
-        logging.debug('{}: {}'.format(type(self).__name__, location))
 
 
 class ThreadSafeSet(set):

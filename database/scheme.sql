@@ -1,3 +1,12 @@
+CREATE TABLE `users` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user` varchar(16) NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `password` char(41) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `users_user_uindex` (`user`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
 CREATE TABLE `domains` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `domain` varchar(255) NOT NULL,

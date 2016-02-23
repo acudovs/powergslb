@@ -17,6 +17,8 @@
     // Widget configuration
     // ====================================================
 
+    var w2uiUrl = '/admin/w2ui';
+
     var gridShow = {
         footer: true,
         lineNumbers: false,
@@ -58,6 +60,10 @@
 
     var gridTypesPopupForm = (function (event) {
         openPopupForm(event, 'type', 400, 245, 'formTypes');
+    });
+
+    var gridUsersPopupForm = (function (event) {
+        openPopupForm(event, 'user', 400, 245, 'formUsers');
     });
 
     var openPopupForm = (function (event, record, popup_width, popup_height, form_name) {
@@ -106,8 +112,6 @@
         {field: 'recid', direction: 'asc'}
     ];
 
-    var w2uiUrl = '/w2ui';
-
     var config = {
 
         // ====================================================
@@ -130,18 +134,24 @@
             name: 'sidebar',
             nodes: [
                 {
-                    id: 'sidebar-status', text: 'Status', expanded: true, group: true,
+                    id: 'status', text: 'Status', expanded: true, group: true,
                     nodes: [
                         {id: 'gridStatus', text: 'Status', img: 'icon-page', selected: true}
                     ]
                 },
                 {
-                    id: 'sidebar-config', text: 'Config', expanded: true, group: true,
+                    id: 'gslb', text: 'GSLB', expanded: true, group: true,
                     nodes: [
                         {id: 'gridDomains', text: 'Domains', img: 'icon-page'},
                         {id: 'gridMonitors', text: 'Monitors', img: 'icon-page'},
                         {id: 'gridRecords', text: 'Records', img: 'icon-page'},
                         {id: 'gridTypes', text: 'Types', img: 'icon-page'}
+                    ]
+                },
+                {
+                    id: 'users', text: 'Users', expanded: true, group: true,
+                    nodes: [
+                        {id: 'gridUsers', text: 'Users', img: 'icon-page'}
                     ]
                 }
             ],
@@ -152,6 +162,7 @@
                     case 'gridMonitors':
                     case 'gridRecords':
                     case 'gridTypes':
+                    case 'gridUsers':
                         w2ui.layout.content('main', w2ui[event.target]);
                         break;
                 }
@@ -445,6 +456,49 @@
             onSave: function () {
                 w2ui.gridTypes.reload();
             }
+        },
+
+        // ====================================================
+        // Users
+        // ====================================================
+
+        gridUsers: {
+            name: 'gridUsers',
+            postData: {data: 'users'},
+            show: gridShow,
+            sortData: sortData,
+            url: w2uiUrl,
+            columns: [
+                {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+                {field: 'user', caption: 'User', size: '100px', resizable: true, sortable: true},
+                {field: 'name', caption: 'Name', size: '150px', resizable: true, sortable: true},
+                {field: 'password', caption: 'Password', size: '325px', resizable: true, sortable: true}
+            ],
+            searches: [
+                {field: 'recid', caption: 'ID', type: 'int'},
+                {field: 'user', caption: 'User', type: 'text'},
+                {field: 'name', caption: 'Name', type: 'text'},
+                {field: 'password', caption: 'Password', type: 'text'}
+            ],
+            onAdd: gridUsersPopupForm,
+            onDblClick: gridUsersPopupForm,
+            onEdit: gridUsersPopupForm
+        },
+
+        formUsers: {
+            name: 'formUsers',
+            postData: {data: 'users'},
+            actions: formActions,
+            style: formStyle,
+            url: w2uiUrl,
+            fields: [
+                {field: 'user', type: 'text', required: true, html: {caption: 'User: '}},
+                {field: 'name', type: 'text', required: true, html: {caption: 'Name: '}},
+                {field: 'password', type: 'password', required: true, html: {caption: 'Password: '}}
+            ],
+            onSave: function () {
+                w2ui.gridUsers.reload();
+            }
         }
     };
 
@@ -463,10 +517,12 @@
         $().w2grid(config.gridMonitors);
         $().w2grid(config.gridRecords);
         $().w2grid(config.gridTypes);
+        $().w2grid(config.gridUsers);
         $().w2form(config.formDomains);
         $().w2form(config.formMonitors);
         $().w2form(config.formRecords);
         $().w2form(config.formTypes);
+        $().w2form(config.formUsers);
     });
 </script>
 </html>

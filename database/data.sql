@@ -1,3 +1,5 @@
+INSERT INTO `users` (`id`, `user`, `name`, `password`) VALUES (1, 'admin', 'Administrator', PASSWORD('admin'));
+
 INSERT INTO `domains` (`id`, `domain`) VALUES (1, 'example.com');
 INSERT INTO `domains` (`id`, `domain`) VALUES (2, 'example.net');
 INSERT INTO `domains` (`id`, `domain`) VALUES (3, 'example.org');

@@ -3,6 +3,7 @@
 PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution.
 
 Main features:
+* Quick installation and setup
 * Written in Python 2.7
 * Built as PowerDNS Authoritative Server [Remote Backend] (https://doc.powerdns.com/3/authoritative/backend-remote/)
 * Web based administration interface using [w2ui] (http://w2ui.com/)
@@ -22,107 +23,93 @@ Main features:
 
 *Please request new features!*
 
+
 ## Web based administration interface
 
 Status page
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-status.png?raw=true)
 
+
 ## Database diagram
 
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/database.png?raw=true)
 
+
 ## Installation on CentOS 7
 
-### Pre setup
+### Create PowerGSLB RPM packages
 
-```
+You should always create RPM packages in a clean environment and preferably on a separate machine!
+
+Please read [How to create an RPM package] (https://fedoraproject.org/wiki/How_to_create_an_RPM_package).
+```shell
 yum -y update
-yum -y install epel-release git
+yum -y install @Development\ Tools
 
-git clone https://github.com/AlekseyChudov/powergslb.git
-cd powergslb
+curl https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/<VERSION> > powergslb-<VERSION>.tar.gz
+
+rpmbuild -tb powergslb-<VERSION>.tar.gz
+```
+
+Upon successful completion you will have three packages
+```
+~/rpmbuild/RPMS/noarch/powergslb-<VERSION>-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-pdns-<VERSION>-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-stunnel-<VERSION>-1.el7.centos.noarch.rpm
+```
+
+### Setup PowerGSLB, PowerDNS and stunnel
+
+```shell
+yum -y update
+yum -y install epel-release
+yum -y install gcc python-devel python-pip
+
+pip install pyping subprocess32
+
+yum -y install powergslb-1.4.2-1.el7.centos.noarch.rpm \
+               powergslb-pdns-1.4.2-1.el7.centos.noarch.rpm \
+               powergslb-stunnel-1.4.2-1.el7.centos.noarch.rpm
+
+sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
+
+cp /etc/pdns/pdns.conf /etc/pdns/pdns.conf~
+cp /usr/share/doc/powergslb-pdns-<VERSION>/pdns/pdns.conf /etc/pdns/pdns.conf
 ```
 
 ### Setup MariaDB
 
-```
+```shell
 yum -y install mariadb-server
+
+sed -i '/\[mysqld\]/a bind-address=127.0.0.1\ncharacter_set_server=utf8' /etc/my.cnf.d/server.cnf
 
 systemctl enable mariadb.service
 systemctl start mariadb.service
 systemctl status mariadb.service
 
 mysql_secure_installation
-```
-
-### Setup PowerGSLB
-
-```shell
-yum -y install gcc mysql-connector-python python-devel python-netaddr python-pip systemd-python
-pip install pyping subprocess32
-
-mkdir -p /etc/powergslb /usr/share/powergslb
-cp powergslb/powergslb.conf /etc/powergslb/
-chmod 0600 /etc/powergslb/powergslb.conf
-cp powergslb/powergslb /usr/sbin/
-chmod 0755 /usr/sbin/powergslb
-cp powergslb/powergslb.service /etc/systemd/system/powergslb.service
-cp -r admin /usr/share/powergslb/
-cp powergslb/queryparser.py /usr/lib/python2.7/site-packages/
 
 mysql -p << EOF
 CREATE DATABASE powergslb;
 GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY 'your-database-password-here';
 USE powergslb;
-source database/scheme.sql
-source database/data.sql
+source /usr/share/doc/powergslb-<VERSION>/database/scheme.sql
+source /usr/share/doc/powergslb-<VERSION>/database/data.sql
 EOF
-
-sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
-
-systemctl daemon-reload
-systemctl enable powergslb.service
-systemctl start powergslb.service
-systemctl status powergslb.service
 ```
 
-### Setup PowerDNS
+### Start services
 
-```
-yum -y install pdns pdns-backend-remote
-
-cp /etc/pdns/pdns.conf /etc/pdns/pdns.conf~
-cp pdns/pdns.conf /etc/pdns/
-
-systemctl enable pdns.service
-systemctl start pdns.service
-systemctl status pdns.service
-```
-
-### Setup stunnel
-
-```
-yum -y install stunnel
-
-useradd -c 'stunnel daemon' -d /etc/stunnel -r -s /sbin/nologin stunnel
-
-openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout /etc/stunnel/powergslb.key -out /etc/stunnel/powergslb.crt
-
-chown root:stunnel /etc/stunnel/powergslb.key
-chmod 0640 /etc/stunnel/powergslb.key
-
-cp stunnel/powergslb.conf /etc/stunnel/
-cp stunnel/stunnel@.service /etc/systemd/system/
-
-systemctl daemon-reload
-systemctl enable stunnel@powergslb
-systemctl start stunnel@powergslb
-systemctl status stunnel@powergslb
+```shell
+systemctl enable powergslb.service pdns.service stunnel@powergslb
+systemctl start powergslb.service pdns.service stunnel@powergslb
+systemctl status powergslb.service pdns.service stunnel@powergslb
 ```
 
 ### Test PowerGSLB
 
-```
+```shell
 yum -y install bind-utils
 
 dig @127.0.0.1 example.com SOA

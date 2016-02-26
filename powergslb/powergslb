@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 """PowerGSLB
 
@@ -28,11 +28,11 @@ import pyping
 import subprocess32
 import systemd.daemon
 
-import queryparser
+from powergslb import queryparser
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '23 Feb 2016'
-__version__ = '1.4.1'
+__date__ = '25 Feb 2016'
+__version__ = '1.4.2'
 
 
 class PowerGSLBError(Exception):
@@ -866,6 +866,7 @@ class W2UIContentHandler(AbstractContentHandler):
         return content
 
     def search_records(self, records):
+        # TODO: fix duplicates
         if 'search' not in self.query:
             return records
 
@@ -892,6 +893,7 @@ class W2UIContentHandler(AbstractContentHandler):
         return final_records
 
     def sort_records(self, records):
+        # TODO: fix multiple search
         if 'sort' in self.query:
             for sort in self.query['sort']:
                 reverse = sort['direction'] == 'desc'
@@ -905,6 +907,7 @@ class W2UIContentHandler(AbstractContentHandler):
                 record['style'] = 'color: red'
             else:
                 record['status'] = 'On'
+                record['style'] = 'color: green'
 
             del record['id']
 

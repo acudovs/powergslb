@@ -8,7 +8,7 @@
 
 
 Name:		powergslb
-Version:	1.4.2
+Version:	%{version}
 Release:	1%{?dist}
 Summary:	PowerDNS Remote GSLB Backend
 
@@ -33,6 +33,7 @@ Requires:	systemd-python
 PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution.
 
 Main features:
+* Quick installation and setup
 * Written in Python 2.7
 * Built as PowerDNS Authoritative Server Remote Backend
 * Web based administration interface using w2ui
@@ -51,6 +52,10 @@ Main features:
 * Per record client IP / subnet persistence
 
 
+%package admin
+Summary:	PowerGSLB web based administration interface
+
+
 %package pdns
 Summary:	PowerGSLB PowerDNS configuration
 
@@ -62,7 +67,14 @@ Requires:	pdns-backend-remote
 Summary:	PowerGSLB stunnel configuration
 
 Requires:	openssl
+Requires:	powergslb
 Requires:	stunnel
+
+
+%description admin
+PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution.
+
+This package contains the PowerGSLB web based administration interface.
 
 
 %description pdns
@@ -147,6 +159,11 @@ chmod 0640 %{_sysconfdir}/stunnel/powergslb.pem
 %attr(0750,root,%{powergslb_group}) %dir %{_sysconfdir}/powergslb
 %attr(0640,root,%{powergslb_group}) %config(noreplace) %{_sysconfdir}/powergslb/powergslb.conf
 %{_unitdir}/powergslb.service
+
+
+%files admin
+%defattr(0644,root,root,0755)
+%doc LICENSE README.md
 %{_datarootdir}/powergslb
 
 
@@ -157,7 +174,7 @@ chmod 0640 %{_sysconfdir}/stunnel/powergslb.pem
 
 %files stunnel
 %defattr(0644,root,root,0755)
-%doc LICENSE README.md stunnel
+%doc LICENSE README.md
 %attr(0640,root,%{stunnel_group}) %config(noreplace) %{_sysconfdir}/stunnel/powergslb.conf
 %{_unitdir}/stunnel@.service
 

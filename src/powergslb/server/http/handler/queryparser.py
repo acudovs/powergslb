@@ -6,7 +6,7 @@ https://github.com/bernii/querystring-parser
 
 from urlparse import parse_qsl
 
-__all__ = ['QueryParserError', 'parse']
+__all__ = ['QueryParserError', 'parse_query']
 
 
 class QueryParserError(Exception):
@@ -128,7 +128,7 @@ def _parser_helper(key, val):
     return pdict
 
 
-def parse(query_string):
+def parse_query(query_string):
     """
     Main parse function
     http://www.w3.org/TR/html5/forms.html#application/x-www-form-urlencoded-encoding-algorithm

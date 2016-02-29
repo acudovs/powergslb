@@ -10,7 +10,8 @@ Main features:
 * HTTPS support for the webserver using [stunnel] (https://www.stunnel.org/)
 * DNS GSLB configuration stored in a MySQL / MariaDB database
 * Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster] (http://galeracluster.com/)
-* Multithreaded design
+* Modular architecture
+* Multithreaded architecture
 * Systemd status and watchdog support
 * Extendable health checks:
     * ICMP ping
@@ -48,12 +49,13 @@ yum -y install @Development\ Tools
 
 curl https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/<VERSION> > powergslb-<VERSION>.tar.gz
 
-rpmbuild -tb powergslb-<VERSION>.tar.gz
+rpmbuild -tb --define 'version <VERSION>' powergslb-<VERSION>.tar.gz
 ```
 
-Upon successful completion you will have three packages
+Upon successful completion you will have four packages
 ```
 ~/rpmbuild/RPMS/noarch/powergslb-<VERSION>-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-admin-<VERSION>-1.el7.centos.noarch.rpm
 ~/rpmbuild/RPMS/noarch/powergslb-pdns-<VERSION>-1.el7.centos.noarch.rpm
 ~/rpmbuild/RPMS/noarch/powergslb-stunnel-<VERSION>-1.el7.centos.noarch.rpm
 ```
@@ -67,9 +69,10 @@ yum -y install gcc python-devel python-pip
 
 pip install pyping subprocess32
 
-yum -y install powergslb-1.4.2-1.el7.centos.noarch.rpm \
-               powergslb-pdns-1.4.2-1.el7.centos.noarch.rpm \
-               powergslb-stunnel-1.4.2-1.el7.centos.noarch.rpm
+yum -y install powergslb-<VERSION>-1.el7.centos.noarch.rpm \
+               powergslb-admin-<VERSION>-1.el7.centos.noarch.rpm \
+               powergslb-pdns-<VERSION>-1.el7.centos.noarch.rpm \
+               powergslb-stunnel-<VERSION>-1.el7.centos.noarch.rpm
 
 sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
 

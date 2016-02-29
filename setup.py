@@ -1,16 +1,28 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2.7
 
 from distutils.core import setup
 
+powergslb = {}
+execfile('src/powergslb/__init__.py', powergslb)
+
 setup(name='PowerGSLB',
-      version='1.4.2',
+      version=powergslb['__version__'],
       author='Aleksey Chudov',
       author_email='aleksey.chudov@gmail.com',
       url='https://github.com/AlekseyChudov/powergslb',
       description='PowerDNS Remote GSLB Backend',
       long_description='PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution',
-      packages=['powergslb'],
       package_dir={'': 'src'},
       platforms=['Linux'],
-      license='GPLv2'
-      )
+      license='GPLv2',
+      requires=['mysql', 'netaddr', 'pyping', 'subprocess32', 'systemd.daemon'],
+      packages=[
+          'powergslb',
+          'powergslb.database',
+          'powergslb.database.mysql',
+          'powergslb.monitor',
+          'powergslb.server',
+          'powergslb.server.http',
+          'powergslb.server.http.handler',
+          'powergslb.system'
+      ])

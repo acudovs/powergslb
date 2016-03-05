@@ -1,6 +1,6 @@
 # PowerGSLB - PowerDNS Remote GSLB Backend
 
-PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution.
+PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 
 Main features:
 * Quick installation and setup
@@ -24,17 +24,22 @@ Main features:
 
 *Please request new features!*
 
-
-## Web based administration interface
-
-Status page
-![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-status.png?raw=true)
-
-
 ## Database diagram
 
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/database.png?raw=true)
 
+## Web based administration interface
+
+Status grid
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-status.png?raw=true)
+
+Advanced search
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-search.png?raw=true)
+
+Add new record
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-form.png?raw=true)
+
+[More images] (https://github.com/AlekseyChudov/powergslb/tree/master/images)
 
 ## Installation on CentOS 7
 

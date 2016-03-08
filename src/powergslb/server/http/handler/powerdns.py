@@ -15,14 +15,6 @@ class PowerDNSContentHandler(AbstractContentHandler):
     PowerDNS content handler
     """
 
-    def _get_lookup(self):
-        records = self.database.gslb_records(*self.dirs[2:])
-        qtype_records = self._split_records(records)
-        filtered_records = self._filter_records(qtype_records)
-        result = self._strip_records(filtered_records)
-
-        return {'result': result}
-
     def _filter_records(self, qtype_records):
         records = []
         for qtype in qtype_records:
@@ -31,6 +23,9 @@ class PowerDNSContentHandler(AbstractContentHandler):
             live_records = {}
 
             for record in qtype_records[qtype]:
+                if not self._is_in_view(record):
+                    continue
+
                 if record['fallback']:
                     if record['weight'] not in fallback_records:
                         fallback_records[record['weight']] = []
@@ -60,25 +55,25 @@ class PowerDNSContentHandler(AbstractContentHandler):
 
         return records
 
+    def _get_lookup(self):
+        records = self.database.gslb_records(*self.dirs[2:])
+        qtype_records = self._split_records(records)
+        filtered_records = self._filter_records(qtype_records)
+        return self._strip_records(filtered_records)
+
+    def _is_in_view(self, record):
+        result = False
+        try:
+            result = bool(netaddr.smallest_matching_cidr(self.remote_ip, record.get('rule').split()))
+        except (AttributeError, netaddr.AddrFormatError, ValueError) as e:
+            logging.error('{}: record id {} view rule invalid: {}: {}'.format(
+                    type(self).__name__, record['id'], type(e).__name__, e))
+
+        return result
+
     def _remote_ip_persistence(self, records):
-        ip_value = 0
-        remote_ip = self.headers.get('X-Remotebackend-Real-Remote')
-
-        if remote_ip is None:
-            logging.error("{}: 'X-Remotebackend-Real-Remote' header missing".format(type(self).__name__))
-        else:
-            try:
-                network = netaddr.IPNetwork(remote_ip)
-            except netaddr.AddrFormatError as e:
-                logging.error("{}: 'X-Remotebackend-Real-Remote' header invalid: {}: {}".format(
-                        type(self).__name__, type(e).__name__, e))
-            else:
-                if network.version == 4:
-                    ip_value = network.ip.value >> records[0]['persistence']
-                elif network.version == 6:
-                    ip_value = network.ip.value >> records[0]['persistence']
-
-        return records[hash(ip_value) % len(records)]
+        persistence_value = netaddr.IPAddress(self.remote_ip).value >> records[0]['persistence']
+        return records[hash(persistence_value) % len(records)]
 
     def _split_records(self, records):
         qtype_records = {}
@@ -117,7 +112,7 @@ class PowerDNSContentHandler(AbstractContentHandler):
 
     def content(self):
         if len(self.dirs) == 4 and self.dirs[1] == 'lookup':
-            content = self._get_lookup()
+            content = {'result': self._get_lookup()}
         else:
             content = {'result': False}
 

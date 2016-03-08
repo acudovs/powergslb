@@ -30,13 +30,16 @@ var gridPopupForm = (function (event) {
             openPopupForm(event, 'monitor', 400, 210, 'formMonitors');
             break;
         case 'gridRecords':
-            openPopupForm(event, 'record', 400, 490, 'formRecords');
+            openPopupForm(event, 'record', 400, 525, 'formRecords');
             break;
         case 'gridTypes':
             openPopupForm(event, 'type', 400, 245, 'formTypes');
             break;
         case 'gridUsers':
             openPopupForm(event, 'user', 400, 245, 'formUsers');
+            break;
+        case 'gridViews':
+            openPopupForm(event, 'view', 400, 210, 'formViews');
             break;
     }
 });
@@ -130,7 +133,8 @@ var config = {
                     {id: 'gridDomains', text: 'Domains', img: 'icon-page'},
                     {id: 'gridMonitors', text: 'Monitors', img: 'icon-page'},
                     {id: 'gridRecords', text: 'Records', img: 'icon-page'},
-                    {id: 'gridTypes', text: 'Types', img: 'icon-page'}
+                    {id: 'gridTypes', text: 'Types', img: 'icon-page'},
+                    {id: 'gridViews', text: 'Views', img: 'icon-page'}
                 ]
             },
             {
@@ -148,6 +152,7 @@ var config = {
                 case 'gridRecords':
                 case 'gridTypes':
                 case 'gridUsers':
+                case 'gridViews':
                     w2ui.layout.content('main', w2ui[event.target]);
                     break;
             }
@@ -173,7 +178,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
             {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
-            {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true}
+            {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
+            {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
         searches: [
             {field: 'status', caption: 'Status', type: 'text'},
@@ -186,7 +192,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', type: 'int'},
             {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
-            {field: 'monitor', caption: 'Monitor', type: 'text'}
+            {field: 'monitor', caption: 'Monitor', type: 'text'},
+            {field: 'view', caption: 'View', type: 'text'}
         ],
         show: {
             footer: true,
@@ -322,7 +329,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
             {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
-            {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true}
+            {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
+            {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
         searches: [
             {field: 'recid', caption: 'ID', type: 'int'},
@@ -335,7 +343,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', type: 'int'},
             {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
-            {field: 'monitor', caption: 'Monitor', type: 'text'}
+            {field: 'monitor', caption: 'Monitor', type: 'text'},
+            {field: 'view', caption: 'View', type: 'text'}
         ],
         onAdd: gridPopupForm,
         onDblClick: gridPopupForm,
@@ -390,6 +399,13 @@ var config = {
                 field: 'monitor', type: 'combo', required: true, html: {caption: 'Monitor: '},
                 options: {
                     postData: {'cmd': 'get-items', data: 'monitors', field: 'monitor'},
+                    placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+                }
+            },
+            {
+                field: 'view', type: 'combo', required: true, html: {caption: 'View: '},
+                options: {
+                    postData: {'cmd': 'get-items', data: 'views', field: 'view'},
                     placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
                 }
             }
@@ -484,6 +500,46 @@ var config = {
         onSave: function () {
             w2ui.gridUsers.reload();
         }
+    },
+
+    // ====================================================
+    // Views
+    // ====================================================
+
+    gridViews: {
+        name: 'gridViews',
+        postData: {data: 'views'},
+        show: gridShow,
+        sortData: gridSortData,
+        url: w2uiUrl,
+        columns: [
+            {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+            {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true},
+            {field: 'rule', caption: 'Rule', size: '300px', resizable: true, sortable: true}
+        ],
+        searches: [
+            {field: 'recid', caption: 'ID', type: 'int'},
+            {field: 'view', caption: 'View', type: 'text'},
+            {field: 'rule', caption: 'Rule', type: 'text'}
+        ],
+        onAdd: gridPopupForm,
+        onDblClick: gridPopupForm,
+        onEdit: gridPopupForm
+    },
+
+    formViews: {
+        name: 'formViews',
+        postData: {data: 'views'},
+        actions: formActions,
+        style: formStyle,
+        url: w2uiUrl,
+        fields: [
+            {field: 'view', type: 'text', required: true, html: {caption: 'View: '}},
+            {field: 'rule', type: 'text', required: true, html: {caption: 'Rule: '}}
+        ],
+        onSave: function () {
+            w2ui.gridViews.reload();
+        }
     }
 };
 
@@ -503,9 +559,11 @@ $(function () {
     $().w2grid(config.gridRecords);
     $().w2grid(config.gridTypes);
     $().w2grid(config.gridUsers);
+    $().w2grid(config.gridViews);
     $().w2form(config.formDomains);
     $().w2form(config.formMonitors);
     $().w2form(config.formRecords);
     $().w2form(config.formTypes);
+    $().w2form(config.formViews);
     $().w2form(config.formUsers);
 });

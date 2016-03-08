@@ -7,6 +7,15 @@ CREATE TABLE `users` (
   UNIQUE KEY `users_user_uindex` (`user`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
+CREATE TABLE `views` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `view` varchar(255) NOT NULL,
+  `rule` varchar(255) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `views_view_uindex` (`view`),
+  UNIQUE KEY `views_rule_uindex` (`rule`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
 CREATE TABLE `domains` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `domain` varchar(255) NOT NULL,
@@ -77,12 +86,15 @@ CREATE TABLE `records` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `name_type_id` int(11) NOT NULL,
   `content_monitor_id` int(11) NOT NULL,
+  `view_id` int(11) NOT NULL,
   `disabled` int(11) NOT NULL DEFAULT '0',
   `fallback` int(11) NOT NULL DEFAULT '0',
   `weight` int(11) NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `records_name_type_id_content_monitor_id_uindex` (`name_type_id`,`content_monitor_id`),
+  UNIQUE KEY `records_name_type_id_content_monitor_id_view_id_uindex` (`name_type_id`,`content_monitor_id`, `view_id`),
   KEY `records_contents_monitors_id_fk` (`content_monitor_id`),
+  KEY `records_view_id_fk` (`view_id`),
   CONSTRAINT `records_names_types_id_fk` FOREIGN KEY (`name_type_id`) REFERENCES `names_types` (`id`),
-  CONSTRAINT `records_contents_monitors_id_fk` FOREIGN KEY (`content_monitor_id`) REFERENCES `contents_monitors` (`id`)
+  CONSTRAINT `records_contents_monitors_id_fk` FOREIGN KEY (`content_monitor_id`) REFERENCES `contents_monitors` (`id`),
+  CONSTRAINT `records_views_id_fk` FOREIGN KEY (`view_id`) REFERENCES `views` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;

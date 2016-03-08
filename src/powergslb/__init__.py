@@ -4,5 +4,5 @@ PowerGSLB package contains PowerDNS Remote GSLB Backend https://github.com/Aleks
 """
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '8 Mar 2016'
-__version__ = '1.5.1'
+__date__ = '9 Mar 2016'
+__version__ = '1.6.0'

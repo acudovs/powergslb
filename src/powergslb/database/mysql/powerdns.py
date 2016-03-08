@@ -1,11 +1,11 @@
 import abc
 
-__all__ = ['AbstractPowerDNSDatabase']
+__all__ = ['PowerDNSDatabaseMixIn']
 
 
-class AbstractPowerDNSDatabase(object):
+class PowerDNSDatabaseMixIn(object):
     """
-    AbstractPowerDNSDatabase class contains PowerDNS related queries
+    PowerDNSDatabaseMixIn class contains PowerDNS related queries
     """
     __metaclass__ = abc.ABCMeta
 
@@ -34,13 +34,15 @@ class AbstractPowerDNSDatabase(object):
               `records`.`fallback`,
               `records`.`weight`,
               `contents_monitors`.`id`,
-              `contents`.`content`
+              `contents`.`content`,
+              `views`.`rule`
             FROM `names`
               JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
               JOIN `types` ON `names_types`.`type_value` = `types`.`value`
               JOIN `records` ON `names_types`.`id` = `records`.`name_type_id`
               JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
+              JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
 
         if qtype == 'ANY':

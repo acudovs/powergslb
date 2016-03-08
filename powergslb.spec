@@ -52,6 +52,7 @@ Main features:
 * Fallback if all the checks failed
 * Weighted (priority) records
 * Per record client IP / subnet persistence
+* DNS GSLB views support
 
 
 %package admin
@@ -131,9 +132,10 @@ getent passwd %{stunnel_user} >/dev/null || \
 
 
 %post stunnel
-%{_sysconfdir}/pki/tls/certs/make-dummy-cert %{_sysconfdir}/stunnel/powergslb.pem
-chown root:%{stunnel_group} %{_sysconfdir}/stunnel/powergslb.pem
-chmod 0640 %{_sysconfdir}/stunnel/powergslb.pem
+test -e %{_sysconfdir}/stunnel/powergslb.pem || \
+    %{_sysconfdir}/pki/tls/certs/make-dummy-cert %{_sysconfdir}/stunnel/powergslb.pem && \
+    chown root:%{stunnel_group} %{_sysconfdir}/stunnel/powergslb.pem && \
+    chmod 0640 %{_sysconfdir}/stunnel/powergslb.pem
 
 %systemd_post stunnel@powergslb.service
 

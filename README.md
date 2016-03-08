@@ -22,6 +22,7 @@ Main features:
 * Fallback if all the checks failed
 * Weighted (priority) records
 * Per record client IP / subnet persistence
+* DNS GSLB views support
 
 *Please request new features!*
 

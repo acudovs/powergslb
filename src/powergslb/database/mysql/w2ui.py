@@ -1,11 +1,11 @@
 import abc
 
-__all__ = ['AbstractW2UIDatabase']
+__all__ = ['W2UIDatabaseMixIn']
 
 
-class AbstractW2UIDatabase(object):
+class W2UIDatabaseMixIn(object):
     """
-    AbstractW2UIDatabase class contains w2ui related queries
+    W2UIDatabaseMixIn class contains w2ui related queries
     """
     __metaclass__ = abc.ABCMeta
 
@@ -162,6 +162,14 @@ class AbstractW2UIDatabase(object):
 
         return self._delete(operation, ids)
 
+    def delete_views(self, ids):
+        operation = """
+            DELETE FROM `views`
+            WHERE `id` IN (%s)
+        """
+
+        return self._delete(operation, ids)
+
     def get_status(self):
         operation = """
             SELECT `domains`.`domain`,
@@ -174,7 +182,8 @@ class AbstractW2UIDatabase(object):
               `records`.`weight`,
               `contents_monitors`.`id`,
               `contents`.`content`,
-              `monitors`.`monitor`
+              `monitors`.`monitor`,
+              `views`.`view`
             FROM `domains`
               JOIN `names` ON `domains`.`id` = `names`.`domain_id`
               JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
@@ -183,6 +192,7 @@ class AbstractW2UIDatabase(object):
               JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
               JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+              JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
 
         return self._execute(operation)
@@ -232,7 +242,8 @@ class AbstractW2UIDatabase(object):
               `records`.`fallback`,
               `records`.`weight`,
               `contents`.`content`,
-              `monitors`.`monitor`
+              `monitors`.`monitor`,
+              `views`.`view`
             FROM `domains`
               JOIN `names` ON `domains`.`id` = `names`.`domain_id`
               JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
@@ -241,6 +252,7 @@ class AbstractW2UIDatabase(object):
               JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
               JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+              JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
         params = ()
 
@@ -276,6 +288,23 @@ class AbstractW2UIDatabase(object):
               `name`,
               `password`
             FROM `users`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `id` = %s
+            """
+            params += (recid,)
+
+        return self._execute(operation, params)
+
+    def get_views(self, recid=0):
+        operation = """
+            SELECT `id` AS `recid`,
+              `view`,
+              `rule`
+            FROM `views`
         """
         params = ()
 
@@ -323,7 +352,7 @@ class AbstractW2UIDatabase(object):
 
         return self._execute(operation, params)
 
-    def save_records(self, save_recid, domain, name, name_type, ttl, content, monitor, disabled=0, fallback=0,
+    def save_records(self, save_recid, domain, name, name_type, ttl, content, monitor, view, disabled=0, fallback=0,
                      persistence=0, weight=0, **_):
 
         count = 0
@@ -366,15 +395,19 @@ class AbstractW2UIDatabase(object):
                        JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
                      WHERE `contents`.`content` = %s
                        AND `monitors`.`monitor` = %s),
+                  `view_id` =
+                    (SELECT `views`.`id`
+                     FROM `views`
+                     WHERE `views`.`view` = %s),
                   `disabled` = %s,
                   `fallback` = %s,
                   `weight` = %s
                 WHERE `records`.`id` = %s
             """
-            params = (name, domain, name_type, content, monitor, disabled, fallback, weight, save_recid)
+            params = (name, domain, name_type, content, monitor, view, disabled, fallback, weight, save_recid)
         else:
             operation = """
-                INSERT INTO `records` (`name_type_id`, `content_monitor_id`, `disabled`, `fallback`, `weight`)
+                INSERT INTO `records` (`name_type_id`, `content_monitor_id`, `view_id`, `disabled`, `fallback`, `weight`)
                   SELECT
                     (SELECT `names_types`.`id`
                      FROM `names_types`
@@ -388,11 +421,14 @@ class AbstractW2UIDatabase(object):
                        JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
                      WHERE `contents`.`content` = %s
                        AND `monitors`.`monitor` = %s) AS `content_monitor_id`,
+                    (SELECT `views`.`id`
+                     FROM `views`
+                     WHERE `views`.`view` = %s) AS `view_id`,
                     %s AS `disabled`,
                     %s AS `fallback`,
                     %s AS `weight`
             """
-            params = (name, name_type, content, monitor, disabled, fallback, weight)
+            params = (name, name_type, content, monitor, view, disabled, fallback, weight)
 
         count += self._execute(operation, params)
 
@@ -439,5 +475,24 @@ class AbstractW2UIDatabase(object):
                 VALUES (%s, %s, PASSWORD(%s))
             """
             params = (user, name, password)
+
+        return self._execute(operation, params)
+
+    def save_views(self, save_recid, view, rule, **_):
+        if save_recid:
+            operation = """
+                UPDATE `views`
+                SET `view` = %s,
+                  `rule` = %s
+                WHERE `id` = %s
+
+            """
+            params = (view, rule, save_recid)
+        else:
+            operation = """
+                INSERT INTO `views` (`view`, `rule`)
+                VALUES (%s, %s)
+            """
+            params = (view, rule)
 
         return self._execute(operation, params)

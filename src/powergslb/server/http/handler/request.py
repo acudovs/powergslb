@@ -4,6 +4,8 @@ import os
 import SimpleHTTPServer
 import urllib2
 
+import netaddr
+
 from powergslb.server.http.handler.powerdns import PowerDNSContentHandler
 from powergslb.server.http.handler.w2ui import W2UIContentHandler
 
@@ -30,6 +32,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
         self.database = None
         self.dirs = None
         self.path = None
+        self.remote_ip = None
         self.query = None
         super(HTTPRequestHandler, self).__init__(*args)
 
@@ -57,6 +60,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
         return authorized
 
     def _handle_request(self):
+        self._set_remote_ip()
         self._urlsplit()
 
         if not self.dirs:
@@ -116,6 +120,18 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
         self.send_header('Connection', 'close')
         self.end_headers()
         logging.debug('{}: {}'.format(type(self).__name__, location))
+
+    def _set_remote_ip(self):
+        remote_ip = self.client_address[0]
+        if 'X-Remotebackend-Real-Remote' in self.headers:
+            try:
+                real_remote_header = self.headers.get('X-Remotebackend-Real-Remote')
+                remote_ip = netaddr.IPNetwork(real_remote_header).ip.format()
+            except (netaddr.AddrFormatError, ValueError) as e:
+                logging.error("{}: 'X-Remotebackend-Real-Remote' header invalid: {}: {}".format(
+                        type(self).__name__, type(e).__name__, e))
+
+        self.remote_ip = remote_ip
 
     def _urlsplit(self):
         self.path, self.query = urllib2.httplib.urlsplit(self.path)[2:4]

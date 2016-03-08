@@ -15,6 +15,7 @@ class AbstractContentHandler(object):
         self.dirs = request_handler.dirs
         self.headers = request_handler.headers
         self.path = request_handler.path
+        self.remote_ip = request_handler.remote_ip
         self.query = request_handler.query
 
     @abc.abstractmethod

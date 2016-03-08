@@ -2,13 +2,13 @@ import logging
 
 import mysql.connector
 
-from powergslb.database.mysql.powerdns import AbstractPowerDNSDatabase
-from powergslb.database.mysql.w2ui import AbstractW2UIDatabase
+from powergslb.database.mysql.powerdns import PowerDNSDatabaseMixIn
+from powergslb.database.mysql.w2ui import W2UIDatabaseMixIn
 
 __all__ = ['MySQLDatabase']
 
 
-class MySQLDatabase(AbstractPowerDNSDatabase, AbstractW2UIDatabase, mysql.connector.MySQLConnection):
+class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.MySQLConnection):
     """
     MySQLDatabase class
     """

@@ -9,6 +9,7 @@ Main features:
 * Web based administration interface using [w2ui] (http://w2ui.com/)
 * HTTPS support for the webserver using [stunnel] (https://www.stunnel.org/)
 * DNS GSLB configuration stored in a MySQL / MariaDB database
+* Master-Slave DNS GSLB using native MySQL / MariaDB [replication] (https://dev.mysql.com/doc/refman/5.5/en/replication.html)
 * Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster] (http://galeracluster.com/)
 * Modular architecture
 * Multithreaded architecture

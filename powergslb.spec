@@ -39,8 +39,10 @@ Main features:
 * Web based administration interface using w2ui
 * HTTPS support for the webserver using stunnel
 * DNS GSLB configuration stored in a MySQL / MariaDB database
+* Master-Slave DNS GSLB using native MySQL / MariaDB replication
 * Multi-Master DNS GSLB using native MySQL / MariaDB Galera Cluster
-* Multithreaded design
+* Modular architecture
+* Multithreaded architecture
 * Systemd status and watchdog support
 * Extendable health checks:
     * ICMP ping

@@ -12,7 +12,7 @@ class AbstractW2UIDatabase(object):
     def _delete(self, operation, ids):
         params = tuple(ids)
         params_format = ', '.join(['%s'] * len(params))
-        operation % params_format
+        operation %= params_format
 
         return self._execute(operation, params)
 

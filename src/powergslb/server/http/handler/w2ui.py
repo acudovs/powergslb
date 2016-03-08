@@ -145,8 +145,11 @@ class W2UIContentHandler(AbstractContentHandler):
 
             search_indexes = set()
             for i in all_indexes:
-                if search_function(records[i][search['field']], search['value']):
-                    search_indexes.add(i)
+                try:
+                    if search_function(records[i][search['field']], search['value']):
+                        search_indexes.add(i)
+                except ValueError:
+                    pass
 
             if self.query['searchLogic'] == 'AND':
                 all_indexes = search_indexes

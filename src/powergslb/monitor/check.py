@@ -45,17 +45,20 @@ class CheckThread(powergslb.system.AbstractThread):
         return subprocess32.call(self.monitor['args'], timeout=self.monitor['timeout']) == 0
 
     def _do_http(self):
-        urllib2.urlopen(self.monitor['url'], timeout=self.monitor['timeout']).close()
+        urllib2.urlopen(self.monitor['url'], timeout=self.monitor['timeout'])
         return True
 
     def _do_icmp(self):
         try:
-            return pyping.ping(self.monitor['ip'], timeout=self.monitor['timeout'] * 1000, count=1).ret_code == 0
+            ip = self.monitor['ip']
+            timeout = self.monitor['timeout'] * 1000
+            return pyping.ping(ip, timeout, count=1).ret_code == 0
         except SystemExit:
             raise Exception('unknown host: {}'.format(self.monitor['ip']))
 
     def _do_tcp(self):
-        socket.create_connection((self.monitor['ip'], self.monitor['port']), self.monitor['timeout']).close()
+        address = (self.monitor['ip'], self.monitor['port'])
+        socket.create_connection(address, self.monitor['timeout']).close()
         return True
 
     def task(self):

@@ -23,7 +23,8 @@ class HTTPServerThread(powergslb.system.AbstractThread):
         os.chdir(self.root)
 
     def task(self):
-        http_server = ThreadingHTTPServer((self.address, self.port), HTTPRequestHandler)
+        address = (self.address, self.port)
+        http_server = ThreadingHTTPServer(address, HTTPRequestHandler)
         http_server.daemon_threads = True
         logging.info('{}: listening on {}:{}'.format(type(self).__name__, self.address, self.port))
         http_server.serve_forever()

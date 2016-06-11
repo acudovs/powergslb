@@ -73,7 +73,7 @@ class MonitorThread(powergslb.system.AbstractThread):
 
         while alive_threads and time.time() - shutdown_time < shutdown_timeout:
             time.sleep(1)
-            alive_threads = [alive_thread for alive_thread in alive_threads if alive_thread.is_alive()]
+            alive_threads = [thread for thread in alive_threads if thread.is_alive()]
 
         self._check_threads = alive_threads
 

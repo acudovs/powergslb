@@ -30,6 +30,10 @@ Main features:
 
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/database.png?raw=true)
 
+## Class diagram
+
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/class-diagram.png?raw=true)
+
 ## Web based administration interface
 
 Status grid

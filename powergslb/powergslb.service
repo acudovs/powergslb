@@ -6,8 +6,10 @@ Description=PowerGSLB service
 [Service]
 Type=notify
 ExecStart=/usr/sbin/powergslb -c /etc/powergslb/powergslb.conf
+CapabilityBoundingSet=CAP_NET_RAW
 WatchdogSec=3
 Restart=on-failure
+ProtectSystem=full
 PrivateTmp=true
 
 [Install]

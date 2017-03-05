@@ -24,7 +24,7 @@ Main features:
 * Per record client IP / subnet persistence
 * DNS GSLB views support
 
-*Please request new features!*
+*Please report bugs and request new features!*
 
 ## Database diagram
 
@@ -58,17 +58,17 @@ Please read [How to create an RPM package] (https://fedoraproject.org/wiki/How_t
 yum -y update
 yum -y install @Development\ Tools
 
-curl https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/<VERSION> > powergslb-<VERSION>.tar.gz
-
-rpmbuild -tb --define 'version <VERSION>' powergslb-<VERSION>.tar.gz
+VERSION=1.6.1
+curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" > "powergslb-$VERSION.tar.gz"
+rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
 ```
 
 Upon successful completion you will have four packages
 ```
-~/rpmbuild/RPMS/noarch/powergslb-<VERSION>-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-admin-<VERSION>-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-pdns-<VERSION>-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-stunnel-<VERSION>-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-$VERSION-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm
 ```
 
 ### Setup PowerGSLB, PowerDNS and stunnel
@@ -80,15 +80,16 @@ yum -y install gcc python-devel python-pip
 
 pip install pyping subprocess32
 
-yum -y install powergslb-<VERSION>-1.el7.centos.noarch.rpm \
-               powergslb-admin-<VERSION>-1.el7.centos.noarch.rpm \
-               powergslb-pdns-<VERSION>-1.el7.centos.noarch.rpm \
-               powergslb-stunnel-<VERSION>-1.el7.centos.noarch.rpm
+VERSION=1.6.1
+yum -y install "powergslb-$VERSION-1.el7.centos.noarch.rpm" \
+               "powergslb-admin-$VERSION-1.el7.centos.noarch.rpm" \
+               "powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm" \
+               "powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm"
 
 sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
 
 cp /etc/pdns/pdns.conf /etc/pdns/pdns.conf~
-cp /usr/share/doc/powergslb-pdns-<VERSION>/pdns/pdns.conf /etc/pdns/pdns.conf
+cp "/usr/share/doc/powergslb-pdns-$VERSION/pdns/pdns.conf" /etc/pdns/pdns.conf
 ```
 
 ### Setup MariaDB
@@ -104,12 +105,13 @@ systemctl status mariadb.service
 
 mysql_secure_installation
 
+VERSION=1.6.1
 mysql -p << EOF
 CREATE DATABASE powergslb;
 GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY 'your-database-password-here';
 USE powergslb;
-source /usr/share/doc/powergslb-<VERSION>/database/scheme.sql
-source /usr/share/doc/powergslb-<VERSION>/database/data.sql
+source /usr/share/doc/powergslb-$VERSION/database/scheme.sql
+source /usr/share/doc/powergslb-$VERSION/database/data.sql
 EOF
 ```
 

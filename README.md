@@ -5,12 +5,12 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 Main features:
 * Quick installation and setup
 * Written in Python 2.7
-* Built as PowerDNS Authoritative Server [Remote Backend] (https://doc.powerdns.com/3/authoritative/backend-remote/)
-* Web based administration interface using [w2ui] (http://w2ui.com/)
-* HTTPS support for the webserver using [stunnel] (https://www.stunnel.org/)
+* Built as PowerDNS Authoritative Server [Remote Backend](https://doc.powerdns.com/3/authoritative/backend-remote/)
+* Web based administration interface using [w2ui](http://w2ui.com/)
+* HTTPS support for the webserver using [stunnel](https://www.stunnel.org/)
 * DNS GSLB configuration stored in a MySQL / MariaDB database
-* Master-Slave DNS GSLB using native MySQL / MariaDB [replication] (https://dev.mysql.com/doc/refman/5.5/en/replication.html)
-* Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster] (http://galeracluster.com/)
+* Master-Slave DNS GSLB using native MySQL / MariaDB [replication](https://dev.mysql.com/doc/refman/5.5/en/replication.html)
+* Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster](http://galeracluster.com/)
 * Modular architecture
 * Multithreaded architecture
 * Systemd status and watchdog support
@@ -45,7 +45,7 @@ Advanced search
 Add new record
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-form.png?raw=true)
 
-[More images] (https://github.com/AlekseyChudov/powergslb/tree/master/images)
+[More images](https://github.com/AlekseyChudov/powergslb/tree/master/images)
 
 ## Installation on CentOS 7
 
@@ -53,12 +53,12 @@ Add new record
 
 You should always create RPM packages in a clean environment and preferably on a separate machine!
 
-Please read [How to create an RPM package] (https://fedoraproject.org/wiki/How_to_create_an_RPM_package).
+Please read [How to create an RPM package](https://fedoraproject.org/wiki/How_to_create_an_RPM_package).
 ```shell
 yum -y update
 yum -y install @Development\ Tools
 
-VERSION=1.6.1
+VERSION=1.6.4
 curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" > "powergslb-$VERSION.tar.gz"
 rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
 ```
@@ -80,7 +80,7 @@ yum -y install gcc python-devel python-pip
 
 pip install pyping subprocess32
 
-VERSION=1.6.1
+VERSION=1.6.4
 yum -y install "powergslb-$VERSION-1.el7.centos.noarch.rpm" \
                "powergslb-admin-$VERSION-1.el7.centos.noarch.rpm" \
                "powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm" \
@@ -105,7 +105,7 @@ systemctl status mariadb.service
 
 mysql_secure_installation
 
-VERSION=1.6.1
+VERSION=1.6.4
 mysql -p << EOF
 CREATE DATABASE powergslb;
 GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY 'your-database-password-here';

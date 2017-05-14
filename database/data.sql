@@ -51,6 +51,7 @@ INSERT INTO `types` (`value`, `type`, `description`) VALUES (1, 'A', 'Address re
 INSERT INTO `types` (`value`, `type`, `description`) VALUES (2, 'NS', 'Name server record');
 INSERT INTO `types` (`value`, `type`, `description`) VALUES (5, 'CNAME', 'Canonical name record');
 INSERT INTO `types` (`value`, `type`, `description`) VALUES (6, 'SOA', 'Start of authority record');
+INSERT INTO `types` (`value`, `type`, `description`) VALUES (12, 'PTR', 'Pointer record');
 INSERT INTO `types` (`value`, `type`, `description`) VALUES (15, 'MX', 'Mail exchange record');
 INSERT INTO `types` (`value`, `type`, `description`) VALUES (16, 'TXT', 'Text record');
 INSERT INTO `types` (`value`, `type`, `description`) VALUES (28, 'AAAA', 'IPv6 address record');

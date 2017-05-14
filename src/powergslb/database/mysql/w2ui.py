@@ -141,10 +141,10 @@ class W2UIDatabaseMixIn(object):
               JOIN `names` ON `names_types`.`name_id` = `names`.`id`
               JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-            WHERE `records`.`id` IN (%s)
+            WHERE `records`.`id` = %s
         """
 
-        return self._delete(operation, ids)
+        return sum(self._execute(operation, (id,)) for id in ids)
 
     def delete_types(self, values):
         operation = """

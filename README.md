@@ -49,28 +49,6 @@ Add new record
 
 ## Installation on CentOS 7
 
-### Create PowerGSLB RPM packages
-
-You should always create RPM packages in a clean environment and preferably on a separate machine!
-
-Please read [How to create an RPM package](https://fedoraproject.org/wiki/How_to_create_an_RPM_package).
-```shell
-yum -y update
-yum -y install @Development\ Tools
-
-VERSION=1.6.4
-curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" > "powergslb-$VERSION.tar.gz"
-rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
-```
-
-Upon successful completion you will have four packages
-```
-~/rpmbuild/RPMS/noarch/powergslb-$VERSION-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm
-```
-
 ### Setup PowerGSLB, PowerDNS and stunnel
 
 ```shell
@@ -81,10 +59,11 @@ yum -y install gcc python-devel python-pip
 pip install pyping subprocess32
 
 VERSION=1.6.4
-yum -y install "powergslb-$VERSION-1.el7.centos.noarch.rpm" \
-               "powergslb-admin-$VERSION-1.el7.centos.noarch.rpm" \
-               "powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm" \
-               "powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm"
+yum -y install \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.centos.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm"
 
 sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
 
@@ -140,3 +119,25 @@ Open URL https://SERVER/admin/.
 
 * Default username: admin
 * Default password: admin
+
+### Building PowerGSLB RPM packages
+
+You should always create RPM packages in a clean environment and preferably on a separate machine!
+
+Please read [How to create an RPM package](https://fedoraproject.org/wiki/How_to_create_an_RPM_package).
+```shell
+yum -y update
+yum -y install @Development\ Tools
+
+VERSION=1.6.4
+curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" > "powergslb-$VERSION.tar.gz"
+rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
+```
+
+Upon successful completion you will have four packages
+```
+~/rpmbuild/RPMS/noarch/powergslb-$VERSION-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm
+```

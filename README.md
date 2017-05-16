@@ -2,7 +2,25 @@
 
 PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 
-Main features:
+
+## Table of Contents
+
+* [Main features](#main-features)
+* [Database diagram](#database-diagram)
+* [Class diagram](#class-diagram)
+* [Web based administration interface](#web-based-administration-interface)
+* [Installation on CentOS 7](#installation-on-centos-7)
+   * [Setup PowerGSLB, PowerDNS and stunnel](#setup-powergslb-powerdns-and-stunnel)
+   * [Setup MariaDB](#setup-mariadb)
+   * [Start services](#start-services)
+   * [Test PowerGSLB](#test-powergslb)
+   * [Web based administration interface](#web-based-administration-interface-1)
+* [Building PowerGSLB RPM packages](#building-powergslb-rpm-packages)
+* [Using PowerGSLB Docker image](#using-powergslb-docker-image)
+
+
+## Main features
+
 * Quick installation and setup
 * Written in Python 2.7
 * Built as PowerDNS Authoritative Server [Remote Backend](https://doc.powerdns.com/3/authoritative/backend-remote/)
@@ -23,16 +41,20 @@ Main features:
 * Weighted (priority) records
 * Per record client IP / subnet persistence
 * DNS GSLB views support
+* All-in-one Docker image
 
 *Please report bugs and request new features!*
+
 
 ## Database diagram
 
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/database.png?raw=true)
 
+
 ## Class diagram
 
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/class-diagram.png?raw=true)
+
 
 ## Web based administration interface
 
@@ -46,6 +68,7 @@ Add new record
 ![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-form.png?raw=true)
 
 [More images](https://github.com/AlekseyChudov/powergslb/tree/master/images)
+
 
 ## Installation on CentOS 7
 
@@ -120,7 +143,8 @@ Open URL https://SERVER/admin/.
 * Default username: admin
 * Default password: admin
 
-### Building PowerGSLB RPM packages
+
+## Building PowerGSLB RPM packages
 
 You should always create RPM packages in a clean environment and preferably on a separate machine!
 
@@ -140,4 +164,24 @@ Upon successful completion you will have four packages
 ~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm
 ~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm
 ~/rpmbuild/RPMS/noarch/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm
+```
+
+
+## Using PowerGSLB Docker image
+
+For quick setup, you can create an all-in-one Docker image.
+
+```
+VERSION=1.6.4
+
+docker build -f docker/Dockerfile --build-arg VERSION="$VERSION" \
+    --force-rm --no-cache -t powergslb:"$VERSION" https://github.com/AlekseyChudov/powergslb.git
+
+docker run -d --name powergslb --hostname powergslb powergslb:"$VERSION"
+
+docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' powergslb
+
+docker exec -it powergslb bash
+
+docker stop powergslb
 ```

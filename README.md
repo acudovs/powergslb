@@ -17,6 +17,7 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
    * [Web based administration interface](#web-based-administration-interface-1)
 * [Building PowerGSLB RPM packages](#building-powergslb-rpm-packages)
 * [Using PowerGSLB Docker image](#using-powergslb-docker-image)
+* [Building PowerGSLB Docker image](#building-powergslb-docker-image)
 
 
 ## Main features
@@ -169,19 +170,30 @@ Upon successful completion you will have four packages
 
 ## Using PowerGSLB Docker image
 
-For quick setup, you can create an all-in-one Docker image.
+For quick setup, you can pull all-in-one Docker image from docker.io.
 
 ```
 VERSION=1.6.4
 
-docker build -f docker/Dockerfile --build-arg VERSION="$VERSION" \
-    --force-rm --no-cache -t powergslb:"$VERSION" https://github.com/AlekseyChudov/powergslb.git
+docker pull docker.io/alekseychudov/powergslb:"$VERSION"
 
-docker run -d --name powergslb --hostname powergslb powergslb:"$VERSION"
+docker run -d --name powergslb --hostname powergslb docker.io/alekseychudov/powergslb:"$VERSION"
 
 docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' powergslb
 
 docker exec -it powergslb bash
 
 docker stop powergslb
+```
+
+
+## Building PowerGSLB Docker image
+
+To can create an all-in-one Docker image.
+
+```
+VERSION=1.6.4
+
+docker build -f docker/Dockerfile --build-arg VERSION="$VERSION" \
+    --force-rm --no-cache -t powergslb:"$VERSION" https://github.com/AlekseyChudov/powergslb.git
 ```

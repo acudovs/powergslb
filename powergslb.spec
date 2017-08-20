@@ -13,7 +13,7 @@ Release:	1%{?dist}
 Summary:	PowerDNS Remote GSLB Backend
 
 Group:		System Environment/Daemons
-License:	GPLv2
+License:	MIT
 URL:		https://github.com/AlekseyChudov/powergslb
 Source0:	powergslb-%{version}.tar.gz
 

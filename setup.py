@@ -14,7 +14,7 @@ setup(name='PowerGSLB',
       long_description='PowerGSLB is a simple DNS Global Server Load Balancing (GSLB) solution',
       package_dir={'': 'src'},
       platforms=['Linux'],
-      license='GPLv2',
+      license='MIT',
       requires=['mysql', 'netaddr', 'pyping', 'subprocess32', 'systemd.daemon'],
       packages=[
           'powergslb',

@@ -1,0 +1,11 @@
+dictproxyhack==1.1
+enum34==1.1.6
+logging==0.4.9.6
+mysql-connector==2.2.3
+netaddr==0.7.19
+pkg-resources==0.0.0
+PowerGSLB==1.6.5
+pyping==0.0.5
+subprocess32==3.2.7
+systemd==0.11.1
+systemd-python==234

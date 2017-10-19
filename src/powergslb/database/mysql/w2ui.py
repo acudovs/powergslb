@@ -1,5 +1,7 @@
 import abc
 
+import logging
+
 __all__ = ['W2UIDatabaseMixIn']
 
 
@@ -57,9 +59,40 @@ class W2UIDatabaseMixIn(object):
 
         return self._execute(operation, params)
 
-    def _insert_names_types(self, domain, name, name_type, ttl, persistence):
+    def _insert_names_types(self, domain, name, name_type, ttl, persistence, lbmethod, lboption):
+
+        lbmethod_id = None
+        if lbmethod != None:
+          operation = """
+                SELECT `lbmethods`.`id` AS `id`
+                  FROM `lbmethods`
+                  WHERE `lbmethods`.`lbmethod` = %s
+          """
+          params = (lbmethod,)
+
+          lbmethod_id = self._execute(operation, params)[0]
+          if lbmethod_id != None:
+            lbmethod_id = lbmethod_id['id']
+
+        logging.debug("lbmethod_id: %s", lbmethod_id)
+
+        lboption_id = None
+        if lboption != None:
+          operation = """
+                SELECT `lboptions`.`id` AS `id`
+                  FROM `lboptions`
+                  WHERE `lboptions`.`lboption` = %s
+          """
+          params = (lboption,)
+
+          lboption_id = self._execute(operation, params)[0]
+          if lboption_id != None:
+            lboption_id = lboption_id['id']
+
+        logging.debug("lboption_id: %s", lboption_id)
+
         operation = """
-            INSERT INTO `names_types` (`name_id`, `type_value`, `ttl`, `persistence`)
+            INSERT INTO `names_types` (`name_id`, `type_value`, `ttl`, `persistence`, `lbmethod_id`, `lboption_id`)
               SELECT
                 (SELECT `names`.`id`
                  FROM `names`
@@ -70,12 +103,16 @@ class W2UIDatabaseMixIn(object):
                  FROM `types`
                  WHERE `type` = %s) AS `type_value`,
                 %s AS `ttl`,
-                %s AS `persistence`
+                %s AS `persistence`,
+                %s AS `lbmethod_id`,
+                %s AS `lboption_id`
             ON DUPLICATE KEY UPDATE
               `ttl` = %s,
-              `persistence` = %s
+              `persistence` = %s,
+              `lbmethod_id` = %s,
+              `lboption_id` = %s
         """
-        params = (name, domain, name_type, ttl, persistence, ttl, persistence)
+        params = (name, domain, name_type, ttl, persistence, lbmethod_id, lboption_id, ttl, persistence, lbmethod_id, lboption_id)
 
         return self._execute(operation, params)
 
@@ -170,6 +207,22 @@ class W2UIDatabaseMixIn(object):
 
         return self._delete(operation, ids)
 
+    def delete_lbmethods(self, ids):
+        operation = """
+            DELETE  FROM `lbmethods`
+            WHERE `lbmethods`.`id` = %s
+        """
+
+        return self._delete(operation, ids)
+
+    def delete_lboptions(self, ids):
+        operation = """
+            DELETE FROM `lboptions`
+            WHERE `id` = %s
+        """
+
+        return self._delete(operation, ids)
+
     def get_status(self):
         operation = """
             SELECT `domains`.`domain`,
@@ -180,6 +233,8 @@ class W2UIDatabaseMixIn(object):
               `records`.`disabled`,
               `records`.`fallback`,
               `records`.`weight`,
+              `lbmethods`.`lbmethod`,
+              `lboptions`.`lboption`,
               `contents_monitors`.`id`,
               `contents`.`content`,
               `monitors`.`monitor`,
@@ -193,6 +248,8 @@ class W2UIDatabaseMixIn(object):
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
               JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
+              LEFT JOIN `lbmethods` ON `lbmethods`.`id` = `names_types`.`lbmethod_id`
+              LEFT JOIN `lboptions` ON `lboptions`.`id` = `names_types`.`lboption_id`
         """
 
         return self._execute(operation)
@@ -241,6 +298,8 @@ class W2UIDatabaseMixIn(object):
               `records`.`disabled`,
               `records`.`fallback`,
               `records`.`weight`,
+              `lbmethods`.`lbmethod`,
+              `lboptions`.`lboption`,
               `contents`.`content`,
               `monitors`.`monitor`,
               `views`.`view`
@@ -253,6 +312,8 @@ class W2UIDatabaseMixIn(object):
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
               JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
+              LEFT JOIN `lbmethods` ON `lbmethods`.`id` = `names_types`.`lbmethod_id`
+              LEFT JOIN `lboptions` ON `lboptions`.`id` = `names_types`.`lboption_id`
         """
         params = ()
 
@@ -316,6 +377,42 @@ class W2UIDatabaseMixIn(object):
 
         return self._execute(operation, params)
 
+    def get_lbmethods(self, recid=0):
+        operation = """
+            SELECT `id` AS `recid`,
+              `lbmethod`,
+              `lbmethod_description`
+            FROM `lbmethods`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `id` = %s
+            """
+            params += (recid,)
+
+        return self._execute(operation, params)
+
+    def get_lboptions(self, recid=0):
+        operation = """
+            SELECT `lboptions`.`id` AS `recid`,
+            `lbmethods`.`lbmethod`,
+            `lboptions`.`lboption`,
+            `lboptions`.`lboption_json`
+            FROM `lboptions`
+              JOIN `lbmethods` ON `lbmethods`.`id` = `lboptions`.`lbmethod_id`
+        """
+        params = ()
+
+        if recid:
+            operation += """
+                WHERE `lboptions`.`id` = %s
+            """
+            params += (recid,)
+
+        return self._execute(operation, params)
+
     def save_domains(self, save_recid, domain, **_):
         if save_recid:
             operation = """
@@ -353,11 +450,11 @@ class W2UIDatabaseMixIn(object):
         return self._execute(operation, params)
 
     def save_records(self, save_recid, domain, name, name_type, ttl, content, monitor, view, disabled=0, fallback=0,
-                     persistence=0, weight=0, **_):
+                     persistence=0, weight=0, lbmethod=None, lboption=None, **_):
 
         count = 0
         count += self._insert_names(domain, name)
-        count += self._insert_names_types(domain, name, name_type, ttl, persistence)
+        count += self._insert_names_types(domain, name, name_type, ttl, persistence, lbmethod, lboption)
         count += self._insert_contents(content)
         count += self._insert_contents_monitors(content, monitor)
 
@@ -404,7 +501,7 @@ class W2UIDatabaseMixIn(object):
                   `weight` = %s
                 WHERE `records`.`id` = %s
             """
-            params = (name, domain, name_type, content, monitor, view, disabled, fallback, weight, save_recid)
+            params = (name, domain, name_type, content, monitor, view, disabled, fallback, weight, save_recid )
         else:
             operation = """
                 INSERT INTO `records` (`name_type_id`, `content_monitor_id`, `view_id`, `disabled`, `fallback`, `weight`)
@@ -494,5 +591,64 @@ class W2UIDatabaseMixIn(object):
                 VALUES (%s, %s)
             """
             params = (view, rule)
+
+        return self._execute(operation, params)
+
+    def save_lbmethods(self, save_recid, lbmethod, lbmethod_description, **_):
+        if save_recid:
+            operation = """
+                UPDATE `lbmethods`
+                SET `lbmethod` = %s,
+                  `lbmethod_description` = %s
+                WHERE `id` = %s
+
+            """
+            params = (lbmethod, lbmethod_description, save_recid)
+        else:
+            operation = """
+                INSERT INTO `lbmethods` (`lbmethod`, `lbmethod_description`)
+                VALUES (%s, %s)
+            """
+            params = (lbmethod, lbmethod_description)
+
+        return self._execute(operation, params)
+
+    def save_lboptions(self, save_recid, lbmethod, lboption, lboption_json, **_):
+
+        logging.debug("lbmethod: %s - lboption: %s - lboption_json: %s", str(lbmethod), str(lboption), str(lboption_json))
+        if save_recid:
+            operation = """
+                SELECT `lbmethods`.`id` AS `lbmethod_id`
+                FROM `lbmethods`
+                WHERE `lbmethods`.`lbmethod` = %s
+            """
+            params = (lbmethod,)
+
+            lbmethod_id = self._execute(operation, params)[0]
+
+            operation = """
+                UPDATE `lboptions`
+                SET
+                  `lboption` = %s,
+                  `lboption_json` = %s,
+                  `lbmethod_id` = %s
+                WHERE `lboptions`.`id` = %s
+            """
+            params = (lboption, lboption_json, lbmethod_id['lbmethod_id'], save_recid)
+        else:
+            operation = """
+                SELECT `lbmethods`.`id` AS `lbmethod_id`
+                FROM `lbmethods`
+                WHERE `lbmethods`.`lbmethod` = %s
+            """
+            params = (lbmethod,)
+
+            lbmethod_id = self._execute(operation, params)[0]
+
+            operation = """
+                INSERT INTO `lboptions` (`lbmethod_id`, `lboption`, `lboption_json`)
+                  VALUES(%s, %s, %s)
+            """
+            params = (lbmethod_id['lbmethod_id'], lboption, lboption_json)
 
         return self._execute(operation, params)

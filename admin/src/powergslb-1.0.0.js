@@ -41,6 +41,12 @@ var gridPopupForm = (function (event) {
         case 'gridViews':
             openPopupForm(event, 'view', 400, 210, 'formViews');
             break;
+        case 'gridLBMethods':
+          openPopupForm(event, 'lbmethod', 400, 210, 'formLBMethods');
+          break;
+        case 'gridLBOptions':
+          openPopupForm(event, 'lboption', 400, 210, 'formLBOptions');
+          break;
     }
 });
 
@@ -138,6 +144,13 @@ var config = {
                 ]
             },
             {
+              id: 'lb', text: 'LB', expanded: true, group: true,
+              nodes: [
+                {id: 'gridLBMethods', text: 'Methods', img: 'icon-page'},
+                {id: 'gridLBOptions', text: 'Options', img: 'icon-page'}
+              ]
+            },
+            {
                 id: 'users', text: 'Users', expanded: true, group: true,
                 nodes: [
                     {id: 'gridUsers', text: 'Users', img: 'icon-page'}
@@ -153,6 +166,8 @@ var config = {
                 case 'gridTypes':
                 case 'gridUsers':
                 case 'gridViews':
+                case 'gridLBMethods':
+                case 'gridLBOptions':
                     w2ui.layout.content('main', w2ui[event.target]);
                     break;
             }
@@ -178,6 +193,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
             {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
+            {field: 'lbmethod', caption: 'LB Method', size: '70px', resizable: true, sortable: true},
+            {field: 'lboption', caption: 'LB Opts', size: '70px', resizable: true, sortable: true},
             {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
@@ -192,6 +209,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', type: 'int'},
             {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
+            {field: 'lbmethod', caption: 'LB Method', type: 'text'},
+            {field: 'lboption', caption: 'LB Opts', type: 'text'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'view', caption: 'View', type: 'text'}
         ],
@@ -329,6 +348,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
             {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
+            {field: 'lbmethod', caption: 'LB Method', size: '55px', resizable: true, sortable: true},
+            {field: 'lboption', caption: 'LB Option', size: '55px', resizable: true, sortable: true},
             {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
@@ -343,6 +364,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', type: 'int'},
             {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
+            {field: 'lbmethod', caption: 'LB Method', type: 'text'},
+            {field: 'lboption', caption: 'LB Option', type: 'text'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'view', caption: 'View', type: 'text'}
         ],
@@ -394,6 +417,20 @@ var config = {
             {
                 field: 'weight', type: 'int', required: false, html: {caption: 'Weight: '},
                 options: {autoFormat: false}
+            },
+            {
+              field: 'lbmethod', type: 'combo', required: false, html: {caption: 'LB Method: '},
+              options: {
+                postData: {'cmd': 'get-items', data: 'lbmethods', field: 'lbmethod'},
+                placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+              }
+            },
+            {
+              field: 'lboption', type: 'combo', required: false, html: {caption: 'LB Options: '},
+              options: {
+                postData: {'cmd': 'get-items', data: 'lboptions', field: 'lboption'},
+                placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+              }
             },
             {
                 field: 'monitor', type: 'combo', required: true, html: {caption: 'Monitor: '},
@@ -540,7 +577,98 @@ var config = {
         onSave: function () {
             w2ui.gridViews.reload();
         }
-    }
+    },
+
+    // ====================================================
+    // LBMethods
+    // ====================================================
+
+    gridLBMethods: {
+      name: 'gridLBMethods',
+      postData: {data: 'lbmethods'},
+      show: gridShow,
+      sortData: gridSortData,
+      url: w2uiUrl,
+      columns: [
+      {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+      {field: 'lbmethod', caption: 'Method', size: '100px', resizable: true, sortable: true},
+      {field: 'lbmethod_description', caption: 'Description', size: '300px', resizable: true, sortable: true}
+      ],
+      searches: [
+      {field: 'recid', caption: 'ID', type: 'int'},
+      {field: 'lbmethod', caption: 'Method', type: 'text'},
+      {field: 'lbmethod_description', caption: 'Description', type: 'text'}
+      ],
+      onAdd: gridPopupForm,
+      onDblClick: gridPopupForm,
+      onEdit: gridPopupForm
+    },
+
+    formLBMethods: {
+      name: 'formLBMethods',
+      postData: {data: 'lbmethods'},
+      actions: formActions,
+      style: formStyle,
+      url: w2uiUrl,
+      fields: [
+      {field: 'lbmethod', type: 'text', required: true, html: {caption: 'Method: '}},
+      {field: 'lbmethod_description', type: 'text', required: true, html: {caption: 'Description: '}}
+      ],
+      onSave: function () {
+        w2ui.gridLBMethods.reload();
+      }
+    },
+
+    // ====================================================
+    // LBOptions
+    // ====================================================
+
+    gridLBOptions: {
+      name: 'gridLBOptions',
+      postData: {data: 'lboptions'},
+      show: gridShow,
+      sortData: gridSortData,
+      url: w2uiUrl,
+      columns: [
+      {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+      {field: 'lbmethod', caption: 'Method', size: '100px', resizable: true, sortable: true},
+      {field: 'lboption', caption: 'Name', size: '150px', resizable: true, sortable: true},
+      {field: 'lboption_json', caption: 'Configuration', size: '300px', resizable: true, sortable: true}
+      ],
+      searches: [
+      {field: 'recid', caption: 'ID', type: 'int'},
+      {field: 'lbmethod', caption: 'Method', type: 'text'},
+      {field: 'lboption', caption: 'Name', type: 'text'},
+      {field: 'lboption_json', caption: 'Configuration', type: 'text'}
+      ],
+      onAdd: gridPopupForm,
+      onDblClick: gridPopupForm,
+      onEdit: gridPopupForm
+    },
+
+    formLBOptions: {
+      name: 'formLBOptions',
+      postData: {data: 'lboptions'},
+      actions: formActions,
+      style: formStyle,
+      url: w2uiUrl,
+      focus: 1,
+      fields: [
+      {
+        field: 'lbmethod', type: 'combo', required: true, html: {caption: 'Method: '},
+        options: {
+          postData: {'cmd': 'get-items', data: 'lbmethods', field: 'lbmethod'},
+          placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+        }
+      },
+      {field: 'lboption', type: 'text', required: true, html: {caption: 'Name: '}},
+      {field: 'lboption_json', type: 'text', required: true, html: {caption: 'Configuration: '}}
+      ],
+      onSave: function () {
+        w2ui.gridLBOptions.reload();
+      }
+    },
+
 };
 
 // ====================================================
@@ -560,10 +688,15 @@ $(function () {
     $().w2grid(config.gridTypes);
     $().w2grid(config.gridUsers);
     $().w2grid(config.gridViews);
+    $().w2grid(config.gridLBMethods);
+    $().w2grid(config.gridLBOptions);
+
     $().w2form(config.formDomains);
     $().w2form(config.formMonitors);
     $().w2form(config.formRecords);
     $().w2form(config.formTypes);
     $().w2form(config.formViews);
     $().w2form(config.formUsers);
+    $().w2form(config.formLBMethods);
+    $().w2form(config.formLBOptions);
 });

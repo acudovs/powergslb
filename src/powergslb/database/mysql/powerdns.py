@@ -33,6 +33,8 @@ class PowerDNSDatabaseMixIn(object):
               `names_types`.`persistence`,
               `records`.`fallback`,
               `records`.`weight`,
+              `lbmethods`.`lbmethod`,
+              `lboptions`.`lboption_json`,
               `contents_monitors`.`id`,
               `contents`.`content`,
               `views`.`rule`
@@ -43,6 +45,8 @@ class PowerDNSDatabaseMixIn(object):
               JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
               JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
+              LEFT JOIN `lbmethods` ON `lbmethods`.`id` = `names_types`.`lbmethod_id`
+              LEFT JOIN `lboptions` ON `lboptions`.`id` = `names_types`.`lboption_id`
         """
 
         if qtype == 'ANY':

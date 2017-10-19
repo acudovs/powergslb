@@ -3,6 +3,8 @@ import logging
 
 import netaddr
 
+import random
+
 from powergslb.server.http.handler.abstract import AbstractContentHandler
 
 import powergslb.monitor
@@ -14,36 +16,33 @@ class PowerDNSContentHandler(AbstractContentHandler):
     """
     PowerDNS content handler
     """
+    _lb_topology_map = {}
 
     def _filter_records(self, qtype_records):
         records = []
+
         for qtype in qtype_records:
+            lb_method = 'p'
+            if len(qtype_records[qtype]) > 0 and 'lbmethod' in qtype_records[qtype][0] and qtype_records[qtype][0]['lbmethod'] != None:
+                lb_method = qtype_records[qtype][0]['lbmethod']
 
-            fallback_records = {}
-            live_records = {}
+            logging.debug('qtype_records: %s', str(qtype_records))
+            logging.debug('LB Method: %s', lb_method)
 
-            for record in qtype_records[qtype]:
-                if not self._is_in_view(record):
-                    continue
-
-                if record['fallback']:
-                    if record['weight'] not in fallback_records:
-                        fallback_records[record['weight']] = []
-
-                    fallback_records[record['weight']].append(record)
-
-                if record['id'] not in powergslb.monitor.get_status():
-                    if record['weight'] not in live_records:
-                        live_records[record['weight']] = []
-
-                    live_records[record['weight']].append(record)
-
-            if live_records:
-                filtered_records = live_records[max(live_records)]
-            elif fallback_records:
-                filtered_records = fallback_records[max(fallback_records)]
+            if lb_method == 'p':
+                filtered_records = self._lb_priority( qtype_records[qtype] )
+            elif lb_method == 'wrr':
+                filtered_records = self._lb_wrr( qtype_records[qtype] )
+            elif lb_method == 't':
+                filtered_records = self._lb_topology( qtype_records[qtype] )
+                filtered_records = self._lb_priority( filtered_records )
+            elif lb_method == 'twrr':
+                filtered_records = self._lb_topology( qtype_records[qtype] )
+                filtered_records = self._lb_wrr( filtered_records )
+            elif lb_method == 'persistence':
+                filtered_records = self._lb_persitence( qtype_records[qtype] )
             else:
-                filtered_records = []
+                filtered_records = self._lb_priority( qtype_records[qtype] )
 
             if not filtered_records:
                 continue
@@ -95,10 +94,175 @@ class PowerDNSContentHandler(AbstractContentHandler):
 
         return qtype_records
 
+    def _lb_priority(self, records):
+      fallback_records = {}
+      live_records = {}
+
+      for record in records:
+          if not self._is_in_view(record):
+            continue
+
+          if record['fallback']:
+              if record['weight'] not in fallback_records:
+                fallback_records[record['weight']] = []
+
+              fallback_records[record['weight']].append(record)
+
+          if record['id'] not in powergslb.monitor.get_status():
+              if record['weight'] not in live_records:
+                live_records[record['weight']] = []
+
+              live_records[record['weight']].append(record)
+
+      if live_records:
+          filtered_records = live_records[max(live_records)]
+      elif fallback_records:
+          filtered_records = fallback_records[max(fallback_records)]
+      else:
+          filtered_records = []
+
+      return filtered_records
+
+    def _lb_wrr(self, records):
+      fallback_records = {}
+      live_records = {}
+
+      nrecords = len(records)
+      sum_weight = 0
+      sum_weight_fallback = 0
+      for record in records:
+        if not record['fallback']:
+          sum_weight += record['weight']
+        else:
+          sum_weight_fallback += record['weight']
+
+      # Live records
+      if sum_weight > 0 :
+        rand = random.random()
+        proba_max = 0.0
+        for record in records:
+          if not self._is_in_view(record) or record['fallback']:
+              continue
+          if record['id'] not in powergslb.monitor.get_status():
+            proba_max = proba_max + float(record['weight'])/float(sum_weight)
+            logging.debug("live_records - sum_weight: %d - rand: %f - record['weight']: %d - proba_max = w+rw/s: %f", sum_weight, rand, record['weight'], proba_max)
+            if proba_max >= rand:
+              if '0' not in live_records:
+                live_records['0'] = []
+              live_records['0'].append(record)
+              break
+
+      else:
+        live_records['0'] = []
+        for record in records:
+          if not self._is_in_view(record):
+              continue
+          if not record['fallback'] and record['id'] not in powergslb.monitor.get_status():
+            live_records['0'].append(record)
+
+      # Fallback records
+      if sum_weight_fallback > 0:
+        rand = random.random()
+        proba_max = 0.0
+        for record in records:
+          if not self._is_in_view(record) and not record['fallback']:
+              continue
+
+          proba_max = proba_max + float(record['weight'])/float(sum_weight)
+          logging.debug("fallback_records - sum_weight: %d - rand: %f - record['weight']: %d - proba_max = w+rw/s: %f", sum_weight, rand, record['weight'], proba_max)
+          if proba_max >= rand:
+            if '0' not in fallback_records:
+              fallback_records['0'] = []
+            fallback_records['0'].append(record)
+            break
+
+      else:
+        fallback_records['0'] = []
+        for record in records:
+          if not self._is_in_view(record):
+              continue
+          if record['fallback']:
+            fallback_records['0'].append(record)
+
+      # Final record list
+      if live_records:
+          filtered_records = live_records[max(live_records)]
+      elif fallback_records:
+          filtered_records = fallback_records[max(fallback_records)]
+      else:
+          filtered_records = []
+
+      return filtered_records
+
+    def _lb_topology( self, records):
+
+      if len(records) > 0 and 'lboption_json' in records[0] and records[0]['lboption_json'] != None:
+        try:
+          self._lb_topology_map = json.loads( records[0]['lboption_json'] )
+        except ValueError:
+          logging.error( "Unable to load topology map: %s !!!", str(records[0]['lboption_json']) )
+        logging.debug( "Topology map: %s", str(self._lb_topology_map) )
+
+      client_region = self._lb_get_topology_region( self.remote_ip )
+
+      logging.debug("= TOPOLOGY = ip: %s - region: %s", self.remote_ip, client_region)
+
+      if client_region == '':
+        return records
+
+      nfallback_records = 0
+      nlive_records = 0
+      topology_fallback_records = []
+      topology_live_records = []
+      for record in records:
+        logging.debug("= TOPOLOGY - _lb_topology = record: %s", str(record))
+
+        if not self._is_in_view(record) or (record['qtype'] != 'A' and record['qtype'] != 'AAAA'):
+          continue
+
+        if record['fallback']:
+          record_region = self._lb_get_topology_region( record['content'] )
+          if record_region == client_region:
+            topology_fallback_records.append( record )
+
+        if record['id'] not in powergslb.monitor.get_status():
+          record_region = self._lb_get_topology_region( record['content'] )
+          logging.debug("= TOPOLOGY = record content: %s - region: %s", record['content'], record_region)
+          if record_region == client_region:
+            topology_live_records.append( record )
+
+      # Final record list
+      if topology_live_records:
+        return topology_live_records
+
+      return records
+
+    def _lb_get_topology_region( self, ip):
+      logging.debug("= TOPOLOGY - _lb_get_topology_region = ip: %s", ip)
+      ip = netaddr.IPAddress( ip ).value
+      region = ''
+
+      logging.debug("= TOPOLOGY - _lb_get_topology_region = ip: %s", ip)
+
+      for region_name, net_list in self._lb_topology_map.iteritems():
+        if region != '':
+          break
+        for net in net_list:
+          network = netaddr.IPNetwork( net )
+          if ip >= network.first and ip <= network.last:
+            region = region_name
+            break
+
+      return region
+
+
     @staticmethod
     def _strip_records(records):
         result = []
         for record in records:
+#            record['qname'] = record['qname'].rstrip('.')
+#            logging.error('ok')
+#            logging.error("qname: %s" , record['qname'])
             if record['qtype'] in ['MX', 'SRV']:
                 names = ['qname', 'qtype', 'content', 'ttl', 'priority']
                 values = [record['qname'], record['qtype'], record['content'], record['ttl'], record['priority']]

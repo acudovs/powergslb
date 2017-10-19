@@ -131,6 +131,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
                 logging.error("{}: 'X-Remotebackend-Real-Remote' header invalid: {}: {}".format(
                         type(self).__name__, type(e).__name__, e))
 
+        logging.debug("remote_ip: %s", remote_ip)
         self.remote_ip = remote_ip
 
     def _urlsplit(self):

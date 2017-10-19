@@ -214,7 +214,7 @@ docker build -f docker/Dockerfile --build-arg VERSION="$VERSION" \
 > git clone https://github.com/AlekseyChudov/powergslb.git
 > cd powergslb
 > pip install -r requirements.txt
-> sudo ln -s /home/powergslb/powergslb/current/powergslb/powergslb.service /etc/systemd/system/powergslb.service
+> sudo ln -s $(pwd)/powergslb/powergslb.service /etc/systemd/system/powergslb.service
 > python setup.py install ; sudo service powergslb restart
 ```
 

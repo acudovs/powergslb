@@ -19,14 +19,14 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 * [Using PowerGSLB Docker image](#using-powergslb-docker-image)
 * [Building PowerGSLB Docker image](#building-powergslb-docker-image)
 * [Install using VirtualEnv](#install-using-virtualenv)
-* [Nginx as reverse proxy] (#nginx-as-reverse-proxy)
-* [Checks] (#checks)
-* [LB mode] (#lb-mode)
-   * [Priority] (#priority)
-   * [Topology] (#topology)
-   * [Weighted Round Robin] (#weighted-round-robin)
-   * [Topology Weighted Round Robin] (#topology-weighted-round-robin)
-* [Tests] (#tests)
+* [Nginx as reverse proxy](#nginx-as-reverse-proxy)
+* [Checks](#checks)
+* [LB mode](#lb-mode)
+   * [Priority](#priority)
+   * [Topology](#topology)
+   * [Weighted Round Robin](#weighted-round-robin)
+   * [Topology Weighted Round Robin](#topology-weighted-round-robin)
+* [Tests](#tests)
 
 ## Main features
 

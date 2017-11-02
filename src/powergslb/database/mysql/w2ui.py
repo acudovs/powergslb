@@ -209,8 +209,9 @@ class W2UIDatabaseMixIn(object):
 
     def delete_lbmethods(self, ids):
         operation = """
-            DELETE  FROM `lbmethods`
-            WHERE `lbmethods`.`id` = %s
+            DELETE `lbmethods` FROM `lbmethods`
+            INNER JOIN lboptions ON lboptions.lbmethod_id = lbmethods.id
+            WHERE `lbmethods`.`id` IN (%s)
         """
 
         return self._delete(operation, ids)
@@ -218,7 +219,7 @@ class W2UIDatabaseMixIn(object):
     def delete_lboptions(self, ids):
         operation = """
             DELETE FROM `lboptions`
-            WHERE `id` = %s
+            WHERE `id` IN (%s)
         """
 
         return self._delete(operation, ids)

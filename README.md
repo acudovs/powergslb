@@ -175,13 +175,18 @@ VERSION=1.6.5
 
 docker pull docker.io/alekseychudov/powergslb:"$VERSION"
 
-docker run -d --name powergslb --hostname powergslb docker.io/alekseychudov/powergslb:"$VERSION"
+docker run -it --name powergslb --hostname powergslb docker.io/alekseychudov/powergslb:"$VERSION"
 
 docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' powergslb
 
 docker exec -it powergslb bash
 
 docker stop powergslb
+```
+
+For systemd to run in Docker container the following SELinux boolean should be enabled.
+```
+semanage boolean --modify --on container_manage_cgroup
 ```
 
 

@@ -3,15 +3,15 @@ MYSQL_ROOT_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
 
 # Setup PowerGSLB, PowerDNS and stunnel
 
-yum -y install gcc python-devel python-pip
+yum -y install python2-pip python2-subprocess32
 
-pip install pyping subprocess32
+pip install pyping
 
 yum -y --setopt=tsflags="" install \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.centos.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm"
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-stunnel-$VERSION-1.el7.noarch.rpm"
 
 sed -i "s/^password = .*/password = $MYSQL_USER_PASSWORD/g" /etc/powergslb/powergslb.conf
 

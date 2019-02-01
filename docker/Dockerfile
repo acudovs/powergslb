@@ -1,4 +1,4 @@
-FROM docker.io/centos:7.5.1804
+FROM docker.io/centos:7.6.1810
 ARG VERSION
 COPY docker/rootfs /
 RUN /build

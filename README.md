@@ -76,16 +76,16 @@ Add new record
 ```shell
 yum -y update
 yum -y install epel-release
-yum -y install gcc python-devel python-pip
+yum -y install python2-pip python2-subprocess32
 
-pip install pyping subprocess32
+pip install pyping
 
 VERSION=1.6.6
-yum -y install \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.centos.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm"
+yum -y --setopt=tsflags= install \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-stunnel-$VERSION-1.el7.noarch.rpm"
 
 sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
 
@@ -159,10 +159,10 @@ rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
 
 Upon successful completion you will have four packages
 ```
-~/rpmbuild/RPMS/noarch/powergslb-$VERSION-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.centos.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-stunnel-$VERSION-1.el7.centos.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-$VERSION-1.el7.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.noarch.rpm
+~/rpmbuild/RPMS/noarch/powergslb-stunnel-$VERSION-1.el7.noarch.rpm
 ```
 
 

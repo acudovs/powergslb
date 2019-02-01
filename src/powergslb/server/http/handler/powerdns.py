@@ -56,10 +56,15 @@ class PowerDNSContentHandler(AbstractContentHandler):
         return records
 
     def _get_lookup(self):
+        v3_format = True
+        if self.dirs[2].endswith('.'):
+            v3_format = False
+            self.dirs[2] = self.dirs[2].rstrip('.')
+
         records = self.database.gslb_records(*self.dirs[2:])
-        qtype_records = self._split_records(records)
+        qtype_records = self._split_records(records, v3_format)
         filtered_records = self._filter_records(qtype_records)
-        return self._strip_records(filtered_records)
+        return self._strip_records(filtered_records, v3_format)
 
     def _is_in_view(self, record):
         result = False
@@ -75,10 +80,10 @@ class PowerDNSContentHandler(AbstractContentHandler):
         persistence_value = netaddr.IPAddress(self.remote_ip).value >> records[0]['persistence']
         return records[hash(persistence_value) % len(records)]
 
-    def _split_records(self, records):
+    def _split_records(self, records, v3_format=False):
         qtype_records = {}
         for record in records:
-            if record['qtype'] in ['MX', 'SRV']:
+            if v3_format and record['qtype'] in ['MX', 'SRV']:
                 content_split = record['content'].split()
                 try:
                     record['priority'] = int(content_split[0])
@@ -96,10 +101,10 @@ class PowerDNSContentHandler(AbstractContentHandler):
         return qtype_records
 
     @staticmethod
-    def _strip_records(records):
+    def _strip_records(records, v3_format=False):
         result = []
         for record in records:
-            if record['qtype'] in ['MX', 'SRV']:
+            if v3_format and record['qtype'] in ['MX', 'SRV']:
                 names = ['qname', 'qtype', 'content', 'ttl', 'priority']
                 values = [record['qname'], record['qtype'], record['content'], record['ttl'], record['priority']]
             else:

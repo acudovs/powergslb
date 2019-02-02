@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+shopt -s extglob
 
 MYSQL_USER_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
 MYSQL_ROOT_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
@@ -60,7 +61,7 @@ ln -sv /usr/lib/systemd/system/pdns.service /etc/systemd/system/multi-user.targe
 ln -sv /usr/lib/systemd/system/powergslb.service /etc/systemd/system/multi-user.target.wants/powergslb.service
 
 yum clean all
-rm -frv /anaconda-post.log /root/anaconda-ks.cfg /tmp/* /var/cache/yum /var/log/* /var/tmp/*
+rm -frv /anaconda-post.log /root/anaconda-ks.cfg /tmp/* /var/cache/yum /var/log/!(mariadb) /var/tmp/*
 find /etc -name "*-" -o -name "*.bak" -o -name "*.rpmnew" -o -name "*.rpmsave" | xargs rm -fv
 
 rm -fv "$0"

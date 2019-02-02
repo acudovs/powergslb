@@ -1,0 +1,66 @@
+#!/bin/bash
+
+set -e
+
+MYSQL_USER_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
+MYSQL_ROOT_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
+
+ln -sfv "/usr/share/zoneinfo/$TZ" /etc/localtime
+
+yum -y install epel-release
+yum -y update
+yum -y install bind-utils iproute less mariadb-server net-tools python2-pip
+
+pip install pyping
+
+yum -y --setopt=tsflags="" install \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.noarch.rpm" \
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.noarch.rpm"
+
+sed -i "s/^password = .*/password = $MYSQL_USER_PASSWORD/g" /etc/powergslb/powergslb.conf
+
+cp -v /etc/pdns/pdns.conf /etc/pdns/pdns.conf~
+cp -v "/usr/share/doc/powergslb-pdns-$VERSION/pdns/pdns.conf" /etc/pdns/pdns.conf
+
+sed -i '/\[mysqld\]/a bind-address=127.0.0.1\ncharacter_set_server=utf8' /etc/my.cnf.d/server.cnf
+
+su -s /bin/bash mysql /usr/libexec/mariadb-prepare-db-dir
+
+mysqld_safe --basedir=/usr &
+/usr/libexec/mariadb-wait-ready $$
+
+mysql << EOF
+CREATE DATABASE powergslb;
+GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY '$MYSQL_USER_PASSWORD';
+USE powergslb;
+source /usr/share/doc/powergslb-$VERSION/database/scheme.sql
+source /usr/share/doc/powergslb-$VERSION/database/data.sql
+EOF
+
+mysqladmin -u root password "$MYSQL_ROOT_PASSWORD"
+
+cat << EOF > /root/.my.cnf
+[client]
+user=root
+password=$MYSQL_ROOT_PASSWORD
+EOF
+
+pkill -f /usr/libexec/mysqld
+
+rm -frv /etc/systemd/system/*.wants /usr/lib/systemd/system/*.wants/*
+ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/dbus.socket
+ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/systemd-journald.socket
+ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/systemd-shutdownd.socket
+ln -rsvt /usr/lib/systemd/system/sysinit.target.wants /usr/lib/systemd/system/systemd-tmpfiles-setup.service
+ln -rsvt /usr/lib/systemd/system/timers.target.wants /usr/lib/systemd/system/systemd-tmpfiles-clean.timer
+mkdir -pv /etc/systemd/system/multi-user.target.wants
+ln -sv /usr/lib/systemd/system/mariadb.service /etc/systemd/system/multi-user.target.wants/mariadb.service
+ln -sv /usr/lib/systemd/system/pdns.service /etc/systemd/system/multi-user.target.wants/pdns.service
+ln -sv /usr/lib/systemd/system/powergslb.service /etc/systemd/system/multi-user.target.wants/powergslb.service
+
+yum clean all
+rm -frv /anaconda-post.log /root/anaconda-ks.cfg /tmp/* /var/cache/yum /var/log/* /var/tmp/*
+find /etc -name "*-" -o -name "*.bak" -o -name "*.rpmnew" -o -name "*.rpmsave" | xargs rm -fv
+
+rm -fv "$0"

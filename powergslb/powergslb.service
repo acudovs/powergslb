@@ -6,11 +6,13 @@ Description=PowerGSLB service
 [Service]
 Type=notify
 ExecStart=/usr/sbin/powergslb -c /etc/powergslb/powergslb.conf
-CapabilityBoundingSet=CAP_NET_RAW
 WatchdogSec=3
 Restart=on-failure
-ProtectSystem=full
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

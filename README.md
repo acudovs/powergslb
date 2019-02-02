@@ -10,7 +10,7 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 * [Class diagram](#class-diagram)
 * [Web based administration interface](#web-based-administration-interface)
 * [Installation on CentOS 7](#installation-on-centos-7)
-   * [Setup PowerGSLB, PowerDNS and stunnel](#setup-powergslb-powerdns-and-stunnel)
+   * [Setup PowerGSLB and PowerDNS](#setup-powergslb-and-powerdns)
    * [Setup MariaDB](#setup-mariadb)
    * [Start services](#start-services)
    * [Test PowerGSLB](#test-powergslb)
@@ -26,7 +26,7 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 * Written in Python 2.7
 * Built as PowerDNS Authoritative Server [Remote Backend](https://doc.powerdns.com/3/authoritative/backend-remote/)
 * Web based administration interface using [w2ui](http://w2ui.com/)
-* HTTPS support for the webserver using [stunnel](https://www.stunnel.org/)
+* HTTPS support for the web server
 * DNS GSLB configuration stored in a MySQL / MariaDB database
 * Master-Slave DNS GSLB using native MySQL / MariaDB [replication](https://dev.mysql.com/doc/refman/5.5/en/replication.html)
 * Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster](http://galeracluster.com/)
@@ -71,21 +71,20 @@ Add new record
 
 ## Installation on CentOS 7
 
-### Setup PowerGSLB, PowerDNS and stunnel
+### Setup PowerGSLB and PowerDNS
 
 ```shell
-yum -y update
 yum -y install epel-release
-yum -y install python2-pip python2-subprocess32
+yum -y update
+yum -y install python2-pip
 
 pip install pyping
 
-VERSION=1.6.6
+VERSION=1.7.0
 yum -y --setopt=tsflags= install \
     "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.noarch.rpm" \
     "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-stunnel-$VERSION-1.el7.noarch.rpm"
+    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.noarch.rpm"
 
 sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
 
@@ -106,7 +105,7 @@ systemctl status mariadb.service
 
 mysql_secure_installation
 
-VERSION=1.6.6
+VERSION=1.7.0
 mysql -p << EOF
 CREATE DATABASE powergslb;
 GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY 'your-database-password-here';
@@ -119,9 +118,9 @@ EOF
 ### Start services
 
 ```shell
-systemctl enable powergslb.service pdns.service stunnel@powergslb
-systemctl start powergslb.service pdns.service stunnel@powergslb
-systemctl status powergslb.service pdns.service stunnel@powergslb
+systemctl enable powergslb.service pdns.service
+systemctl start powergslb.service pdns.service
+systemctl status powergslb.service pdns.service
 ```
 
 ### Test PowerGSLB
@@ -152,17 +151,16 @@ Please read [How to create an RPM package](https://fedoraproject.org/wiki/How_to
 yum -y update
 yum -y install @Development\ Tools
 
-VERSION=1.6.6
+VERSION=1.7.0
 curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" > "powergslb-$VERSION.tar.gz"
 rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
 ```
 
-Upon successful completion you will have four packages
+Upon successful completion you will have three packages
 ```
 ~/rpmbuild/RPMS/noarch/powergslb-$VERSION-1.el7.noarch.rpm
 ~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.noarch.rpm
 ~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-stunnel-$VERSION-1.el7.noarch.rpm
 ```
 
 
@@ -171,7 +169,7 @@ Upon successful completion you will have four packages
 For quick setup, you can pull all-in-one Docker image from docker.io.
 
 ```
-VERSION=1.6.6
+VERSION=1.7.0
 
 docker pull docker.io/alekseychudov/powergslb:"$VERSION"
 
@@ -195,7 +193,7 @@ semanage boolean --modify --on container_manage_cgroup
 To create an all-in-one Docker image.
 
 ```
-VERSION=1.6.6
+VERSION=1.7.0
 
 docker build -f docker/Dockerfile --build-arg VERSION="$VERSION" \
     --force-rm --no-cache -t powergslb:"$VERSION" https://github.com/AlekseyChudov/powergslb.git

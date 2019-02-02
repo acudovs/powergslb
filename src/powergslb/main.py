@@ -29,7 +29,8 @@ class PowerGSLB(object):
 
         service_threads = [
             powergslb.monitor.MonitorThread(name='Monitor'),
-            powergslb.server.ServerThread(name='Server')
+            powergslb.server.ServerThread(config.items('admin'), name='Admin'),
+            powergslb.server.ServerThread(config.items('server'), name='Server')
         ]
 
         service = powergslb.system.SystemService(service_threads)

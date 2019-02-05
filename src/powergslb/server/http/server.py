@@ -33,7 +33,8 @@ class HTTPServerThread(powergslb.system.AbstractThread):
         http_server.daemon_threads = True
         if self.ssl:
             http_server.socket = ssl.wrap_socket(
-                http_server.socket, keyfile=self.key, certfile=self.cert, ciphers=self.ciphers)
+                http_server.socket, keyfile=self.key, certfile=self.cert, server_side=True, ciphers=self.ciphers)
+            http_server.socket.context.options |= ssl.OP_CIPHER_SERVER_PREFERENCE
         logging.info('{}: listening on {}:{}'.format(type(self).__name__, self.address, self.port))
         http_server.serve_forever()
 

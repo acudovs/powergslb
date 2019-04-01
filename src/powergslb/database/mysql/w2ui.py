@@ -286,7 +286,7 @@ class W2UIDatabaseMixIn(object):
             SELECT `id` AS `recid`,
               `user`,
               `name`,
-              `password`
+              '********' AS `password`
             FROM `users`
         """
         params = ()

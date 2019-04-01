@@ -472,14 +472,12 @@ var config = {
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'user', caption: 'User', size: '100px', resizable: true, sortable: true},
-            {field: 'name', caption: 'Name', size: '150px', resizable: true, sortable: true},
-            {field: 'password', caption: 'Password', size: '325px', resizable: true, sortable: true}
+            {field: 'name', caption: 'Name', size: '150px', resizable: true, sortable: true}
         ],
         searches: [
             {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'user', caption: 'User', type: 'text'},
-            {field: 'name', caption: 'Name', type: 'text'},
-            {field: 'password', caption: 'Password', type: 'text'}
+            {field: 'name', caption: 'Name', type: 'text'}
         ],
         onAdd: gridPopupForm,
         onDblClick: gridPopupForm,

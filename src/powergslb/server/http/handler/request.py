@@ -91,7 +91,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
             content_length = int(self.headers.get('Content-Length'), 0)
         except ValueError:
             raise Exception("'Content-Length' header invalid: '{}'".format(
-                    self.headers.get('Content-Length')))
+                self.headers.get('Content-Length')))
         else:
             self.body = self.rfile.read(content_length)
 
@@ -129,7 +129,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
                 remote_ip = netaddr.IPNetwork(real_remote_header).ip.format()
             except (netaddr.AddrFormatError, ValueError) as e:
                 logging.error("{}: 'X-Remotebackend-Real-Remote' header invalid: {}: {}".format(
-                        type(self).__name__, type(e).__name__, e))
+                    type(self).__name__, type(e).__name__, e))
 
         self.remote_ip = remote_ip
 

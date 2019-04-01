@@ -17,7 +17,7 @@ class W2UIDatabaseMixIn(object):
         return self._execute(operation, params)
 
     @abc.abstractmethod
-    def _execute(self, operation, params):
+    def _execute(self, operation, params=()):
         pass
 
     def _clean_contents(self, content_monitor_id):
@@ -144,7 +144,7 @@ class W2UIDatabaseMixIn(object):
             WHERE `records`.`id` = %s
         """
 
-        return sum(self._execute(operation, (id,)) for id in ids)
+        return sum(self._execute(operation, (recid,)) for recid in ids)
 
     def delete_types(self, values):
         operation = """

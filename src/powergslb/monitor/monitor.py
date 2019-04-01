@@ -37,7 +37,7 @@ class MonitorThread(powergslb.system.AbstractThread):
 
         if stale_ids:
             logging.debug('{}: clean status for records: {}'.format(
-                    type(self).__name__, ', '.join(map(str, stale_ids))))
+                type(self).__name__, ', '.join(map(str, stale_ids))))
             get_status().intersection_update(check_ids)
 
     def _parse(self, check):
@@ -47,7 +47,7 @@ class MonitorThread(powergslb.system.AbstractThread):
             parse_status = True
         except (SyntaxError, ValueError) as e:
             logging.error('{}: content id {}: check parsing error: {}: {}'.format(
-                    type(self).__name__, check['id'], type(e).__name__, e))
+                type(self).__name__, check['id'], type(e).__name__, e))
 
         return parse_status
 
@@ -127,27 +127,27 @@ class MonitorThread(powergslb.system.AbstractThread):
 
                 if missing_params:
                     raise Exception("{}: content id {}: missing check parameters: {}".format(
-                            type(self).__name__, check['id'], ', '.join(map(str, missing_params))))
+                        type(self).__name__, check['id'], ', '.join(map(str, missing_params))))
 
                 if unexpected_params:
                     raise Exception("{}: content id {}: unexpected check parameters: {}".format(
-                            type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
+                        type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
 
             for param, param_type in self._check_params_types[monitor_type].items():
                 if type(check['monitor_json'][param]) != param_type:
                     raise Exception("{}: content id {}: check parameter '{}' invalid".format(
-                            type(self).__name__, check['id'], param))
+                        type(self).__name__, check['id'], param))
 
         except KeyError as e:
             logging.error("{}: content id {}: check parameter '{}' missing".format(
-                    type(self).__name__, check['id'], e.message))
+                type(self).__name__, check['id'], e.message))
 
         except Exception as e:
             logging.error(e)
         else:
             if check['monitor_json']['timeout'] > check['monitor_json']['interval']:
                 logging.warning("{}: content id {}: check 'timeout' is greater than 'interval': fixed".format(
-                        type(self).__name__, check['id']))
+                    type(self).__name__, check['id']))
                 check['monitor_json']['timeout'] = check['monitor_json']['interval']
 
             validate_status = True
@@ -167,11 +167,11 @@ class MonitorThread(powergslb.system.AbstractThread):
 
             if running_thread_ids:
                 logging.error('{}: unexpectedly running threads: {}'.format(
-                        type(self).__name__, ', '.join(map('Check-{}'.format, running_thread_ids))))
+                    type(self).__name__, ', '.join(map('Check-{}'.format, running_thread_ids))))
 
             if stopped_thread_ids:
                 logging.error('{}: unexpectedly stopped threads: {}'.format(
-                        type(self).__name__, ', '.join(map('Check-{}'.format, stopped_thread_ids))))
+                    type(self).__name__, ', '.join(map('Check-{}'.format, stopped_thread_ids))))
 
             self._refresh_threads = True
 

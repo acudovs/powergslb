@@ -10,7 +10,7 @@ class PowerDNSDatabaseMixIn(object):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def _execute(self, operation, params):
+    def _execute(self, operation, params=()):
         pass
 
     def gslb_checks(self):

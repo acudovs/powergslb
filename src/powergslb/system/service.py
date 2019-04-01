@@ -41,6 +41,6 @@ class SystemService(object):
 
         while self._is_threads_alive():
             self.systemd_notify('STATUS=Total threads: {}; Service threads: {}\nWATCHDOG=1'.format(
-                    threading.active_count(), len(self.service_threads)))
+                threading.active_count(), len(self.service_threads)))
 
             time.sleep(self.sleep_interval)

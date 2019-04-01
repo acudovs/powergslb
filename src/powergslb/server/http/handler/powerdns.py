@@ -72,7 +72,7 @@ class PowerDNSContentHandler(AbstractContentHandler):
             result = bool(netaddr.smallest_matching_cidr(self.remote_ip, record.get('rule').split()))
         except (AttributeError, netaddr.AddrFormatError, ValueError) as e:
             logging.error('{}: record id {} view rule invalid: {}: {}'.format(
-                    type(self).__name__, record['id'], type(e).__name__, e))
+                type(self).__name__, record['id'], type(e).__name__, e))
 
         return result
 
@@ -90,7 +90,7 @@ class PowerDNSContentHandler(AbstractContentHandler):
                     record['content'] = ' '.join(content_split[1:])
                 except (KeyError, ValueError) as e:
                     logging.error('{}: record id {} priority missing or invalid: {}: {}'.format(
-                            type(self).__name__, record['id'], type(e).__name__, e))
+                        type(self).__name__, record['id'], type(e).__name__, e))
                     continue
 
             if record['qtype'] not in qtype_records:

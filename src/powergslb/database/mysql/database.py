@@ -22,7 +22,7 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
 
     @staticmethod
     def join_operation(operation):
-        return ' '.join(filter(bool, (line.strip() for line in operation.splitlines())))
+        return ' '.join(filter(None, (line.strip() for line in operation.splitlines())))
 
     def _execute(self, operation, params=()):
         operation = self.join_operation(operation)

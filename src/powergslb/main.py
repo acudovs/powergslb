@@ -23,8 +23,8 @@ class PowerGSLB(object):
         config = powergslb.system.get_config()
 
         logging.basicConfig(
-                format=config.get('logging', 'format'),
-                level=logging.getLevelName(config.get('logging', 'level'))
+            format=config.get('logging', 'format'),
+            level=logging.getLevelName(config.get('logging', 'level'))
         )
 
         service_threads = [

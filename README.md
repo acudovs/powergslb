@@ -10,11 +10,17 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 * [Class diagram](#class-diagram)
 * [Web based administration interface](#web-based-administration-interface)
 * [Installation on CentOS 7](#installation-on-centos-7)
-   * [Setup PowerGSLB and PowerDNS](#setup-powergslb-and-powerdns)
-   * [Setup MariaDB](#setup-mariadb)
-   * [Start services](#start-services)
-   * [Test PowerGSLB](#test-powergslb)
-   * [Web based administration interface](#web-based-administration-interface-1)
+  * [Setup PowerGSLB and PowerDNS](#setup-powergslb-and-powerdns)
+  * [Setup MariaDB](#setup-mariadb)
+  * [Start services](#start-services)
+  * [Test PowerGSLB](#test-powergslb)
+  * [Web based administration interface](#web-based-administration-interface-1)
+* [Health checks](#health-checks)
+  * [Mandatory parameters](#mandatory-parameters)
+  * [Exec parameters](#exec-parameters)
+  * [ICMP parameters](#icmp-parameters)
+  * [HTTP parameters](#http-parameters)
+  * [TCP parameters](#tcp-parameters)
 * [Building PowerGSLB RPM packages](#building-powergslb-rpm-packages)
 * [Using PowerGSLB Docker image](#using-powergslb-docker-image)
 * [Building PowerGSLB Docker image](#building-powergslb-docker-image)
@@ -141,6 +147,79 @@ Open URL https://SERVER/admin/.
 * Default username: admin
 * Default password: admin
 
+## Health checks
+
+Health checks are configured in the "Monitors" sidebar section in JSON format.
+
+Supported check types:
+
+| type | description |
+|---|---|
+| exec | arbitrary command execution |
+| icmp | ICMP ping |
+| http | HTTP request |
+| tcp | TCP connect |
+
+### Mandatory parameters
+
+General parameters for all checks:
+
+| parameter | description |
+|---|---|
+| type | check type |
+| interval | interval between checks |
+| timeout | check timeout |
+| fall | number of failed checks to disable record |
+| rise | number of successful checks to enable record |
+
+### Exec parameters
+
+| parameter | description |
+|---|---|
+| type | exec |
+| args | command to execute and arguments |
+
+Example:
+```
+{"type": "exec", "args": ["/etc/powergslb/powergslb-check", "%(content)s"], "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
+```
+
+### ICMP parameters
+
+| parameter | description |
+|---|---|
+| type | icmp |
+| ip | endpoint IP address |
+
+Example:
+```
+{"type": "icmp", "ip": "%(content)s", "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
+```
+
+### HTTP parameters
+
+| parameter | description |
+|---|---|
+| type | http |
+| url | endpoint URL |
+
+Example:
+```
+{"type": "http", "url": "http://%(content)s/status", "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
+```
+
+### TCP parameters
+
+| parameter | description |
+|---|---|
+| type | tcp |
+| ip | endpoint IP address |
+| port | endpoint port number |
+
+Example:
+```
+{"type": "tcp", "ip": "%(content)s", "port": 80, "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
+```
 
 ## Building PowerGSLB RPM packages
 
@@ -152,7 +231,7 @@ yum -y update
 yum -y install @Development\ Tools
 
 VERSION=1.7.0
-curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" > "powergslb-$VERSION.tar.gz"
+curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" -o "powergslb-$VERSION.tar.gz"
 rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
 ```
 

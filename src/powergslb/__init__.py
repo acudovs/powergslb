@@ -5,5 +5,5 @@ https://github.com/AlekseyChudov/powergslb
 """
 
 __author__ = 'Aleksey Chudov <aleksey.chudov@gmail.com>'
-__date__ = '2 Feb 2019'
-__version__ = '1.7.0'
+__date__ = '1 Apr 2019'
+__version__ = '1.7.1'

@@ -30,7 +30,7 @@ var gridPopupForm = (function (event) {
             openPopupForm(event, 'monitor', 400, 210, 'formMonitors');
             break;
         case 'gridRecords':
-            openPopupForm(event, 'record', 400, 525, 'formRecords');
+            openPopupForm(event, 'record', 400, 600, 'formRecords');
             break;
         case 'gridTypes':
             openPopupForm(event, 'type', 400, 245, 'formTypes');
@@ -41,6 +41,12 @@ var gridPopupForm = (function (event) {
         case 'gridViews':
             openPopupForm(event, 'view', 400, 210, 'formViews');
             break;
+        case 'gridLBMethods':
+          openPopupForm(event, 'lbmethod', 400, 210, 'formLBMethods');
+          break;
+        case 'gridLBOptions':
+          openPopupForm(event, 'lboption', 400, 210, 'formLBOptions');
+          break;
     }
 });
 
@@ -97,6 +103,172 @@ var formStyle = 'border: 0px; background-color: transparent';
 
 var panelStyle = 'border: 1px solid #dfdfdf; padding: 5px;';
 
+// Get statistics
+var get_stats = (
+  function(recid, record, method) {
+    if ( method == 'pool' ) {
+      api_method = 'get-stats-pool';
+      div_name = '_pool';
+      graph_title = 'Pool ' + record.name;
+    } else {
+      api_method = 'get-stats';
+      div_name = '';
+      graph_title = record.content;
+    }
+
+    $.ajax({
+      type: "POST",
+      url: "/admin/w2ui",
+      dataType: 'json',
+      data: { "cmd": api_method, "recid": recid, "data": "status" },
+      complete: function( data ) {
+        var chart = c3.generate({
+          bindto: '#status' + div_name,
+          data: {
+            x: 'ts',
+            columns: data.responseJSON,
+            color: function(color,d) {
+              if ( method != 'pool' ) {
+                return d.value == 1 ? 'green' : 'red';
+              } else {
+                return color;
+              }
+            }
+            //           colors: {
+            //             'y': function(d) { return d.value == 1 ? 'green' : 'red'; }
+            //           }
+          },
+          axis: {
+            y: {
+              label: {
+                text: 'Availability',
+                position: 'outer-middle'
+              }
+            },
+            x: {
+              type: 'timeseries',
+              label: {
+                text: 'Time (GMT)',
+                position: 'outer-middle'
+              },
+              tick: {
+                //               format: '%H:%M:%S'
+                format: function (x) {
+                  var t = new Date( x );
+                  var formatted = t.getHours() + ':' + t.getMinutes() + ':' + t.getSeconds();
+                  return formatted;
+                },
+                count : 10
+              }
+            },
+          },
+          legend: {
+            show: true,
+          },
+          title: {
+            text: graph_title + ' - Availability over Time'
+          }
+        });
+      }
+    });
+
+    $.ajax({
+      type: "POST",
+      url: "/admin/w2ui",
+      dataType: 'json',
+      data: { "cmd": api_method, "recid": recid, "data": "rt" },
+      complete: function( data ) {
+        var chart = c3.generate({
+          bindto: '#response_time' + div_name,
+          data: {
+            x: 'ts',
+            columns: data.responseJSON
+          },
+          axis: {
+            y: {
+              label: {
+                text: 'Check Response',
+                position: 'outer-middle'
+              },
+            },
+            x: {
+              type: 'timeseries',
+              label: {
+                text: 'Time (GMT)',
+                position: 'outer-middle'
+              },
+              tick: {
+                //               format: '%H:%M:%S'
+                format: function (x) {
+                  var t = new Date( x );
+                  var formatted = t.getHours() + ':' + t.getMinutes() + ':' + t.getSeconds();
+                  return formatted;
+                },
+                count : 10
+              }
+            },
+          },
+          legend: {
+            show: true,
+          },
+          title: {
+            text: graph_title + ' - Check Data over Time'
+          }
+        });
+      }
+    });
+  }
+);
+
+var openPopupStatus = (function (event, recid, popup_width, popup_height, plot_name) {
+
+//   console.log('recid: '+recid+' - event.target: '+event.target)
+
+  var record = w2ui['gridStatus'].get(recid);
+//   console.log('recid: '+recid+' - event.target: '+event.target + ' - record: ' + record + ' - ' + record.content)
+
+  w2popup.open({
+    title: record.content + ' - Statistics',
+    body: '<div id="myTabs"></div><div id="selected-tab" style="padding: 10px 0px">tab1</div>',
+    style: 'padding: 15px 0px 0px 0px',
+    width: popup_width,
+    height: popup_height,
+    onClose: function (event) {
+      w2ui['myTabs'].destroy();
+    }
+  });
+
+  $('#myTabs').w2tabs({
+    name     : 'myTabs',
+    active   : 'tab1',
+    tabs    : [
+    { id: 'tab1', caption: record.content },
+    { id: 'tab2', caption: 'Pool ' + record.name },
+    ],
+    onRender: function (event) {
+//       console.log( event );
+//       if ( event.target == 'tab1' ) {
+        $('#selected-tab').html('<div id="status" style="width: 90%; height: 25%;"></div><div id="response_time" style="width: 90%; height: 25%;"></div>');
+        get_stats( recid, record, '' );
+//       } else {
+//         $('#selected-tab').html('<div id="status_pool" style="width: 90%; height: 25%;"></div><div id="response_time_pool" style="width: 90%; height: 25%;"></div>');
+//         get_stats( recid, record, 'pool' );
+//       }
+    },
+    onClick: function (event) {
+      if ( event.target == 'tab1' ) {
+        $('#selected-tab').html('<div id="status" style="width: 90%; height: 25%;"></div><div id="response_time" style="width: 90%; height: 25%;"></div>');
+        get_stats( recid, record, '' );
+      } else {
+        $('#selected-tab').html('<div id="status_pool" style="width: 90%; height: 25%;"></div><div id="response_time_pool" style="width: 90%; height: 25%;"></div>');
+        get_stats( recid, record, 'pool' );
+      }
+    },
+  });
+
+
+});
+
 var reloadInterval = 3000;
 var reloadIntervalId = 0;
 
@@ -138,6 +310,13 @@ var config = {
                 ]
             },
             {
+              id: 'lb', text: 'LB', expanded: true, group: true,
+              nodes: [
+                {id: 'gridLBMethods', text: 'Methods', img: 'icon-page'},
+                {id: 'gridLBOptions', text: 'Options', img: 'icon-page'}
+              ]
+            },
+            {
                 id: 'users', text: 'Users', expanded: true, group: true,
                 nodes: [
                     {id: 'gridUsers', text: 'Users', img: 'icon-page'}
@@ -153,6 +332,8 @@ var config = {
                 case 'gridTypes':
                 case 'gridUsers':
                 case 'gridViews':
+                case 'gridLBMethods':
+                case 'gridLBOptions':
                     w2ui.layout.content('main', w2ui[event.target]);
                     break;
             }
@@ -165,9 +346,12 @@ var config = {
 
     gridStatus: {
         name: 'gridStatus',
+        show: gridShow,
+        sortData: gridSortData,
         postData: {data: 'status'},
         url: w2uiUrl,
         columns: [
+            {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'status', caption: 'Status', size: '55px', resizable: true, sortable: true},
             {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true},
             {field: 'name', caption: 'Name', size: '150px', resizable: true, sortable: true},
@@ -178,10 +362,13 @@ var config = {
             {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
             {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
+            {field: 'lbmethod', caption: 'LB Method', size: '70px', resizable: true, sortable: true},
+            {field: 'lboption', caption: 'LB Opts', size: '70px', resizable: true, sortable: true},
             {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
         searches: [
+            {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'status', caption: 'Status', type: 'text'},
             {field: 'domain', caption: 'Domain', type: 'text'},
             {field: 'name', caption: 'Name', type: 'text'},
@@ -192,6 +379,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', type: 'int'},
             {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
+            {field: 'lbmethod', caption: 'LB Method', type: 'text'},
+            {field: 'lboption', caption: 'LB Opts', type: 'text'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'view', caption: 'View', type: 'text'}
         ],
@@ -228,7 +417,17 @@ var config = {
                     }
                 }
             }
-        }
+        },
+        onClick: function (event) {
+          event.onComplete = function () {
+            var grid = w2ui[event.target];
+            var sel = grid.getSelection();
+//             console.log('selection:', sel);
+            if ( $.isArray(sel) && sel.length == 1 && $.isNumeric(sel[0]) ) {
+              openPopupStatus(event, sel[0], 800, 800, 'rt,status');
+            }
+          }
+        },
     },
 
     // ====================================================
@@ -329,6 +528,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
             {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
+            {field: 'lbmethod', caption: 'LB Method', size: '55px', resizable: true, sortable: true},
+            {field: 'lboption', caption: 'LB Option', size: '55px', resizable: true, sortable: true},
             {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
@@ -343,6 +544,8 @@ var config = {
             {field: 'fallback', caption: 'Fallback', type: 'int'},
             {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
+            {field: 'lbmethod', caption: 'LB Method', type: 'text'},
+            {field: 'lboption', caption: 'LB Option', type: 'text'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'view', caption: 'View', type: 'text'}
         ],
@@ -394,6 +597,20 @@ var config = {
             {
                 field: 'weight', type: 'int', required: false, html: {caption: 'Weight: '},
                 options: {autoFormat: false}
+            },
+            {
+              field: 'lbmethod', type: 'combo', required: false, html: {caption: 'LB Method: '},
+              options: {
+                postData: {'cmd': 'get-items', data: 'lbmethods', field: 'lbmethod'},
+                placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+              }
+            },
+            {
+              field: 'lboption', type: 'combo', required: false, html: {caption: 'LB Options: '},
+              options: {
+                postData: {'cmd': 'get-items', data: 'lboptions', field: 'lboption'},
+                placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+              }
             },
             {
                 field: 'monitor', type: 'combo', required: true, html: {caption: 'Monitor: '},
@@ -538,7 +755,98 @@ var config = {
         onSave: function () {
             w2ui.gridViews.reload();
         }
-    }
+    },
+
+    // ====================================================
+    // LBMethods
+    // ====================================================
+
+    gridLBMethods: {
+      name: 'gridLBMethods',
+      postData: {data: 'lbmethods'},
+      show: gridShow,
+      sortData: gridSortData,
+      url: w2uiUrl,
+      columns: [
+      {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+      {field: 'lbmethod', caption: 'Method', size: '100px', resizable: true, sortable: true},
+      {field: 'lbmethod_description', caption: 'Description', size: '300px', resizable: true, sortable: true}
+      ],
+      searches: [
+      {field: 'recid', caption: 'ID', type: 'int'},
+      {field: 'lbmethod', caption: 'Method', type: 'text'},
+      {field: 'lbmethod_description', caption: 'Description', type: 'text'}
+      ],
+      onAdd: gridPopupForm,
+      onDblClick: gridPopupForm,
+      onEdit: gridPopupForm
+    },
+
+    formLBMethods: {
+      name: 'formLBMethods',
+      postData: {data: 'lbmethods'},
+      actions: formActions,
+      style: formStyle,
+      url: w2uiUrl,
+      fields: [
+      {field: 'lbmethod', type: 'text', required: true, html: {caption: 'Method: '}},
+      {field: 'lbmethod_description', type: 'text', required: true, html: {caption: 'Description: '}}
+      ],
+      onSave: function () {
+        w2ui.gridLBMethods.reload();
+      }
+    },
+
+    // ====================================================
+    // LBOptions
+    // ====================================================
+
+    gridLBOptions: {
+      name: 'gridLBOptions',
+      postData: {data: 'lboptions'},
+      show: gridShow,
+      sortData: gridSortData,
+      url: w2uiUrl,
+      columns: [
+      {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+      {field: 'lbmethod', caption: 'Method', size: '100px', resizable: true, sortable: true},
+      {field: 'lboption', caption: 'Name', size: '150px', resizable: true, sortable: true},
+      {field: 'lboption_json', caption: 'Configuration', size: '300px', resizable: true, sortable: true}
+      ],
+      searches: [
+      {field: 'recid', caption: 'ID', type: 'int'},
+      {field: 'lbmethod', caption: 'Method', type: 'text'},
+      {field: 'lboption', caption: 'Name', type: 'text'},
+      {field: 'lboption_json', caption: 'Configuration', type: 'text'}
+      ],
+      onAdd: gridPopupForm,
+      onDblClick: gridPopupForm,
+      onEdit: gridPopupForm
+    },
+
+    formLBOptions: {
+      name: 'formLBOptions',
+      postData: {data: 'lboptions'},
+      actions: formActions,
+      style: formStyle,
+      url: w2uiUrl,
+      focus: 1,
+      fields: [
+      {
+        field: 'lbmethod', type: 'combo', required: true, html: {caption: 'Method: '},
+        options: {
+          postData: {'cmd': 'get-items', data: 'lbmethods', field: 'lbmethod'},
+          placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+        }
+      },
+      {field: 'lboption', type: 'text', required: true, html: {caption: 'Name: '}},
+      {field: 'lboption_json', type: 'text', required: true, html: {caption: 'Configuration: '}}
+      ],
+      onSave: function () {
+        w2ui.gridLBOptions.reload();
+      }
+    },
+
 };
 
 // ====================================================
@@ -554,14 +862,20 @@ $(function () {
     // in memory initialization
     $().w2grid(config.gridDomains);
     $().w2grid(config.gridMonitors);
+    w2ui['gridStatus'].hideColumn('recid');
     $().w2grid(config.gridRecords);
     $().w2grid(config.gridTypes);
     $().w2grid(config.gridUsers);
     $().w2grid(config.gridViews);
+    $().w2grid(config.gridLBMethods);
+    $().w2grid(config.gridLBOptions);
+
     $().w2form(config.formDomains);
     $().w2form(config.formMonitors);
     $().w2form(config.formRecords);
     $().w2form(config.formTypes);
     $().w2form(config.formViews);
     $().w2form(config.formUsers);
+    $().w2form(config.formLBMethods);
+    $().w2form(config.formLBOptions);
 });

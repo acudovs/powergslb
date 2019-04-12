@@ -1,0 +1,15 @@
+dictproxyhack==1.1
+dnspython==1.15.0
+enum34==1.1.6
+kairos==0.10.1
+logging==0.4.9.6
+MonthDelta==1.0b0
+mysql-connector==2.2.3
+netaddr==0.7.19
+pkg-resources==0.0.0
+pycurl==7.43.0
+pyping==0.0.5
+redis==2.10.6
+subprocess32==3.2.7
+systemd==0.11.1
+systemd-python==234

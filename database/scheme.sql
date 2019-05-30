@@ -5,6 +5,15 @@ CREATE TABLE `contents` (
   UNIQUE KEY `contents_content_uindex` (`content`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
 
+CREATE TABLE `monitors` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `monitor` varchar(255) NOT NULL,
+  `monitor_json` varchar(255) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `monitors_monitor_uindex` (`monitor`),
+  UNIQUE KEY `monitors_monitor_json_uindex` (`monitor_json`)
+) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
+
 CREATE TABLE `contents_monitors` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `content_id` int(11) NOT NULL,
@@ -43,15 +52,6 @@ CREATE TABLE `lboptions` (
   CONSTRAINT `lboptions_lbmethod_id_fk` FOREIGN KEY (`lbmethod_id`) REFERENCES `lbmethods` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
 
-CREATE TABLE `monitors` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `monitor` varchar(255) NOT NULL,
-  `monitor_json` varchar(255) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `monitors_monitor_uindex` (`monitor`),
-  UNIQUE KEY `monitors_monitor_json_uindex` (`monitor_json`)
-) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
-
 CREATE TABLE `names` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `domain_id` int(11) NOT NULL,
@@ -60,6 +60,33 @@ CREATE TABLE `names` (
   UNIQUE KEY `names_domain_id_name_uindex` (`domain_id`,`name`),
   KEY `names_name_index` (`name`),
   CONSTRAINT `names_domains_id_fk` FOREIGN KEY (`domain_id`) REFERENCES `domains` (`id`)
+) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
+
+CREATE TABLE `types` (
+  `value` int(11) NOT NULL,
+  `type` varchar(16) NOT NULL,
+  `description` varchar(255) NOT NULL,
+  PRIMARY KEY (`value`),
+  UNIQUE KEY `types_type_uindex` (`type`),
+  UNIQUE KEY `types_description_uindex` (`description`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+CREATE TABLE `users` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user` varchar(16) NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `password` char(41) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `users_user_uindex` (`user`)
+) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
+
+CREATE TABLE `views` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `view` varchar(255) NOT NULL,
+  `rule` varchar(255) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `views_view_uindex` (`view`),
+  UNIQUE KEY `views_rule_uindex` (`rule`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
 
 CREATE TABLE `names_types` (
@@ -97,31 +124,3 @@ CREATE TABLE `records` (
   CONSTRAINT `records_names_types_id_fk` FOREIGN KEY (`name_type_id`) REFERENCES `names_types` (`id`),
   CONSTRAINT `records_views_id_fk` FOREIGN KEY (`view_id`) REFERENCES `views` (`id`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
-
-CREATE TABLE `types` (
-  `value` int(11) NOT NULL,
-  `type` varchar(16) NOT NULL,
-  `description` varchar(255) NOT NULL,
-  PRIMARY KEY (`value`),
-  UNIQUE KEY `types_type_uindex` (`type`),
-  UNIQUE KEY `types_description_uindex` (`description`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE `users` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `user` varchar(16) NOT NULL,
-  `name` varchar(255) NOT NULL,
-  `password` char(41) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `users_user_uindex` (`user`)
-) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
-
-CREATE TABLE `views` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `view` varchar(255) NOT NULL,
-  `rule` varchar(255) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `views_view_uindex` (`view`),
-  UNIQUE KEY `views_rule_uindex` (`rule`)
-) ENGINE=InnoDB  DEFAULT CHARSET=utf8;
-

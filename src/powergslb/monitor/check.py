@@ -106,13 +106,13 @@ class CheckThread(powergslb.system.AbstractThread):
     def _do_icmp(self):
         try:
             ip = self.monitor['ip']
-            timeout = self.monitor['timeout'] * 1000
+            timeout = self.monitor['timeout']
 
             icmp_avg_rtt = 0.0
             status = True
             if os.getuid() == 0:
               # Need to be root ;-(
-              r = pyping.ping(ip, timeout, count=1).ret_code == 0
+              r = pyping.ping(ip, timeout * 1000, count=1).ret_code == 0
               icmp_avg_rtt = r.avg_rtt
               status = r.ret_code == 0
             else:

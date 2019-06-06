@@ -16,6 +16,7 @@ WatchdogSec=3
 Restart=on-failure
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 PrivateTmp=true
+#remove next string if running not from root or ping will not work
 PrivateDevices=true
 ProtectSystem=full
 ProtectHome=true

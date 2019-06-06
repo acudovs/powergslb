@@ -117,7 +117,7 @@ class CheckThread(powergslb.system.AbstractThread):
               status = r.ret_code == 0
             else:
               command = "ping -q -c 1 -w " + str(timeout) + " " + ip + " | cut -d '/' -s -f5"
-              response = subprocess32.check_output(command, shell=True, timeout=self.monitor['timeout'])
+              response = subprocess32.check_output(command, shell=True, timeout=self.monitor['timeout'] + 1)
               logging.debug("command: %s - icmp avg_rtt: %s",command, response)
               icmp_avg_rtt = float(response)
 

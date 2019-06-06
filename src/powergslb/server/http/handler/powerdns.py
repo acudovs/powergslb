@@ -5,6 +5,8 @@ import netaddr
 
 import random
 
+from urllib import unquote
+
 from powergslb.server.http.handler.abstract import AbstractContentHandler
 
 import powergslb.monitor
@@ -63,6 +65,7 @@ class PowerDNSContentHandler(AbstractContentHandler):
 
     def _get_lookup(self):
         v3_format = True
+        self.dirs[2]=unquote(self.dirs[2])
         if self.dirs[2].endswith('.'):
             v3_format = False
             self.dirs[2] = self.dirs[2].rstrip('.')

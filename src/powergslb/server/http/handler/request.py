@@ -152,3 +152,6 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
                     self.handle_one_request()
         except powergslb.database.Database.Error as e:
             logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
+
+    def log_message(self, format, *args):
+        logging.debug('{} {}'.format(self.address_string(), format % args))

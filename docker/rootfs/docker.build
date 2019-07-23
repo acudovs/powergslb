@@ -55,10 +55,8 @@ ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/sy
 ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/systemd-shutdownd.socket
 ln -rsvt /usr/lib/systemd/system/sysinit.target.wants /usr/lib/systemd/system/systemd-tmpfiles-setup.service
 ln -rsvt /usr/lib/systemd/system/timers.target.wants /usr/lib/systemd/system/systemd-tmpfiles-clean.timer
-mkdir -pv /etc/systemd/system/multi-user.target.wants
-ln -sv /usr/lib/systemd/system/mariadb.service /etc/systemd/system/multi-user.target.wants/mariadb.service
-ln -sv /usr/lib/systemd/system/pdns.service /etc/systemd/system/multi-user.target.wants/pdns.service
-ln -sv /usr/lib/systemd/system/powergslb.service /etc/systemd/system/multi-user.target.wants/powergslb.service
+
+systemctl enable mariadb pdns powergslb
 
 yum clean all
 rm -frv /anaconda-post.log /root/anaconda-ks.cfg /tmp/* /var/cache/yum /var/log/!(mariadb) /var/tmp/*

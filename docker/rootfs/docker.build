@@ -10,7 +10,7 @@ ln -sfv "/usr/share/zoneinfo/$TZ" /etc/localtime
 
 yum -y install epel-release
 yum -y update
-yum -y install bind-utils iproute less mariadb-server net-tools python2-pip
+yum -y install bash-completion bind-utils iproute less mariadb-server net-tools python2-pip
 
 pip install pyping
 

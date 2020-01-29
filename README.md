@@ -252,7 +252,9 @@ VERSION=1.7.3
 
 docker pull docker.io/alekseychudov/powergslb:"$VERSION"
 
-docker run -it --name powergslb --hostname powergslb --tmpfs /run --tmpfs /tmp -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+docker run -it --name powergslb --hostname powergslb \
+    -p 53:53/tcp -p 53:53/udp -p 443:443/tcp \
+    --tmpfs /run --tmpfs /tmp -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
     docker.io/alekseychudov/powergslb:"$VERSION"
 
 docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' powergslb

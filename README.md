@@ -26,7 +26,6 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 * [Building PowerGSLB Docker image](#building-powergslb-docker-image)
 * [Install using VirtualEnv](#install-using-virtualenv)
 * [Nginx as reverse proxy](#nginx-as-reverse-proxy)
-* [Checks](#checks)
 * [LB mode](#lb-mode)
    * [Priority](#priority)
    * [Topology](#topology)
@@ -358,100 +357,6 @@ server {
     error_log /var/log/nginx/powergslb_error.log;
     access_log /var/log/nginx/powergslb_access.logd;
 }
-```
-
-## Checks
-
-Checks are implemented in src/powergslb/monitor/.
-
-Supported types are :
-* icmp
-* tcp
-* http
-* https
-* command execution
-
-### Common mandatory parameters
-
-type: the type of check
-interval:
-timeout:
-fall:
-rise:
-
-### ICMP (type: icmp)
-
-Specific Arguments:
-
-* ip: the endpoint IP
-
-Example:
-
-```
-{"type": "icmp", "ip": "%(content)s", "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
-```
-
-### TCP
-
-Specific Arguments:
-
-* ip: the endpoint IP
-* port: the endpoint port
-
-Example:
-
-```
-{"type": "tcp", "ip": "%(content)s", "port": 9200, "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
-```
-
-### HTTP
-
-Specific Arguments:
-
-* url: the url to check
-
-Optionnal Arguments:
-
-* headers: add specififc request headers (default to empty dictionnary {})
-* store: if True store returned value in timeserie database (default to False)
-
-
-Example:
-```
-{"type": "http", "url": "http://%(content)s/status", "headers": {}, "interval": 3, "timeout": 1, "fall": 3, "rise": 5, "store": False}
-```
-
-### Exec
-
-Specific Arguments:
-
-* args: the command to execute
-
-Optionnal Arguments:
-
-* store: if True store returned value in timeserie database (default to False)
-
-
-Example:
-```
-{"type": "exec", "args": ["/etc/powergslb/powergslb-check", "%(content)s"], "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
-```
-
-### HTTPS
-
-Specific Arguments:
-
-* url: the url to check
-
-Optionnal Arguments:
-
-* secure: check certificate '(default to True)
-* headers: add specififc request headers (default to empty dictionnary {})
-* store: if True store returned value in timeserie database (default to False)
-
-Example:
-```
-{"type": "https", "url": "https://%(content)s/ping?fmt=json", "secure": False,"headers": {"Host": "test.local", "Accept": "text/html"}, "interval": 3, "timeout": 1, "fall": 3, "rise": 5, "store": False}
 ```
 
 ## LB mode

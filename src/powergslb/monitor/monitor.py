@@ -23,10 +23,10 @@ class MonitorThread(powergslb.system.AbstractThread):
         'tcp': {'type': str, 'ip': str, 'port': int, 'interval': int, 'timeout': int, 'fall': int, 'rise': int}
     }
     _check_params_types_optionnals = {
-        'exec': { 'store': bool },
-        'http': { 'store': bool, 'headers': dict },
-        'https': { 'store': bool, 'headers': dict, 'secure': bool },
-      }
+        'exec': {'store': bool},
+        'http': {'store': bool, 'headers': dict},
+        'https': {'store': bool, 'headers': dict, 'secure': bool},
+    }
 
     def __init__(self, **kwargs):
         super(MonitorThread, self).__init__(**kwargs)
@@ -129,7 +129,7 @@ class MonitorThread(powergslb.system.AbstractThread):
 
             check_params = set(self._check_params_types[monitor_type])
             monitor_params = set(check['monitor_json'])
-            optionnal_params = ()
+            optional_params = ()
 
             if check_params != monitor_params:
                 missing_params = check_params.difference(monitor_params)
@@ -142,26 +142,27 @@ class MonitorThread(powergslb.system.AbstractThread):
                         type(self).__name__, check['id'], ', '.join(map(str, missing_params))))
 
                 if unexpected_params:
-                    # Optionnal parameters
-                    check_params_optionnals = set(self._check_params_types_optionnals[monitor_type])
+                    # Optional parameters
+                    check_params_optional = set(self._check_params_types_optionnals[monitor_type])
                     for unexpected_param in unexpected_params:
-                      if unexpected_param in check_params_optionnals:
-                        logging.debug('---> unexpected_param %s is an optionnal parameters', unexpected_param)
-                        optionnal_params += ( unexpected_param, )
-                      else:
-                        raise Exception("{}: content id {}: unexpected check parameters: {}".format(
-                          type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
+                        if unexpected_param in check_params_optional:
+                            logging.debug('---> unexpected_param %s is an optional parameters', unexpected_param)
+                            optional_params += (unexpected_param,)
+                        else:
+                            raise Exception("{}: content id {}: unexpected check parameters: {}".format(
+                                type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
 
             # Mandatory parameters
             for param, param_type in self._check_params_types[monitor_type].items():
                 if type(check['monitor_json'][param]) != param_type:
                     raise Exception("{}: content id {}: check parameter '{}' invalid".format(
-                            type(self).__name__, check['id'], param))
-            # Optionnal parameters
-            for optionnal_param in optionnal_params:
-              if type(check['monitor_json'][optionnal_param]) != self._check_params_types_optionnals[monitor_type][optionnal_param]:
+                        type(self).__name__, check['id'], param))
+            # Optional parameters
+            for optional_param in optional_params:
+                if type(check['monitor_json'][optional_param]) !=\
+                        self._check_params_types_optionnals[monitor_type][optional_param]:
                     raise Exception("{}: content id {}: check parameter '{}' invalid".format(
-                            type(self).__name__, check['id'], param))
+                        type(self).__name__, check['id'], optional_param))
 
         except KeyError as e:
             logging.error("{}: content id {}: check parameter '{}' missing".format(

@@ -55,7 +55,7 @@ class PowerDNSDatabaseMixIn(object):
                   AND `records`.`disabled` = 0
             """
 
-            #qname2 = qname.replace('*.','')
+            # qname2 = qname.replace('*.','')
 
             params = (qname,)
         else:

@@ -62,32 +62,32 @@ class W2UIDatabaseMixIn(object):
     def _insert_names_types(self, domain, name, name_type, ttl, persistence, lbmethod, lboption):
 
         lbmethod_id = None
-        if lbmethod != None:
-          operation = """
+        if lbmethod is not None:
+            operation = """
                 SELECT `lbmethods`.`id` AS `id`
                   FROM `lbmethods`
                   WHERE `lbmethods`.`lbmethod` = %s
           """
-          params = (lbmethod,)
+            params = (lbmethod,)
 
-          lbmethod_id = self._execute(operation, params)[0]
-          if lbmethod_id != None:
-            lbmethod_id = lbmethod_id['id']
+            lbmethod_id = self._execute(operation, params)[0]
+            if lbmethod_id is not None:
+                lbmethod_id = lbmethod_id['id']
 
         logging.debug("lbmethod_id: %s", lbmethod_id)
 
         lboption_id = None
-        if lboption != None:
-          operation = """
+        if lboption is not None:
+            operation = """
                 SELECT `lboptions`.`id` AS `id`
                   FROM `lboptions`
                   WHERE `lboptions`.`lboption` = %s
           """
-          params = (lboption,)
+            params = (lboption,)
 
-          lboption_id = self._execute(operation, params)[0]
-          if lboption_id != None:
-            lboption_id = lboption_id['id']
+            lboption_id = self._execute(operation, params)[0]
+            if lboption_id is not None:
+                lboption_id = lboption_id['id']
 
         logging.debug("lboption_id: %s", lboption_id)
 
@@ -112,7 +112,9 @@ class W2UIDatabaseMixIn(object):
               `lbmethod_id` = %s,
               `lboption_id` = %s
         """
-        params = (name, domain, name_type, ttl, persistence, lbmethod_id, lboption_id, ttl, persistence, lbmethod_id, lboption_id)
+        params = (
+            name, domain, name_type, ttl, persistence, lbmethod_id, lboption_id, ttl, persistence, lbmethod_id,
+            lboption_id)
 
         return self._execute(operation, params)
 
@@ -537,10 +539,17 @@ class W2UIDatabaseMixIn(object):
                   `weight` = %s
                 WHERE `records`.`id` = %s
             """
-            params = (name, domain, name_type, content, monitor, view, disabled, fallback, weight, save_recid )
+            params = (name, domain, name_type, content, monitor, view, disabled, fallback, weight, save_recid)
         else:
             operation = """
-                INSERT INTO `records` (`name_type_id`, `content_monitor_id`, `view_id`, `disabled`, `fallback`, `weight`)
+                INSERT INTO `records` (
+                    `name_type_id`,
+                     `content_monitor_id`,
+                      `view_id`,
+                       `disabled`,
+                        `fallback`,
+                         `weight`
+                         )
                   SELECT
                     (SELECT `names_types`.`id`
                      FROM `names_types`
@@ -651,7 +660,8 @@ class W2UIDatabaseMixIn(object):
 
     def save_lboptions(self, save_recid, lbmethod, lboption, lboption_json, **_):
 
-        logging.debug("lbmethod: %s - lboption: %s - lboption_json: %s", str(lbmethod), str(lboption), str(lboption_json))
+        logging.debug("lbmethod: %s - lboption: %s - lboption_json: %s", str(lbmethod), str(lboption),
+                      str(lboption_json))
         if save_recid:
             operation = """
                 SELECT `lbmethods`.`id` AS `lbmethod_id`

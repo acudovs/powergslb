@@ -38,9 +38,9 @@ class SmartConfigParser(ConfigParser.RawConfigParser, object):
             except (SyntaxError, ValueError):
                 # Try JSON
                 try:
-                  value = json.loads( value )
+                    value = json.loads(value)
                 except:
-                  pass
+                    pass
 
             logging.debug('output - key: %s- value: %s', str(key), str(value))
             smart_items.append((key, value))

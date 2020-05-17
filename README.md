@@ -97,7 +97,7 @@ yum -y install python2-pip
 
 pip install pyping
 
-VERSION=1.7.1
+VERSION=1.7.3
 yum -y --setopt=tsflags= install \
     "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.noarch.rpm" \
     "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.noarch.rpm" \
@@ -122,7 +122,7 @@ systemctl status mariadb.service
 
 mysql_secure_installation
 
-VERSION=1.7.1
+VERSION=1.7.3
 mysql -p << EOF
 CREATE DATABASE powergslb;
 GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY 'your-database-password-here';
@@ -241,7 +241,7 @@ Please read [How to create an RPM package](https://fedoraproject.org/wiki/How_to
 yum -y update
 yum -y install @Development\ Tools
 
-VERSION=1.7.1
+VERSION=1.7.3
 curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" -o "powergslb-$VERSION.tar.gz"
 rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
 ```
@@ -259,11 +259,14 @@ Upon successful completion you will have three packages
 For quick setup, you can pull all-in-one Docker image from docker.io.
 
 ```
-VERSION=1.7.1
+VERSION=1.7.3
 
 docker pull docker.io/alekseychudov/powergslb:"$VERSION"
 
-docker run -it --name powergslb --hostname powergslb docker.io/alekseychudov/powergslb:"$VERSION"
+docker run -it --name powergslb --hostname powergslb \
+    -p 53:53/tcp -p 53:53/udp -p 443:443/tcp \
+    --tmpfs /run --tmpfs /tmp -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+    docker.io/alekseychudov/powergslb:"$VERSION"
 
 docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' powergslb
 
@@ -283,7 +286,7 @@ semanage boolean --modify --on container_manage_cgroup
 To create an all-in-one Docker image.
 
 ```
-VERSION=1.7.1
+VERSION=1.7.3
 
 docker build -f docker/Dockerfile --build-arg VERSION="$VERSION" \
     --force-rm --no-cache -t powergslb:"$VERSION" https://github.com/AlekseyChudov/powergslb.git

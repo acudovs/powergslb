@@ -1,4 +1,4 @@
-FROM docker.io/centos:7.6.1810
+FROM docker.io/centos:7.7.1908
 ENV container docker
 CMD ["/usr/lib/systemd/systemd"]
 STOPSIGNAL SIGRTMIN+3

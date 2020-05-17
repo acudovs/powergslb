@@ -135,7 +135,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
         self.remote_ip = remote_ip
 
     def _urlsplit(self):
-        self.path, self.query = urllib2.httplib.urlsplit(self.path)[2:4]
+        self.path, self.query = urllib2.httplib.urlsplit(urllib2.unquote(self.path))[2:4]
         self.dirs = self.path.split('/')[1:]
 
     def do_GET(self):

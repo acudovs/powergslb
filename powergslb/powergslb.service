@@ -2,6 +2,8 @@
 
 [Unit]
 Description=PowerGSLB service
+After=mariadb.service
+Before=pdns.service
 
 [Service]
 # If daemon must run under a specific user

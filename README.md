@@ -60,29 +60,29 @@ PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
 
 ## Database diagram
 
-![](https://github.com/aromeyer/powergslb/blob/master/images/database.png?raw=true)
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/database.png?raw=true)
 
 
 ## Class diagram
 
-![](https://github.com/aromeyer/powergslb/blob/master/images/class-diagram.png?raw=true)
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/class-diagram.png?raw=true)
 
 
 ## Web based administration interface
 
 Status grid
-![](https://github.com/aromeyer/powergslb/blob/master/images/web-status.png?raw=true)
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-status.png?raw=true)
 
 Stats on status
-![](https://github.com/aromeyer/powergslb/blob/master/images/web-status-stats.png?raw=true)
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-status-stats.png?raw=true)
 
 Advanced search
-![](https://github.com/aromeyer/powergslb/blob/master/images/web-search.png?raw=true)
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-search.png?raw=true)
 
 Add new record
-![](https://github.com/aromeyer/powergslb/blob/master/images/web-form.png?raw=true)
+![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-form.png?raw=true)
 
-[More images](https://github.com/aromeyer/powergslb/tree/master/images)
+[More images](https://github.com/AlekseyChudov/powergslb/tree/master/images)
 
 
 ## Installation on CentOS 7

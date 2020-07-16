@@ -6,12 +6,19 @@ After=mariadb.service
 Before=pdns.service
 
 [Service]
+# If daemon must run under a specific user
+#User=powergslb
+#Group=powergslb
 Type=notify
 ExecStart=/usr/sbin/powergslb -c /etc/powergslb/powergslb.conf
+# VirtualEnv Support
+#ExecStart=[path to your virtualenv]/bin/python [path to your virtualenv]/powergslb/powergslb -c [path to your virtualenv]/powergslb/powergslb.conf
+CapabilityBoundingSet=CAP_NET_RAW
 WatchdogSec=3
 Restart=on-failure
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 PrivateTmp=true
+#remove next string if running not from root or ping will not work
 PrivateDevices=true
 ProtectSystem=full
 ProtectHome=true

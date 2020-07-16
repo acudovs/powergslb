@@ -131,6 +131,7 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
                 logging.error("{}: 'X-Remotebackend-Real-Remote' header invalid: {}: {}".format(
                     type(self).__name__, type(e).__name__, e))
 
+        logging.debug("remote_ip: %s", remote_ip)
         self.remote_ip = remote_ip
 
     def _urlsplit(self):
@@ -151,3 +152,6 @@ class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
                     self.handle_one_request()
         except powergslb.database.Database.Error as e:
             logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
+
+    def log_message(self, fmt, *args):
+        logging.debug('{} {}'.format(self.address_string(), fmt % args))

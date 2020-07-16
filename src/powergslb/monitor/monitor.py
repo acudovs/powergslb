@@ -19,7 +19,13 @@ class MonitorThread(powergslb.system.AbstractThread):
         'exec': {'type': str, 'args': list, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
         'icmp': {'type': str, 'ip': str, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
         'http': {'type': str, 'url': str, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
+        'https': {'type': str, 'url': str, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
         'tcp': {'type': str, 'ip': str, 'port': int, 'interval': int, 'timeout': int, 'fall': int, 'rise': int}
+    }
+    _check_params_types_optionnals = {
+        'exec': {'store': bool},
+        'http': {'store': bool, 'headers': dict},
+        'https': {'store': bool, 'headers': dict, 'secure': bool},
     }
 
     def __init__(self, **kwargs):
@@ -42,12 +48,15 @@ class MonitorThread(powergslb.system.AbstractThread):
 
     def _parse(self, check):
         parse_status = False
+        logging.debug("check: %s", str(check))
         try:
             check['monitor_json'] = dict(ast.literal_eval(check['monitor_json'] % check))
             parse_status = True
         except (SyntaxError, ValueError) as e:
             logging.error('{}: content id {}: check parsing error: {}: {}'.format(
                 type(self).__name__, check['id'], type(e).__name__, e))
+
+        logging.debug("status: %s - check: %s", str(parse_status), str(check))
 
         return parse_status
 
@@ -120,23 +129,40 @@ class MonitorThread(powergslb.system.AbstractThread):
 
             check_params = set(self._check_params_types[monitor_type])
             monitor_params = set(check['monitor_json'])
+            optional_params = ()
 
             if check_params != monitor_params:
                 missing_params = check_params.difference(monitor_params)
                 unexpected_params = monitor_params.difference(check_params)
+
+                logging.debug('missing_params: %s - unexpected_params: %s', missing_params, unexpected_params)
 
                 if missing_params:
                     raise Exception("{}: content id {}: missing check parameters: {}".format(
                         type(self).__name__, check['id'], ', '.join(map(str, missing_params))))
 
                 if unexpected_params:
-                    raise Exception("{}: content id {}: unexpected check parameters: {}".format(
-                        type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
+                    # Optional parameters
+                    check_params_optional = set(self._check_params_types_optionnals[monitor_type])
+                    for unexpected_param in unexpected_params:
+                        if unexpected_param in check_params_optional:
+                            logging.debug('---> unexpected_param %s is an optional parameters', unexpected_param)
+                            optional_params += (unexpected_param,)
+                        else:
+                            raise Exception("{}: content id {}: unexpected check parameters: {}".format(
+                                type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
 
+            # Mandatory parameters
             for param, param_type in self._check_params_types[monitor_type].items():
                 if type(check['monitor_json'][param]) != param_type:
                     raise Exception("{}: content id {}: check parameter '{}' invalid".format(
                         type(self).__name__, check['id'], param))
+            # Optional parameters
+            for optional_param in optional_params:
+                if type(check['monitor_json'][optional_param]) !=\
+                        self._check_params_types_optionnals[monitor_type][optional_param]:
+                    raise Exception("{}: content id {}: check parameter '{}' invalid".format(
+                        type(self).__name__, check['id'], optional_param))
 
         except KeyError as e:
             logging.error("{}: content id {}: check parameter '{}' missing".format(

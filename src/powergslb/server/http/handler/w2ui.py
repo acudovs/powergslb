@@ -20,7 +20,9 @@ class W2UIContentHandler(AbstractContentHandler):
         'get-items': '_get_items',
         'get-record': '_get_record',
         'get-records': '_get_records',
-        'save-record': '_save_record'
+        'save-record': '_save_record',
+        'get-stats': 'get_stats',
+        'get-stats-pool': 'get_stats_pool',
     }
 
     _search_functions = {
@@ -87,6 +89,9 @@ class W2UIContentHandler(AbstractContentHandler):
             content = {'status': 'error', 'message': "get-records '{}' not implemented".format(data)}
         else:
             records = getattr(self.database, 'get_' + data)()
+
+            logging.info(' get_records - records: %s', records)
+
             if data == 'status':
                 self._update_status(records)
             records = self._search_records(records)
@@ -194,3 +199,78 @@ class W2UIContentHandler(AbstractContentHandler):
                 content = {'status': 'error', 'message': str(e)}
 
         return json.dumps(content, separators=(',', ':'))
+
+    def get_stats(self):
+        data = self.query.get('data')
+        recid = int(self.query.get('recid'))
+
+        content = self.database.get_content_from_monitor_id(recid)
+
+        ts = powergslb.database.TimeSeries(**powergslb.system.get_config().items('redis'))
+        if data == 'rt':
+            timeseries = ts.get_response_time_timeseries(recid)
+        elif data == 'status':
+            timeseries = ts.get_status_timeseries(recid)
+        else:
+            timeseries = []
+
+        data = [[], []]
+        data[0].append('ts')
+        data[1].append(content[0]['content'])
+        for key, value in timeseries.items():
+            # data[0].append( '"' + str(key) + '"' )
+            data[0].append(int(key) * 1000)
+            if value:
+                data[1].append(float(value))
+            else:
+                data[1].append(0.0)
+
+        # Remove last point as it may not be consolidated
+        del data[0][-1:]
+        del data[1][-1:]
+
+        return data
+
+    def get_stats_pool(self):
+        data = self.query.get('data')
+        monid = int(self.query.get('recid'))
+
+        ts = powergslb.database.TimeSeries(**powergslb.system.get_config().items('redis'))
+
+        pool = self.database.get_poolrecords_from_monitor_id(monid)
+        # select contents.content, contents_monitors.id, contents_monitors.content_id from names_types
+        # INNER JOIN records ON records.name_type_id = names_types.id
+        # INNER JOIN contents_monitors ON contents_monitors.id = records.content_monitor_id
+        # INNER JOIN contents ON contents.id = contents_monitors.content_id
+        # WHERE names_types.name_id=(
+        # select names.id from records
+        # INNER JOIN names_types ON names_types.id = records.name_type_id
+        # INNER JOIN names ON names.id = names_types.name_id
+        # WHERE records.content_monitor_id = 241  )
+
+        logging.debug('pool: %s', str(pool))
+
+        c3data = [[]]
+        c3data[0].append('ts')
+        i = 1
+        for endpoint in pool:
+            if data == 'rt':
+                timeseries = ts.get_response_time_timeseries(endpoint['id'])
+            elif data == 'status':
+                timeseries = ts.get_status_timeseries(endpoint['id'])
+            else:
+                timeseries = []
+            logging.debug("endpoint['id']: %d - timeseries: %s", endpoint['id'], str(timeseries))
+
+            c3data.append([])
+            c3data[i].append(endpoint['content'])
+            for key, value in timeseries.items():
+                if i == 1:
+                    c3data[0].append(int(key) * 1000)
+                if value:
+                    c3data[i].append(float(value))
+                else:
+                    c3data[i].append(0.0)
+            i += 1
+
+        return c3data

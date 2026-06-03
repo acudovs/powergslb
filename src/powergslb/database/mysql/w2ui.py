@@ -1,119 +1,66 @@
+"""Admin CRUD path: the queries the w2ui handler needs."""
+
 import abc
+from typing import Any, ClassVar
+
+from powergslb.system.password import hash_password, verify_password
 
 __all__ = ['W2UIDatabaseMixIn']
 
 
-class W2UIDatabaseMixIn(object):
-    """
-    W2UIDatabaseMixIn class contains w2ui related queries
-    """
-    __metaclass__ = abc.ABCMeta
+class W2UIDatabaseMixIn(abc.ABC):
+    """w2ui related queries: CRUD for every table plus user authentication."""
 
-    def _delete(self, operation, ids):
+    # get_users returns this placeholder instead of the password hash; the admin UI pre-fills it,
+    # so save_users treats it as "keep the existing password".
+    password_mask: ClassVar[str] = '********'
+
+    # A valid crypt(3) SHA-512 hash with the same cost as a real one; check_user verifies against it for an
+    # unknown user, so the response time does not reveal whether the user exists.
+    _dummy_hash: ClassVar[str] = hash_password('never matches')
+
+    def _delete(self, operation: str, ids: list[Any]) -> int:
+        """Expand the operation's IN (%s) placeholder to the ids and delete; an empty list deletes nothing."""
+        if not ids:
+            return 0  # an empty IN () is a syntax error; nothing to delete
         params = tuple(ids)
         params_format = ', '.join(['%s'] * len(params))
         operation %= params_format
 
-        return self._execute(operation, params)
+        return self._modify(operation, params)
 
     @abc.abstractmethod
-    def _execute(self, operation, params=()):
+    def _select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         pass
 
-    def _clean_contents(self, content_monitor_id):
-        operation = """
-            DELETE IGNORE `contents_monitors`,
-               `contents`
-            FROM `contents_monitors`
-              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-            WHERE `contents_monitors`.`id` = %s
+    @abc.abstractmethod
+    def _modify(self, operation: str, params: tuple[Any, ...] = ()) -> int:
+        pass
+
+    @abc.abstractmethod
+    def _execute_transaction(self, statements: list[tuple[str, tuple[Any, ...]]]) -> int:
+        pass
+
+    def check_user(self, user: str, password: str) -> list[dict[str, Any]]:
+        """Return [{'valid': 1}] if the user/password pair is valid, an empty list otherwise.
+
+        The stored crypt(3) hash carries its own salt, so the password is verified in Python rather than in SQL.
+        An unknown user is still verified against a dummy hash, so the timing does not reveal that the user is absent.
         """
-        params = (content_monitor_id,)
-
-        return self._execute(operation, params)
-
-    def _clean_names(self, name_type_id):
         operation = """
-            DELETE IGNORE `names_types`,
-               `names`
-            FROM `names_types`
-              JOIN `names` ON `names_types`.`name_id` = `names`.`id`
-            WHERE `names_types`.`id` = %s
-        """
-        params = (name_type_id,)
-
-        return self._execute(operation, params)
-
-    def _insert_names(self, domain, name):
-        operation = """
-            INSERT IGNORE INTO `names` (`domain_id`, `name`)
-              SELECT
-                (SELECT `id`
-                 FROM `domains`
-                 WHERE `domain` = %s) AS `domain_id`,
-                %s AS `name`
-        """
-        params = (domain, name)
-
-        return self._execute(operation, params)
-
-    def _insert_names_types(self, domain, name, name_type, ttl, persistence):
-        operation = """
-            INSERT INTO `names_types` (`name_id`, `type_value`, `ttl`, `persistence`)
-              SELECT
-                (SELECT `names`.`id`
-                 FROM `names`
-                   JOIN `domains` ON `names`.`domain_id` = `domains`.`id`
-                 WHERE `name` = %s
-                   AND `domains`.`domain` = %s) AS `name_id`,
-                (SELECT `value`
-                 FROM `types`
-                 WHERE `type` = %s) AS `type_value`,
-                %s AS `ttl`,
-                %s AS `persistence`
-            ON DUPLICATE KEY UPDATE
-              `ttl` = %s,
-              `persistence` = %s
-        """
-        params = (name, domain, name_type, ttl, persistence, ttl, persistence)
-
-        return self._execute(operation, params)
-
-    def _insert_contents(self, content):
-        operation = """
-            INSERT IGNORE INTO `contents` (`content`)
-            VALUES (%s)
-        """
-        params = (content,)
-
-        return self._execute(operation, params)
-
-    def _insert_contents_monitors(self, content, monitor):
-        operation = """
-            INSERT IGNORE INTO `contents_monitors` (`content_id`, `monitor_id`)
-              SELECT
-                (SELECT `id`
-                 FROM `contents`
-                 WHERE `content` = %s) AS `content_id`,
-                (SELECT `id`
-                 FROM `monitors`
-                 WHERE `monitor` = %s) AS `monitor_id`
-        """
-        params = (content, monitor)
-
-        return self._execute(operation, params)
-
-    def check_user(self, user, password):
-        operation = """
-            SELECT 1 FROM `users`
+            SELECT `password` FROM `users`
             WHERE `user` = %s
-              AND `password` = PASSWORD(%s)
         """
-        params = (user, password)
+        rows = self._select(operation, (user,))
+        stored = rows[0]['password'] if rows else self._dummy_hash
 
-        return self._execute(operation, params)
+        if verify_password(password, stored) and rows:  # rows = [] for an unknown user
+            return [{'valid': 1}]
 
-    def delete_domains(self, ids):
+        return []
+
+    def delete_domains(self, ids: list[Any]) -> int:
+        """Delete domain rows by id and return the count of deleted rows."""
         operation = """
             DELETE FROM `domains`
             WHERE `id` IN (%s)
@@ -121,7 +68,8 @@ class W2UIDatabaseMixIn(object):
 
         return self._delete(operation, ids)
 
-    def delete_monitors(self, ids):
+    def delete_monitors(self, ids: list[Any]) -> int:
+        """Delete monitor rows by id and return the count of deleted rows."""
         operation = """
             DELETE FROM `monitors`
             WHERE `id` IN (%s)
@@ -129,24 +77,17 @@ class W2UIDatabaseMixIn(object):
 
         return self._delete(operation, ids)
 
-    def delete_records(self, ids):
+    def delete_records(self, ids: list[Any]) -> int:
+        """Delete record rows by id and return the count of deleted rows."""
         operation = """
-            DELETE IGNORE `records`,
-              `names_types`,
-              `names`,
-              `contents_monitors`,
-              `contents`
-            FROM `records`
-              JOIN `names_types` ON `records`.`name_type_id` = `names_types`.`id`
-              JOIN `names` ON `names_types`.`name_id` = `names`.`id`
-              JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
-              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-            WHERE `records`.`id` = %s
+            DELETE FROM `records`
+            WHERE `id` IN (%s)
         """
 
-        return sum(self._execute(operation, (recid,)) for recid in ids)
+        return self._delete(operation, ids)
 
-    def delete_types(self, values):
+    def delete_types(self, values: list[Any]) -> int:
+        """Delete type rows by value and return the count of deleted rows."""
         operation = """
             DELETE FROM `types`
             WHERE `value` IN (%s)
@@ -154,7 +95,8 @@ class W2UIDatabaseMixIn(object):
 
         return self._delete(operation, values)
 
-    def delete_users(self, ids):
+    def delete_users(self, ids: list[Any]) -> int:
+        """Delete user rows by id and return the count of deleted rows."""
         operation = """
             DELETE FROM `users`
             WHERE `id` IN (%s)
@@ -162,7 +104,8 @@ class W2UIDatabaseMixIn(object):
 
         return self._delete(operation, ids)
 
-    def delete_views(self, ids):
+    def delete_views(self, ids: list[Any]) -> int:
+        """Delete view rows by id and return the count of deleted rows."""
         operation = """
             DELETE FROM `views`
             WHERE `id` IN (%s)
@@ -170,40 +113,39 @@ class W2UIDatabaseMixIn(object):
 
         return self._delete(operation, ids)
 
-    def get_status(self):
+    def get_status(self) -> list[dict[str, Any]]:
+        """Return all records with health and disabled status for the admin panel."""
         operation = """
             SELECT `domains`.`domain`,
-              `names`.`name`,
-              `names_types`.`ttl`,
-              `names_types`.`persistence`,
+              `rrsets`.`name`,
+              `rrsets`.`ttl`,
+              `rrsets`.`persistence`,
               `types`.`type` AS `name_type`,
               `records`.`disabled`,
               `records`.`fallback`,
               `records`.`weight`,
-              `contents_monitors`.`id`,
-              `contents`.`content`,
+              `records`.`id`,
+              `records`.`content`,
               `monitors`.`monitor`,
               `views`.`view`
-            FROM `domains`
-              JOIN `names` ON `domains`.`id` = `names`.`domain_id`
-              JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
-              JOIN `types` ON `names_types`.`type_value` = `types`.`value`
-              JOIN `records` ON `names_types`.`id` = `records`.`name_type_id`
-              JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
-              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-              JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+            FROM `records`
+              JOIN `rrsets` ON `records`.`rrset_id` = `rrsets`.`id`
+              JOIN `domains` ON `rrsets`.`domain_id` = `domains`.`id`
+              JOIN `types` ON `rrsets`.`type_value` = `types`.`value`
+              JOIN `monitors` ON `records`.`monitor_id` = `monitors`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
 
-        return self._execute(operation)
+        return self._select(operation)
 
-    def get_domains(self, recid=0):
+    def get_domains(self, recid: int = 0) -> list[dict[str, Any]]:
+        """Return all domains, or a single domain if recid is given."""
         operation = """
             SELECT `id` AS `recid`,
               `domain`
             FROM `domains`
         """
-        params = ()
+        params: tuple[Any, ...] = ()
 
         if recid:
             operation += """
@@ -211,16 +153,17 @@ class W2UIDatabaseMixIn(object):
             """
             params += (recid,)
 
-        return self._execute(operation, params)
+        return self._select(operation, params)
 
-    def get_monitors(self, recid=0):
+    def get_monitors(self, recid: int = 0) -> list[dict[str, Any]]:
+        """Return all monitors, or a single monitor if recid is given."""
         operation = """
             SELECT `id` AS `recid`,
               `monitor`,
               `monitor_json`
             FROM `monitors`
         """
-        params = ()
+        params: tuple[Any, ...] = ()
 
         if recid:
             operation += """
@@ -228,33 +171,31 @@ class W2UIDatabaseMixIn(object):
             """
             params += (recid,)
 
-        return self._execute(operation, params)
+        return self._select(operation, params)
 
-    def get_records(self, recid=0):
+    def get_records(self, recid: int = 0) -> list[dict[str, Any]]:
+        """Return all records, or a single record if recid is given."""
         operation = """
             SELECT `domains`.`domain`,
-              `names`.`name`,
-              `names_types`.`ttl`,
-              `names_types`.`persistence`,
+              `rrsets`.`name`,
+              `rrsets`.`ttl`,
+              `rrsets`.`persistence`,
               `types`.`type` AS `name_type`,
               `records`.`id` AS `recid`,
               `records`.`disabled`,
               `records`.`fallback`,
               `records`.`weight`,
-              `contents`.`content`,
+              `records`.`content`,
               `monitors`.`monitor`,
               `views`.`view`
-            FROM `domains`
-              JOIN `names` ON `domains`.`id` = `names`.`domain_id`
-              JOIN `names_types` ON `names`.`id` = `names_types`.`name_id`
-              JOIN `types` ON `names_types`.`type_value` = `types`.`value`
-              JOIN `records` ON `names_types`.`id` = `records`.`name_type_id`
-              JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
-              JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-              JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
+            FROM `records`
+              JOIN `rrsets` ON `records`.`rrset_id` = `rrsets`.`id`
+              JOIN `domains` ON `rrsets`.`domain_id` = `domains`.`id`
+              JOIN `types` ON `rrsets`.`type_value` = `types`.`value`
+              JOIN `monitors` ON `records`.`monitor_id` = `monitors`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
-        params = ()
+        params: tuple[Any, ...] = ()
 
         if recid:
             operation += """
@@ -262,16 +203,17 @@ class W2UIDatabaseMixIn(object):
             """
             params += (recid,)
 
-        return self._execute(operation, params)
+        return self._select(operation, params)
 
-    def get_types(self, recid=0):
+    def get_types(self, recid: int = 0) -> list[dict[str, Any]]:
+        """Return all types, or a single type if recid is given."""
         operation = """
             SELECT `value` AS `recid`,
               `type` AS `name_type`,
               `description`
             FROM `types`
         """
-        params = ()
+        params: tuple[Any, ...] = ()
 
         if recid:
             operation += """
@@ -279,17 +221,18 @@ class W2UIDatabaseMixIn(object):
             """
             params += (recid,)
 
-        return self._execute(operation, params)
+        return self._select(operation, params)
 
-    def get_users(self, recid=0):
+    def get_users(self, recid: int = 0) -> list[dict[str, Any]]:
+        """Return all users (password masked), or a single user if recid is given."""
         operation = """
             SELECT `id` AS `recid`,
               `user`,
               `name`,
-              '********' AS `password`
+              %s AS `password`
             FROM `users`
         """
-        params = ()
+        params: tuple[Any, ...] = (self.password_mask,)
 
         if recid:
             operation += """
@@ -297,16 +240,17 @@ class W2UIDatabaseMixIn(object):
             """
             params += (recid,)
 
-        return self._execute(operation, params)
+        return self._select(operation, params)
 
-    def get_views(self, recid=0):
+    def get_views(self, recid: int = 0) -> list[dict[str, Any]]:
+        """Return all views, or a single view if recid is given."""
         operation = """
             SELECT `id` AS `recid`,
               `view`,
               `rule`
             FROM `views`
         """
-        params = ()
+        params: tuple[Any, ...] = ()
 
         if recid:
             operation += """
@@ -314,16 +258,17 @@ class W2UIDatabaseMixIn(object):
             """
             params += (recid,)
 
-        return self._execute(operation, params)
+        return self._select(operation, params)
 
-    def save_domains(self, save_recid, domain, **_):
+    def save_domains(self, save_recid: int, domain: str, **_: Any) -> int:
+        """Insert or update a domain row and return the row count."""
         if save_recid:
             operation = """
                 UPDATE `domains`
                 SET `domain` = %s
                 WHERE `id` = %s
             """
-            params = (domain, save_recid)
+            params: tuple[Any, ...] = (domain, save_recid)
         else:
             operation = """
                 INSERT INTO `domains` (`domain`)
@@ -331,9 +276,10 @@ class W2UIDatabaseMixIn(object):
             """
             params = (domain,)
 
-        return self._execute(operation, params)
+        return self._modify(operation, params)
 
-    def save_monitors(self, save_recid, monitor, monitor_json, **_):
+    def save_monitors(self, save_recid: int, monitor: str, monitor_json: str, **_: Any) -> int:
+        """Insert or update a monitor row and return the row count."""
         if save_recid:
             operation = """
                 UPDATE `monitors`
@@ -342,7 +288,7 @@ class W2UIDatabaseMixIn(object):
                 WHERE `id` = %s
 
             """
-            params = (monitor, monitor_json, save_recid)
+            params: tuple[Any, ...] = (monitor, monitor_json, save_recid)
         else:
             operation = """
                 INSERT INTO `monitors` (`monitor`, `monitor_json`)
@@ -350,95 +296,52 @@ class W2UIDatabaseMixIn(object):
             """
             params = (monitor, monitor_json)
 
-        return self._execute(operation, params)
+        return self._modify(operation, params)
 
-    def save_records(self, save_recid, domain, name, name_type, ttl, content, monitor, view, disabled=0, fallback=0,
-                     persistence=0, weight=0, **_):
+    def save_records(self, save_recid: int, domain: str, name: str, name_type: str, ttl: int, content: str,
+                     monitor: str, view: str, disabled: int = 0, fallback: int = 0,
+                     persistence: int = 0, weight: int = 0, **_: Any) -> int:
+        """Insert or update a record across the rrset and record levels in one transaction.
 
-        count = 0
-        count += self._insert_names(domain, name)
-        count += self._insert_names_types(domain, name, name_type, ttl, persistence)
-        count += self._insert_contents(content)
-        count += self._insert_contents_monitors(content, monitor)
+        Statement one upserts the rrset (zone + relative record name + type carrying ttl/persistence) and pins its
+        id with LAST_INSERT_ID; statement two writes the record, taking the rrset id from LAST_INSERT_ID() rather
+        than a `rrsets` subquery (the record UPDATE can fire the GC trigger, and a subquery on `rrsets` in that
+        same statement would raise error 1442). The summed affected-row count is returned so a ttl-only edit and a
+        content-only edit both report success.
+        """
+        rrset_upsert = ("""
+            INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `persistence`)
+              SELECT (SELECT `id` FROM `domains` WHERE `domain` = %s), %s,
+                (SELECT `value` FROM `types` WHERE `type` = %s), %s, %s
+            ON DUPLICATE KEY UPDATE `id` = LAST_INSERT_ID(`id`), `ttl` = %s, `persistence` = %s
+        """, (domain, name, name_type, ttl, persistence, ttl, persistence))
 
-        save_recids = None
-
+        record_write: tuple[str, tuple[Any, ...]]
         if save_recid:
-            operation = """
-                SELECT `names_types`.`id` AS `name_type_id`,
-                  `contents_monitors`.`id` AS `content_monitor_id`
-                FROM `records`
-                  JOIN `names_types` ON `records`.`name_type_id` = `names_types`.`id`
-                  JOIN `contents_monitors` ON `records`.`content_monitor_id` = `contents_monitors`.`id`
-                WHERE `records`.`id` = %s
-            """
-            params = (save_recid,)
-
-            save_recids = self._execute(operation, params)[0]
-
-            operation = """
+            record_write = ("""
                 UPDATE `records`
-                SET
-                  `name_type_id` =
-                    (SELECT `names_types`.`id`
-                     FROM `names_types`
-                       JOIN `names` ON `names_types`.`name_id` = `names`.`id`
-                       JOIN `domains` ON `names`.`domain_id` = `domains`.`id`
-                       JOIN `types` ON `names_types`.`type_value` = `types`.`value`
-                     WHERE `names`.`name` = %s
-                       AND `domains`.`domain` = %s
-                       AND `types`.`type` = %s),
-                  `content_monitor_id` =
-                    (SELECT `contents_monitors`.`id`
-                     FROM `contents_monitors`
-                       JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-                       JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
-                     WHERE `contents`.`content` = %s
-                       AND `monitors`.`monitor` = %s),
-                  `view_id` =
-                    (SELECT `views`.`id`
-                     FROM `views`
-                     WHERE `views`.`view` = %s),
+                SET `rrset_id` = LAST_INSERT_ID(),
+                  `content` = %s,
+                  `monitor_id` = (SELECT `id` FROM `monitors` WHERE `monitor` = %s),
+                  `view_id` = (SELECT `id` FROM `views` WHERE `view` = %s),
                   `disabled` = %s,
                   `fallback` = %s,
                   `weight` = %s
-                WHERE `records`.`id` = %s
-            """
-            params = (name, domain, name_type, content, monitor, view, disabled, fallback, weight, save_recid)
+                WHERE `id` = %s
+            """, (content, monitor, view, disabled, fallback, weight, save_recid))
         else:
-            operation = """
-                INSERT INTO `records` (`name_type_id`, `content_monitor_id`, `view_id`, `disabled`, `fallback`, `weight`)
-                  SELECT
-                    (SELECT `names_types`.`id`
-                     FROM `names_types`
-                       JOIN `names` ON `names_types`.`name_id` = `names`.`id`
-                       JOIN `types` ON `names_types`.`type_value` = `types`.`value`
-                     WHERE `names`.`name` = %s
-                       AND `types`.`type` = %s) AS `name_type_id`,
-                    (SELECT `contents_monitors`.`id`
-                     FROM `contents_monitors`
-                       JOIN `contents` ON `contents_monitors`.`content_id` = `contents`.`id`
-                       JOIN `monitors` ON `contents_monitors`.`monitor_id` = `monitors`.`id`
-                     WHERE `contents`.`content` = %s
-                       AND `monitors`.`monitor` = %s) AS `content_monitor_id`,
-                    (SELECT `views`.`id`
-                     FROM `views`
-                     WHERE `views`.`view` = %s) AS `view_id`,
-                    %s AS `disabled`,
-                    %s AS `fallback`,
-                    %s AS `weight`
-            """
-            params = (name, name_type, content, monitor, view, disabled, fallback, weight)
+            record_write = ("""
+                INSERT INTO `records`
+                  (`rrset_id`, `content`, `monitor_id`, `view_id`, `disabled`, `fallback`, `weight`)
+                  SELECT LAST_INSERT_ID(), %s,
+                    (SELECT `id` FROM `monitors` WHERE `monitor` = %s),
+                    (SELECT `id` FROM `views` WHERE `view` = %s), %s, %s, %s
+            """, (content, monitor, view, disabled, fallback, weight))
 
-        count += self._execute(operation, params)
+        return self._execute_transaction([rrset_upsert, record_write])
 
-        if save_recids:
-            count += self._clean_names(save_recids.get('name_type_id'))
-            count += self._clean_contents(save_recids.get('content_monitor_id'))
-
-        return count
-
-    def save_types(self, save_recid, description, name_type, recid):
+    def save_types(self, save_recid: int, description: str, name_type: str, recid: int, **_: Any) -> int:
+        """Insert or update a type row and return the row count."""
         if save_recid:
             operation = """
                 UPDATE `types`
@@ -448,7 +351,7 @@ class W2UIDatabaseMixIn(object):
                 WHERE `value` = %s
 
             """
-            params = (recid, name_type, description, save_recid)
+            params: tuple[Any, ...] = (recid, name_type, description, save_recid)
         else:
             operation = """
                 INSERT INTO `types` (`value`, `type`, `description`)
@@ -456,29 +359,39 @@ class W2UIDatabaseMixIn(object):
             """
             params = (recid, name_type, description)
 
-        return self._execute(operation, params)
+        return self._modify(operation, params)
 
-    def save_users(self, save_recid, user, name, password, **_):
+    def save_users(self, save_recid: int, user: str, name: str, password: str, **_: Any) -> int:
+        """Insert or update a user row and return the row count."""
         if save_recid:
-            operation = """
-                UPDATE `users`
-                SET `user` = %s,
-                  `name` = %s,
-                  `password` = PASSWORD(%s)
-                WHERE `id` = %s
-
-            """
-            params = (user, name, password, save_recid)
+            if password == self.password_mask:
+                operation = """
+                    UPDATE `users`
+                    SET `user` = %s,
+                      `name` = %s
+                    WHERE `id` = %s
+                """
+                params: tuple[Any, ...] = (user, name, save_recid)
+            else:
+                operation = """
+                    UPDATE `users`
+                    SET `user` = %s,
+                      `name` = %s,
+                      `password` = %s
+                    WHERE `id` = %s
+                """
+                params = (user, name, hash_password(password), save_recid)
         else:
             operation = """
                 INSERT INTO `users` (`user`, `name`, `password`)
-                VALUES (%s, %s, PASSWORD(%s))
+                VALUES (%s, %s, %s)
             """
-            params = (user, name, password)
+            params = (user, name, hash_password(password))
 
-        return self._execute(operation, params)
+        return self._modify(operation, params)
 
-    def save_views(self, save_recid, view, rule, **_):
+    def save_views(self, save_recid: int, view: str, rule: str, **_: Any) -> int:
+        """Insert or update a view row and return the row count."""
         if save_recid:
             operation = """
                 UPDATE `views`
@@ -487,7 +400,7 @@ class W2UIDatabaseMixIn(object):
                 WHERE `id` = %s
 
             """
-            params = (view, rule, save_recid)
+            params: tuple[Any, ...] = (view, rule, save_recid)
         else:
             operation = """
                 INSERT INTO `views` (`view`, `rule`)
@@ -495,4 +408,4 @@ class W2UIDatabaseMixIn(object):
             """
             params = (view, rule)
 
-        return self._execute(operation, params)
+        return self._modify(operation, params)

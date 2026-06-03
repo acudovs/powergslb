@@ -1,100 +1,160 @@
 CREATE TABLE `users` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `user` varchar(16) NOT NULL,
+  `id` int NOT NULL AUTO_INCREMENT,
+  `user` varchar(255) NOT NULL,
   `name` varchar(255) NOT NULL,
-  `password` char(41) NOT NULL,
+  `password` varchar(255) NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `users_user_uindex` (`user`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `views` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL AUTO_INCREMENT,
   `view` varchar(255) NOT NULL,
   `rule` varchar(255) NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `views_view_uindex` (`view`),
   UNIQUE KEY `views_rule_uindex` (`rule`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE `domains` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `domain` varchar(255) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `domains_domain_uindex` (`domain`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE `names` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `domain_id` int(11) NOT NULL,
-  `name` varchar(255) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `names_domain_id_name_uindex` (`domain_id`, `name`),
-  KEY `names_name_index` (`name`),
-  CONSTRAINT `names_domains_id_fk` FOREIGN KEY (`domain_id`) REFERENCES `domains` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `types` (
-  `value` int(11) NOT NULL,
+  `value` int NOT NULL,
   `type` varchar(16) NOT NULL,
   `description` varchar(255) NOT NULL,
   PRIMARY KEY (`value`),
   UNIQUE KEY `types_type_uindex` (`type`),
   UNIQUE KEY `types_description_uindex` (`description`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE `names_types` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `name_id` int(11) NOT NULL,
-  `type_value` int(11) NOT NULL,
-  `ttl` int(11) NOT NULL,
-  `persistence` int(11) NOT NULL DEFAULT '0',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `names_types_name_id_type_value_uindex` (`name_id`,`type_value`),
-  KEY `names_types_types_value_fk` (`type_value`),
-  CONSTRAINT `names_types_names_id_fk` FOREIGN KEY (`name_id`) REFERENCES `names` (`id`),
-  CONSTRAINT `names_types_types_value_fk` FOREIGN KEY (`type_value`) REFERENCES `types` (`value`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE `contents` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `content` varchar(255) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `contents_content_uindex` (`content`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE `monitors` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL AUTO_INCREMENT,
   `monitor` varchar(255) NOT NULL,
-  `monitor_json` varchar(255) NOT NULL,
+  `monitor_json` varchar(1024) NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `monitors_monitor_uindex` (`monitor`),
-  UNIQUE KEY `monitors_monitor_json_uindex` (`monitor_json`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+  CONSTRAINT `monitors_monitor_json_check` CHECK (JSON_VALID(`monitor_json`))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE `contents_monitors` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `content_id` int(11) NOT NULL,
-  `monitor_id` int(11) NOT NULL,
+CREATE TABLE `domains` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `domain` varchar(255) NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `contents_monitors_content_id_monitor_id_uindex` (`content_id`,`monitor_id`),
-  KEY `contents_monitors_monitors_id_fk` (`monitor_id`),
-  CONSTRAINT `contents_monitors_contents_id_fk` FOREIGN KEY (`content_id`) REFERENCES `contents` (`id`),
-  CONSTRAINT `contents_monitors_monitors_id_fk` FOREIGN KEY (`monitor_id`) REFERENCES `monitors` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+  UNIQUE KEY `domains_domain_uindex` (`domain`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- ttl and persistence are RRset properties and live here, so per-record divergence is unrepresentable.
+-- name is relative to the zone: '@' for the apex, else the labels left of the zone.
+CREATE TABLE `rrsets` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `domain_id` int NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `type_value` int NOT NULL,
+  `ttl` int unsigned NOT NULL,
+  `persistence` tinyint unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `rrsets_domain_id_name_type_value_uindex` (`domain_id`, `name`, `type_value`),
+  KEY `rrsets_type_value_index` (`type_value`),
+  CONSTRAINT `rrsets_domains_id_fk` FOREIGN KEY (`domain_id`) REFERENCES `domains` (`id`),
+  CONSTRAINT `rrsets_types_value_fk` FOREIGN KEY (`type_value`) REFERENCES `types` (`value`),
+  CONSTRAINT `rrsets_soa_apex_check` CHECK (`type_value` <> 6 OR `name` = '@'),
+  CONSTRAINT `rrsets_ttl_check` CHECK (`ttl` <= 2147483647),
+  CONSTRAINT `rrsets_persistence_check` CHECK (`persistence` <= 128)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- A record is one answer inside a rrset. The rrset FK restricts: a populated rrset cannot be deleted;
+-- records are deleted first, and the GC triggers then collect the empty rrset.
 CREATE TABLE `records` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `name_type_id` int(11) NOT NULL,
-  `content_monitor_id` int(11) NOT NULL,
-  `view_id` int(11) NOT NULL,
-  `disabled` int(11) NOT NULL DEFAULT '0',
-  `fallback` int(11) NOT NULL DEFAULT '0',
-  `weight` int(11) NOT NULL DEFAULT '0',
+  `id` int NOT NULL AUTO_INCREMENT,
+  `rrset_id` int NOT NULL,
+  `content` varchar(255) NOT NULL,
+  `monitor_id` int NOT NULL,
+  `view_id` int NOT NULL,
+  `disabled` tinyint(1) NOT NULL DEFAULT 0,
+  `fallback` tinyint(1) NOT NULL DEFAULT 0,
+  `weight` int unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `records_name_type_id_content_monitor_id_view_id_uindex` (`name_type_id`,`content_monitor_id`, `view_id`),
-  KEY `records_contents_monitors_id_fk` (`content_monitor_id`),
-  KEY `records_view_id_fk` (`view_id`),
-  CONSTRAINT `records_names_types_id_fk` FOREIGN KEY (`name_type_id`) REFERENCES `names_types` (`id`),
-  CONSTRAINT `records_contents_monitors_id_fk` FOREIGN KEY (`content_monitor_id`) REFERENCES `contents_monitors` (`id`),
+  UNIQUE KEY `records_rrset_id_view_id_content_uindex` (`rrset_id`, `view_id`, `content`),
+  KEY `records_monitor_id_index` (`monitor_id`),
+  KEY `records_view_id_index` (`view_id`),
+  CONSTRAINT `records_rrsets_id_fk` FOREIGN KEY (`rrset_id`) REFERENCES `rrsets` (`id`),
+  CONSTRAINT `records_monitors_id_fk` FOREIGN KEY (`monitor_id`) REFERENCES `monitors` (`id`),
   CONSTRAINT `records_views_id_fk` FOREIGN KEY (`view_id`) REFERENCES `views` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DELIMITER //
+
+CREATE PROCEDURE `rrset_guard`(IN `p_rrset_id` INT, IN `p_domain_id` INT,
+                               IN `p_name` VARCHAR(255), IN `p_type_value` INT)
+BEGIN
+  IF `p_type_value` = 5 AND EXISTS (SELECT 1 FROM `rrsets`
+      WHERE `domain_id` = `p_domain_id` AND `name` = `p_name` AND `id` <> COALESCE(`p_rrset_id`, 0)) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CNAME rrset conflicts with other rrsets at this name';
+  END IF;
+
+  IF `p_type_value` <> 5 AND EXISTS (SELECT 1 FROM `rrsets`
+      WHERE `domain_id` = `p_domain_id` AND `name` = `p_name` AND `type_value` = 5
+        AND `id` <> COALESCE(`p_rrset_id`, 0)) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'name already has a CNAME rrset';
+  END IF;
+
+  IF `p_type_value` = 6 AND `p_rrset_id` IS NOT NULL
+     AND (SELECT COUNT(*) FROM `records` WHERE `rrset_id` = `p_rrset_id`) > 1 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'SOA rrset allows exactly one record';
+  END IF;
+END//
+
+CREATE TRIGGER `rrsets_before_insert` BEFORE INSERT ON `rrsets` FOR EACH ROW
+  CALL `rrset_guard`(NULL, NEW.`domain_id`, NEW.`name`, NEW.`type_value`)//
+
+CREATE TRIGGER `rrsets_before_update` BEFORE UPDATE ON `rrsets` FOR EACH ROW
+  CALL `rrset_guard`(OLD.`id`, NEW.`domain_id`, NEW.`name`, NEW.`type_value`)//
+
+CREATE TRIGGER `records_before_insert` BEFORE INSERT ON `records` FOR EACH ROW
+BEGIN
+  DECLARE `v_type` INT;
+  SELECT `type_value` INTO `v_type` FROM `rrsets` WHERE `id` = NEW.`rrset_id`;
+
+  IF `v_type` = 6 AND EXISTS (SELECT 1 FROM `records` WHERE `rrset_id` = NEW.`rrset_id`) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'SOA rrset allows exactly one record';
+  END IF;
+
+  IF `v_type` = 5 AND EXISTS (SELECT 1 FROM `records`
+      WHERE `rrset_id` = NEW.`rrset_id` AND `view_id` = NEW.`view_id`) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CNAME rrset allows one record per view';
+  END IF;
+END//
+
+CREATE TRIGGER `records_before_update` BEFORE UPDATE ON `records` FOR EACH ROW
+BEGIN
+  DECLARE `v_type` INT;
+  SELECT `type_value` INTO `v_type` FROM `rrsets` WHERE `id` = NEW.`rrset_id`;
+
+  IF `v_type` = 6 AND NEW.`rrset_id` <> OLD.`rrset_id`
+     AND EXISTS (SELECT 1 FROM `records` WHERE `rrset_id` = NEW.`rrset_id`) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'SOA rrset allows exactly one record';
+  END IF;
+
+  IF `v_type` = 5
+     AND (NEW.`rrset_id` <> OLD.`rrset_id` OR NEW.`view_id` <> OLD.`view_id`)
+     AND EXISTS (SELECT 1 FROM `records`
+                 WHERE `rrset_id` = NEW.`rrset_id` AND `view_id` = NEW.`view_id`
+                   AND `id` <> NEW.`id`) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CNAME rrset allows one record per view';
+  END IF;
+END//
+
+CREATE TRIGGER `records_after_delete` AFTER DELETE ON `records` FOR EACH ROW
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM `records` WHERE `rrset_id` = OLD.`rrset_id`) THEN
+    DELETE FROM `rrsets` WHERE `id` = OLD.`rrset_id`;
+  END IF;
+END//
+
+CREATE TRIGGER `records_after_update` AFTER UPDATE ON `records` FOR EACH ROW
+BEGIN
+  IF NEW.`rrset_id` <> OLD.`rrset_id`
+     AND NOT EXISTS (SELECT 1 FROM `records` WHERE `rrset_id` = OLD.`rrset_id`) THEN
+    DELETE FROM `rrsets` WHERE `id` = OLD.`rrset_id`;
+  END IF;
+END//
+
+DELIMITER ;

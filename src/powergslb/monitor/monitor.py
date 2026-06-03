@@ -1,184 +1,183 @@
-import ast
+"""Health check orchestration."""
+
+import json
 import logging
 import time
-
-from powergslb.monitor.check import CheckThread
-from powergslb.monitor.status import get_status, init_status
+from typing import Any
 
 import powergslb.database
-import powergslb.system
+from powergslb.monitor.check import Check, CheckThread
+from powergslb.monitor.status import StatusRegistry
+from powergslb.monitor.thread import AbstractThread
 
-__all__ = ['MonitorThread']
+__all__ = ['MonitorManager']
 
 
-class MonitorThread(powergslb.system.AbstractThread):
+class MonitorManager(AbstractThread):
+    """Polls the database for monitor config and reconciles one CheckThread per content id.
+
+    Unchanged checks keep their running thread (preserving rise/fall counters); removed or changed ones
+    are stopped and replaced.
+
+    :param monitor_config: The [monitor] section; update_interval is the poll period, the rest tunes the check types.
+    :param database_config: mysql.connector connect kwargs.
+    :param status_registry: Shared registry the check threads write health status to.
     """
-    PowerGSLB monitor thread
-    """
-    _check_params_types = {
-        'exec': {'type': str, 'args': list, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
-        'icmp': {'type': str, 'ip': str, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
-        'http': {'type': str, 'url': str, 'interval': int, 'timeout': int, 'fall': int, 'rise': int},
-        'tcp': {'type': str, 'ip': str, 'port': int, 'interval': int, 'timeout': int, 'fall': int, 'rise': int}
-    }
 
-    def __init__(self, **kwargs):
-        super(MonitorThread, self).__init__(**kwargs)
-        self._check_threads = []
-        self._checks = []
-        self._refresh_threads = False
-        self.sleep_interval = powergslb.system.get_config().get('monitor', 'update_interval')
+    def __init__(self,
+                 monitor_config: dict[str, Any],
+                 database_config: dict[str, Any],
+                 status_registry: StatusRegistry,
+                 **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._threads: dict[int, CheckThread] = {}
+        self._database_config = database_config
+        self._status_registry = status_registry
+        self.sleep_interval = monitor_config.pop('update_interval', 60)
+        if self.sleep_interval < 1:
+            raise ValueError('update_interval must be >= 1')
+        Check.configure(monitor_config)
 
-        init_status()
-
-    def _clean_status(self):
-        check_ids = set(check['id'] for check in self._checks)
-        stale_ids = get_status().difference(check_ids)
-
+    def _clean_status(self, valid_ids: set[int]) -> None:
+        stale_ids = self._status_registry.retain(valid_ids)
         if stale_ids:
-            logging.debug('{}: clean status for records: {}'.format(
-                type(self).__name__, ', '.join(map(str, stale_ids))))
-            get_status().intersection_update(check_ids)
+            logging.debug('clean status for records: %s', ', '.join(map(str, stale_ids)))
 
-    def _parse(self, check):
-        parse_status = False
+    @classmethod
+    def build_check(cls, check: dict[str, Any]) -> 'Check':
+        """Parse one raw check row and build its Check.
+
+        :returns: The Check.
+        :raises ValueError: When a check is malformed or invalid.
+        """
+        return Check.create(cls._parse(check))
+
+    @classmethod
+    def _parse(cls, check: dict[str, Any]) -> dict[str, Any]:
+        """Parse 'monitor_json' as JSON, then substitute the record content into its string values.
+
+        Parsing happens before substitution, so a literal '%', '$' or brace anywhere in the template is data, never a
+        format directive, and a content value containing a quote cannot corrupt the JSON. Only the exact token
+        '${content}' is replaced (see _substitute); nothing else is escaped or interpreted.
+
+        :raises ValueError: When 'monitor_json' is not a JSON object (json.JSONDecodeError is a ValueError subclass).
+        """
+        template = json.loads(check['monitor_json'])
+        if not isinstance(template, dict):
+            raise ValueError('monitor_json must be a JSON object')
+        return cls._substitute(template, '${content}', check['content'])
+
+    @classmethod
+    def _substitute(cls, value: Any, token: str, replacement: str) -> Any:
+        """Replace every occurrence of token with replacement in every string value, recursing into lists and dicts.
+
+        Non-string values pass through unchanged.
+        """
+        if isinstance(value, str):
+            return value.replace(token, replacement)
+        if isinstance(value, list):
+            return [cls._substitute(item, token, replacement) for item in value]
+        if isinstance(value, dict):
+            return {key: cls._substitute(item, token, replacement) for key, item in value.items()}
+        return value
+
+    def _desired_checks(self) -> 'dict[int, Check] | None':
+        """Build the desired checks keyed by content id; return None when the database is unavailable."""
+        logging.debug('update checks from the database')
         try:
-            check['monitor_json'] = dict(ast.literal_eval(check['monitor_json'] % check))
-            parse_status = True
-        except (SyntaxError, ValueError) as e:
-            logging.error('{}: content id {}: check parsing error: {}: {}'.format(
-                type(self).__name__, check['id'], type(e).__name__, e))
-
-        return parse_status
-
-    def _shutdown_check_threads(self):
-        if not self._check_threads:
-            logging.info('{}: check threads are not running'.format(type(self).__name__))
-            return
-
-        logging.debug('{}: shutdown threads: {}'.format(type(self).__name__, self._check_threads))
-
-        alive_threads = []
-        shutdown_timeout = 0
-
-        for check_thread in self._check_threads:
-            if check_thread.is_alive():
-                check_thread.shutdown()
-                alive_threads.append(check_thread)
-                if check_thread.sleep_interval > shutdown_timeout:
-                    shutdown_timeout = check_thread.sleep_interval
-
-        shutdown_time = time.time()
-        shutdown_timeout *= 2
-
-        while alive_threads and time.time() - shutdown_time < shutdown_timeout:
-            time.sleep(1)
-            alive_threads = [thread for thread in alive_threads if thread.is_alive()]
-
-        self._check_threads = alive_threads
-
-    def _start_check_threads(self):
-        if self._check_threads:
-            logging.error('{}: check threads already running: {}'.format(type(self).__name__, self._check_threads))
-            return
-
-        check_threads = []
-        for check in self._checks:
-            thread_name = 'Check-{}'.format(check['id'])
-            check_thread = CheckThread(check['monitor_json'], check['id'], name=thread_name)
-            check_thread.start()
-            check_threads.append(check_thread)
-
-        logging.debug('{}: started threads: {}'.format(type(self).__name__, check_threads))
-
-        self._check_threads = check_threads
-
-    def _update_checks(self):
-        logging.info('{}: update checks from the database'.format(type(self).__name__))
-        refresh_threads = False
-        try:
-            with powergslb.database.Database(**powergslb.system.get_config().items('database')) as database:
+            with powergslb.database.Database(**self._database_config) as database:
                 raw_checks = database.gslb_checks()
         except powergslb.database.Database.Error as e:
-            logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
-        else:
-            checks = [check for check in raw_checks if self._parse(check) and self._validate(check)]
-            if self._checks != checks:
-                logging.debug('{}: checks updated: {}'.format(type(self).__name__, checks))
-                self._checks = checks
-                refresh_threads = True
+            logging.error('%s: %s', type(e).__name__, e)
+            return None
 
-        self._refresh_threads = refresh_threads
+        desired: dict[int, Check] = {}
+        for raw in raw_checks:
+            try:
+                check = self.build_check(raw)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logging.error('content id %s: %s: %s', raw['id'], type(e).__name__, e)
+                continue
+            if not check.skip:
+                desired[raw['id']] = check
+        return desired
 
-    def _validate(self, check):
-        validate_status = False
-        try:
-            monitor_type = check['monitor_json']['type']
-
-            if not monitor_type:
-                return validate_status
-
-            check_params = set(self._check_params_types[monitor_type])
-            monitor_params = set(check['monitor_json'])
-
-            if check_params != monitor_params:
-                missing_params = check_params.difference(monitor_params)
-                unexpected_params = monitor_params.difference(check_params)
-
-                if missing_params:
-                    raise Exception("{}: content id {}: missing check parameters: {}".format(
-                        type(self).__name__, check['id'], ', '.join(map(str, missing_params))))
-
-                if unexpected_params:
-                    raise Exception("{}: content id {}: unexpected check parameters: {}".format(
-                        type(self).__name__, check['id'], ', '.join(map(str, unexpected_params))))
-
-            for param, param_type in self._check_params_types[monitor_type].items():
-                if type(check['monitor_json'][param]) != param_type:
-                    raise Exception("{}: content id {}: check parameter '{}' invalid".format(
-                        type(self).__name__, check['id'], param))
-
-        except KeyError as e:
-            logging.error("{}: content id {}: check parameter '{}' missing".format(
-                type(self).__name__, check['id'], e.message))
-
-        except Exception as e:
-            logging.error(e)
-        else:
-            if check['monitor_json']['timeout'] > check['monitor_json']['interval']:
-                logging.warning("{}: content id {}: check 'timeout' is greater than 'interval': fixed".format(
-                    type(self).__name__, check['id']))
-                check['monitor_json']['timeout'] = check['monitor_json']['interval']
-
-            validate_status = True
-
-        return validate_status
-
-    def _verify_check_threads(self):
-        if self._refresh_threads:
+    @staticmethod
+    def _stop_threads(threads: list[CheckThread]) -> None:
+        """Signal every thread in the list, then wait briefly for a clean exit; stragglers are abandoned."""
+        if not threads:
             return
 
-        check_ids = set(check['id'] for check in self._checks)
-        check_thread_ids = set(thread.content_id for thread in self._check_threads if thread.is_alive())
+        logging.debug('shutdown threads: %s', threads)
 
-        if check_ids != check_thread_ids:
-            running_thread_ids = check_thread_ids.difference(check_ids)
-            stopped_thread_ids = check_ids.difference(check_thread_ids)
+        alive_threads: list[CheckThread] = []
+        shutdown_timeout: float = 0
 
-            if running_thread_ids:
-                logging.error('{}: unexpectedly running threads: {}'.format(
-                    type(self).__name__, ', '.join(map('Check-{}'.format, running_thread_ids))))
+        for thread in threads:
+            if thread.is_alive():
+                thread.shutdown()  # signal all first (no wait) so the checks stop in parallel
+                alive_threads.append(thread)
+                shutdown_timeout = max(shutdown_timeout, thread.check.timeout)
 
-            if stopped_thread_ids:
-                logging.error('{}: unexpectedly stopped threads: {}'.format(
-                    type(self).__name__, ', '.join(map('Check-{}'.format, stopped_thread_ids))))
+        # Join each on its stop event, sharing a 2 * timeout budget; a thread that outlives it is abandoned.
+        deadline = time.monotonic() + 2 * shutdown_timeout
+        for thread in alive_threads:
+            thread.shutdown(max(0.0, deadline - time.monotonic()))
+        alive_threads = [thread for thread in alive_threads if thread.is_alive()]
 
-            self._refresh_threads = True
+        if alive_threads:
+            logging.warning('abandoning straggling check threads: %s', alive_threads)
 
-    def task(self):
-        self._update_checks()
-        self._verify_check_threads()
-        if self._refresh_threads:
-            self._shutdown_check_threads()
-            self._clean_status()
-            self._start_check_threads()
+    def _start_thread(self, content_id: int, check: Check) -> CheckThread:
+        status_writer = self._status_registry.get_writer(content_id)
+        thread = CheckThread(check, status_writer, name=f'Check-{content_id}')
+        thread.start()
+        return thread
+
+    def _reconcile(self, desired: dict[int, Check]) -> None:
+        """Diff the running threads against the desired checks.
+
+        Stops removed, changed, or dead threads, starts new or replacement ones (with fresh rise/fall counters),
+        and drops stale status entries.
+        """
+        to_stop: list[CheckThread] = []
+        to_start: dict[int, Check] = {}
+
+        for content_id, thread in list(self._threads.items()):
+            if content_id not in desired:
+                to_stop.append(thread)
+            elif not thread.is_alive():
+                logging.error('Check-%d: unexpectedly stopped', content_id)
+                to_stop.append(thread)
+                to_start[content_id] = desired[content_id]
+            elif thread.check != desired[content_id]:
+                to_stop.append(thread)
+                to_start[content_id] = desired[content_id]
+
+        for content_id, check in desired.items():
+            if content_id not in self._threads:
+                to_start[content_id] = check
+
+        self._stop_threads(to_stop)
+        for thread in to_stop:
+            self._threads.pop(thread.content_id, None)
+
+        for content_id, check in to_start.items():
+            self._threads[content_id] = self._start_thread(content_id, check)
+
+        if to_stop or to_start:
+            logging.debug('threads updated, running: %s', list(self._threads.keys()))
+
+        self._clean_status(set(desired))
+
+    def shutdown(self, timeout: float = 0) -> None:
+        """Signal the check threads without joining them, then stop the monitor itself within timeout."""
+        for thread in list(self._threads.values()):  # snapshot: _reconcile mutates _threads
+            thread.shutdown()  # signal only (no wait)
+        super().shutdown(timeout)
+
+    def task(self) -> None:
+        """Refresh the desired checks from the database and reconcile the running threads."""
+        desired = self._desired_checks()
+        if desired is not None:
+            self._reconcile(desired)

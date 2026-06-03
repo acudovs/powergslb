@@ -1,4 +1,9 @@
+"""MySQL/MariaDB connection and statement execution."""
+
+import contextlib
 import logging
+from collections.abc import Iterator
+from typing import Any, Self
 
 import mysql.connector
 
@@ -9,39 +14,76 @@ __all__ = ['MySQLDatabase']
 
 
 class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.MySQLConnection):
-    """
-    MySQLDatabase class
+    """MySQL/MariaDB connection with the PowerDNS and w2ui query mixins; usable as a context manager.
+
+    Always operates with autocommit on (not user-configurable): the code never calls commit(), so every
+    statement must persist on its own.
+
+    :param kwargs: mysql.connector connect arguments (database, user, password, host, port, unix_socket, ...).
     """
     Error = mysql.connector.Error
 
-    def __enter__(self):
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs['autocommit'] = True
+        super().__init__(**kwargs)
+
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, *_: Any) -> None:
         self.disconnect()
 
     @staticmethod
-    def join_operation(operation):
+    def join_operation(operation: str) -> str:
+        """Collapse a multiline SQL string into a single space-separated line."""
         return ' '.join(filter(None, (line.strip() for line in operation.splitlines())))
 
-    def _execute(self, operation, params=()):
+    @contextlib.contextmanager
+    def _cursor(self, operation: str, params: tuple[Any, ...]) -> Iterator[Any]:
+        """Run one SQL statement on a fresh buffered cursor and yield it, closing it on exit."""
         operation = self.join_operation(operation)
         if params:
-            logging.debug('{}: "{}" % {}'.format(type(self).__name__, operation, params))
+            logging.debug('"%s" %% %s', operation, params)
         else:
-            logging.debug('{}: "{}"'.format(type(self).__name__, operation))
+            logging.debug('"%s"', operation)
 
         cursor = self.cursor(buffered=True)
         try:
             cursor.execute(operation, params)
-            if operation.startswith('SELECT'):
-                logging.debug('{}: {} rows returned'.format(type(self).__name__, cursor.rowcount))
-                column_names = [description[0] for description in cursor.description]
-                result = [dict(zip(column_names, row)) for row in cursor]
-            else:
-                logging.debug('{}: {} rows affected'.format(type(self).__name__, cursor.rowcount))
-                result = cursor.rowcount
+            yield cursor
         finally:
             cursor.close()
 
-        return result
+    def _select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        """Execute a result-set statement (SELECT, WITH...SELECT, SHOW, ...) and return its rows as dicts."""
+        with self._cursor(operation, params) as cursor:
+            logging.debug('%s rows returned', cursor.rowcount)
+            column_names = [column[0] for column in cursor.description]
+            return [dict(zip(column_names, row)) for row in cursor]
+
+    def _modify(self, operation: str, params: tuple[Any, ...] = ()) -> int:
+        """Execute a write statement (INSERT, UPDATE, DELETE, ...) and return the affected row count."""
+        with self._cursor(operation, params) as cursor:
+            logging.debug('%s rows affected', cursor.rowcount)
+            return cursor.rowcount
+
+    def _execute_transaction(self, statements: list[tuple[str, tuple[Any, ...]]]) -> int:
+        """Run statements in one transaction on this connection; return the summed affected-row count.
+
+        autocommit stays on for every single-statement path; this executor suspends it for its own duration and
+        restores it in finally, so an exception cannot return a connection to the pool mid-transaction. All
+        statements run on this connection, so LAST_INSERT_ID() carries across them.
+        """
+        self.autocommit = False
+        total = 0
+        try:
+            for operation, params in statements:
+                total += self._modify(operation, params)
+            self.commit()
+        except Exception:
+            self.rollback()
+            raise
+        finally:
+            self.autocommit = True
+
+        return total

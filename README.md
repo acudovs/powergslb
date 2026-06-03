@@ -1,151 +1,508 @@
 # PowerGSLB - PowerDNS Remote GSLB Backend
 
-PowerGSLB is a simple DNS based Global Server Load Balancing (GSLB) solution.
-
+PowerGSLB is a DNS-based Global Server Load Balancing (GSLB) solution built as a PowerDNS Authoritative Server
+[Remote Backend](https://doc.powerdns.com/authoritative/backends/remote.html). It continuously health-checks the
+endpoints behind your DNS records and returns only the live ones, honoring weighted priorities, client-IP / subnet
+persistence, DNS views, and fallback rules.
 
 ## Table of Contents
 
 * [Main features](#main-features)
-* [Database diagram](#database-diagram)
-* [Class diagram](#class-diagram)
-* [Web based administration interface](#web-based-administration-interface)
-* [Installation on CentOS 7](#installation-on-centos-7)
-  * [Setup PowerGSLB and PowerDNS](#setup-powergslb-and-powerdns)
-  * [Setup MariaDB](#setup-mariadb)
-  * [Start services](#start-services)
-  * [Test PowerGSLB](#test-powergslb)
-  * [Web based administration interface](#web-based-administration-interface-1)
+* [Architecture](#architecture)
+* [Quick start with the published Docker image](#quick-start-with-the-published-docker-image)
+* [Building the Docker image](#building-the-docker-image)
+* [Manual setup](#manual-setup)
+* [Configuration](#configuration)
+* [Database](#database)
+* [Web administration interface](#web-administration-interface)
 * [Health checks](#health-checks)
-  * [Mandatory parameters](#mandatory-parameters)
-  * [Exec parameters](#exec-parameters)
-  * [ICMP parameters](#icmp-parameters)
-  * [HTTP parameters](#http-parameters)
-  * [TCP parameters](#tcp-parameters)
-* [Building PowerGSLB RPM packages](#building-powergslb-rpm-packages)
-* [Using PowerGSLB Docker image](#using-powergslb-docker-image)
-* [Building PowerGSLB Docker image](#building-powergslb-docker-image)
-
+    * [General parameters](#general-parameters)
+    * [Exec parameters](#exec-parameters)
+    * [ICMP parameters](#icmp-parameters)
+    * [HTTP parameters](#http-parameters)
+    * [TCP parameters](#tcp-parameters)
+* [Tests](#tests)
+* [License](#license)
 
 ## Main features
 
 * Quick installation and setup
-* Written in Python 2.7
-* Built as PowerDNS Authoritative Server [Remote Backend](https://doc.powerdns.com/3/authoritative/backend-remote/)
-* Web based administration interface using [w2ui](http://w2ui.com/)
+* Written in Python 3.12
+* Built as PowerDNS Authoritative Server [Remote Backend](https://doc.powerdns.com/authoritative/backends/remote.html)
+* Web-based administration interface using [w2ui](https://github.com/vitmalina/w2ui)
 * HTTPS support for the web server
 * DNS GSLB configuration stored in a MySQL / MariaDB database
-* Master-Slave DNS GSLB using native MySQL / MariaDB [replication](https://dev.mysql.com/doc/refman/5.5/en/replication.html)
-* Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster](http://galeracluster.com/)
-* Modular architecture
-* Multithreaded architecture
+* Master-Slave DNS GSLB using native MySQL / MariaDB [replication](https://mariadb.com/kb/en/standard-replication/)
+* Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster](https://galeracluster.com/)
+* Modular and multithreaded architecture
 * Systemd status and watchdog support
 * Extendable health checks:
     * ICMP ping
     * TCP connect
     * HTTP request
     * Arbitrary command execution
-* Fallback if all the checks failed
+* Fallback if all the checks fail
 * Weighted (priority) records
-* Per record client IP / subnet persistence
+* Per-record client IP / subnet persistence
 * DNS GSLB views support
 * All-in-one Docker image
 
+## Architecture
 
-## Database diagram
+PowerGSLB runs a fixed set of cooperating service threads under a systemd-aware supervisor:
 
-![](https://github.com/AlekseyChudov/powergslb/blob/master/images/database.png?raw=true)
+* **Monitor** - periodically reads the health-check configuration from the database, runs one check thread per
+  monitored record, and maintains the in-memory set of records that are currently down. Rise / fall counters debounce
+  flapping endpoints.
+* **DNS interface** (default `127.0.0.1:8080`, plain HTTP) - implements the PowerDNS Remote Backend protocol. PowerDNS
+  forwards each query here; PowerGSLB filters the candidate records by query type, health status, view, weight,
+  persistence, and fallback rules, and returns a JSON DNS response.
+* **Admin interface** (default `0.0.0.0:443`, HTTPS) - the web management UI and its CRUD API. Authenticates via HTTP
+  Basic Auth against the database (crypt(3) SHA-512 hashes, verified in constant time).
 
+The two HTTP surfaces are served by separate handler classes on separate ports, so the admin API is never reachable on
+the DNS port and vice versa. The supervisor integrates with systemd (`READY=1`, watchdog, `STOPPING=1`) and shuts the
+threads down cooperatively on `SIGTERM` / `SIGINT`.
 
-## Class diagram
+### Class diagram
 
-![](https://github.com/AlekseyChudov/powergslb/blob/master/images/class-diagram.png?raw=true)
+<details>
+<summary>Click to expand the class diagram</summary>
 
+The diagram below maps the application classes and their relationships. Standard-library and third-party base classes
+are marked `<<stdlib>>` / `<<builtin>>`; the two helper modules that hold free functions are shown as `<<module>>`
+pseudo-classes.
 
-## Web based administration interface
+```mermaid
+classDiagram
+    direction TB
 
-Status grid
-![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-status.png?raw=true)
+    %% ===== Entry point =====
+    class PowerGSLB {
+        +main()$ None
+    }
 
-Advanced search
-![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-search.png?raw=true)
+    %% ===== system =====
+    class Config {
+        -dict _data
+        +get(section, option, default) Any
+        +items(section) dict
+    }
+    class _Section {
+        -Config _config
+        -str _section
+        +get(option, default) Any
+        +pop(option, default) Any
+    }
+    class SystemService {
+        +Sequence~ServiceThread~ service_threads
+        +float sleep_interval
+        +float shutdown_timeout
+        +start() None
+        +systemd_notify(status, unset)$ None
+        +watchdog_interval(default)$ float
+    }
+    class ServiceThread {
+        <<Protocol>>
+        +str name
+        +start() None
+        +is_alive() bool
+        +shutdown(timeout) None
+    }
+    class password {
+        <<module>>
+        +hash_password(password)$ str
+        +verify_password(password, stored)$ bool
+    }
 
-Add new record
-![](https://github.com/AlekseyChudov/powergslb/blob/master/images/web-form.png?raw=true)
+    %% ===== monitor =====
+    class AbstractThread {
+        <<abstract>>
+        +float sleep_interval
+        +run() None
+        +shutdown(timeout) None
+        +task()* None
+    }
+    class MonitorManager {
+        -dict~int,CheckThread~ _threads
+        -StatusRegistry _status_registry
+        +build_check(check)$ Check
+        +task() None
+        +shutdown(timeout) None
+    }
+    class StatusRegistry {
+        -set~int~ _status
+        +add(id) None
+        +remove(id) None
+        +is_down(id) bool
+        +get_writer(id) StatusWriter
+        +retain(valid_ids) set
+    }
+    class StatusWriter {
+        -StatusRegistry _registry
+        +int content_id
+        +set_down() None
+        +set_up() None
+        +is_down() bool
+    }
+    class CheckThread {
+        +Check check
+        +StatusWriter status_writer
+        +content_id() int
+        +task() None
+    }
 
-[More images](https://github.com/AlekseyChudov/powergslb/tree/master/images)
+    %% ===== monitor/check =====
+    class Check {
+        <<abstract dataclass>>
+        -dict _registry$
+        +str name$
+        +bool skip$
+        +int interval
+        +int timeout
+        +int fall
+        +int rise
+        +create(spec)$ Check
+        +configure(options)$ None
+        +execute()* bool
+    }
+    class NoCheck {
+        +name = "none"
+        +skip = True
+        +execute() bool
+    }
+    class IcmpCheck {
+        +name = "icmp"
+        +bool privileged$
+        +str ip
+        +execute() bool
+    }
+    class TcpCheck {
+        +name = "tcp"
+        +str ip
+        +int port
+        +execute() bool
+    }
+    class HttpCheck {
+        +name = "http"
+        +str url
+        +str method
+        +int expected_status
+        +str body_match
+        +bool tls_verify
+        +str host
+        +execute() bool
+    }
+    class ExecCheck {
+        +name = "exec"
+        +list~str~ args
+        +int expected_code
+        +str output_match
+        +bool redirect_error
+        +execute() bool
+    }
 
+    %% ===== server/http =====
+    class HTTPServerManager {
+        +str address
+        +int port
+        +bool ssl
+        +str root
+        +float keep_alive_timeout
+        -type~HTTPRequestHandler~ _handler
+        +run() None
+        +shutdown(timeout) None
+    }
+    class _ThreadingHTTPServer {
+    }
+    class HTTPRequestHandler {
+        <<abstract>>
+        +str route$
+        +Database database
+        +StatusRegistry status_registry
+        +bytes body
+        +handle() None
+        +do_GET() None
+        +do_HEAD() None
+        +do_POST() None
+        +_handle_route()* None
+    }
+    class PowerDNSRequestHandler {
+        +route = "dns"
+        +content() str
+    }
+    class AdminRequestHandler {
+        +route = "admin"
+        -dict _commands$
+        -set _data_tables$
+        -dict _search_functions$
+        +content() str
+    }
+    class queryparser {
+        <<module>>
+        +parse_query(query_string)$ dict
+    }
+    class QueryParserError {
+        <<Exception>>
+    }
 
-## Installation on CentOS 7
+    %% ===== database =====
+    class MySQLDatabase {
+        +Error
+        +join_operation(op)$ str
+        -_select(op, params) list
+        -_modify(op, params) int
+        -_execute_transaction(stmts) int
+        +__enter__() Self
+        +__exit__() None
+    }
+    class PowerDNSDatabaseMixIn {
+        <<abstract>>
+        +gslb_checks() list
+        +gslb_domains(include_disabled) list
+        +gslb_records(qname, qtype) list
+    }
+    class W2UIDatabaseMixIn {
+        <<abstract>>
+        +str password_mask$
+        +check_user(user, password) list
+        +get_*(recid) list
+        +save_*(...) int
+        +delete_*(ids) int
+    }
 
-### Setup PowerGSLB and PowerDNS
+    %% ===== stdlib bases =====
+    class Thread { <<stdlib>> }
+    class SimpleHTTPRequestHandler { <<stdlib>> }
+    class HTTPServer { <<stdlib>> }
+    class ThreadingMixIn { <<stdlib>> }
+    class MySQLConnection { <<stdlib>> }
+    class dict { <<builtin>> }
 
-```shell
-yum -y install epel-release
-yum -y update
-yum -y install python2-pip
+    %% ===== Inheritance =====
+    dict <|-- _Section
+    Thread <|-- AbstractThread
+    AbstractThread <|-- MonitorManager
+    AbstractThread <|-- CheckThread
+    Check <|-- NoCheck
+    Check <|-- IcmpCheck
+    Check <|-- TcpCheck
+    Check <|-- HttpCheck
+    Check <|-- ExecCheck
+    Thread <|-- HTTPServerManager
+    ThreadingMixIn <|-- _ThreadingHTTPServer
+    HTTPServer <|-- _ThreadingHTTPServer
+    SimpleHTTPRequestHandler <|-- HTTPRequestHandler
+    HTTPRequestHandler <|-- PowerDNSRequestHandler
+    HTTPRequestHandler <|-- AdminRequestHandler
+    PowerDNSDatabaseMixIn <|-- MySQLDatabase
+    W2UIDatabaseMixIn <|-- MySQLDatabase
+    MySQLConnection <|-- MySQLDatabase
+    ServiceThread <|.. MonitorManager : satisfies
+    ServiceThread <|.. HTTPServerManager : satisfies
 
-pip install pyping
-
-VERSION=1.7.4
-yum -y --setopt=tsflags= install \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.noarch.rpm"
-
-sed -i 's/^password = .*/password = your-database-password-here/g' /etc/powergslb/powergslb.conf
-
-cp /etc/pdns/pdns.conf /etc/pdns/pdns.conf~
-cp "/usr/share/doc/powergslb-pdns-$VERSION/pdns/pdns.conf" /etc/pdns/pdns.conf
+    %% ===== Associations / composition =====
+    PowerGSLB ..> Config : creates
+    PowerGSLB ..> StatusRegistry : creates
+    PowerGSLB ..> MonitorManager : creates
+    PowerGSLB ..> HTTPServerManager : creates
+    PowerGSLB ..> SystemService : creates
+    Config ..> _Section : builds
+    SystemService o--> "*" ServiceThread : supervises
+    MonitorManager o--> "*" CheckThread : manages
+    MonitorManager --> StatusRegistry
+    MonitorManager ..> Check : create
+    CheckThread --> Check
+    CheckThread --> StatusWriter
+    StatusRegistry ..> StatusWriter : creates
+    StatusWriter --> StatusRegistry
+    HTTPServerManager o--> _ThreadingHTTPServer : owns
+    HTTPServerManager --> StatusRegistry
+    HTTPServerManager ..> HTTPRequestHandler : instantiates per request
+    HTTPRequestHandler --> MySQLDatabase : per-connection
+    HTTPRequestHandler --> StatusRegistry
+    AdminRequestHandler ..> MonitorManager : build_check (validate)
+    AdminRequestHandler ..> queryparser : parse_query
+    queryparser ..> QueryParserError : raises
+    W2UIDatabaseMixIn ..> password : hash / verify
 ```
 
-### Setup MariaDB
+</details>
+
+## Quick start with the published Docker image
+
+The fastest way to try PowerGSLB is the all-in-one image, which bundles PowerGSLB, PowerDNS Authoritative Server,
+MariaDB, and systemd on a single RHEL UBI 10 base.
 
 ```shell
-yum -y install mariadb-server
+docker pull docker.io/acudovs/powergslb:2.0.0
 
-sed -i '/\[mysqld\]/a bind-address=127.0.0.1\ncharacter_set_server=utf8' /etc/my.cnf.d/server.cnf
-
-systemctl enable mariadb.service
-systemctl start mariadb.service
-systemctl status mariadb.service
-
-mysql_secure_installation
-
-VERSION=1.7.4
-mysql -p << EOF
-CREATE DATABASE powergslb;
-GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY 'your-database-password-here';
-USE powergslb;
-source /usr/share/doc/powergslb-$VERSION/database/scheme.sql
-source /usr/share/doc/powergslb-$VERSION/database/data.sql
-EOF
+docker run -it --privileged --name powergslb --hostname powergslb \
+    --tmpfs /run --tmpfs /tmp \
+    docker.io/acudovs/powergslb:2.0.0
 ```
 
-### Start services
+Find the container IP address and use it to reach the services:
 
 ```shell
-systemctl enable powergslb.service pdns.service
-systemctl start powergslb.service pdns.service
-systemctl status powergslb.service pdns.service
+CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' powergslb)
 ```
 
-### Test PowerGSLB
+Smoke-test DNS once the container is up:
 
 ```shell
-yum -y install bind-utils
-
-dig @127.0.0.1 example.com SOA
-dig @127.0.0.1 example.com A
-dig @127.0.0.1 example.com AAAA
-dig @127.0.0.1 example.com ANY
+dig @${CONTAINER_IP} example.com SOA
+dig @${CONTAINER_IP} example.com A
+dig @${CONTAINER_IP} example.com AAAA
+dig @${CONTAINER_IP} example.com ANY
 ```
 
-### Web based administration interface
+Then open the admin interface at `https://${CONTAINER_IP}/admin/`. The container ships a self-signed certificate, so
+the browser shows a security warning; proceed past it to reach the UI.
 
-Open URL https://SERVER/admin/.
+* Default username: `admin`
+* Default password: `admin`
 
-* Default username: admin
-* Default password: admin
+Manage and stop the container:
+
+```shell
+docker exec -it powergslb bash
+docker stop powergslb
+```
+
+To reach the services on the host instead of the container IP, publish the ports with
+`-p 53:53/tcp -p 53:53/udp -p 443:443/tcp`. Note that these may conflict with a DNS resolver or HTTPS service already
+listening on the host, so connecting to the container IP is usually simpler.
+
+## Building the Docker image
+
+Build the image from a checkout of the repository instead of pulling it:
+
+```shell
+VERSION=$(PYTHONPATH=src python3 -c "from powergslb.version import VERSION; print(VERSION)")
+
+docker build -f docker/Dockerfile --force-rm --no-cache -t powergslb:"$VERSION" .
+
+docker run -it --privileged --name powergslb --hostname powergslb \
+    --tmpfs /run --tmpfs /tmp \
+    powergslb:"$VERSION"
+```
+
+## Manual setup
+
+The Docker image is the recommended way to run PowerGSLB. To install the Python package directly - for development, or
+to integrate with an existing PowerDNS and MariaDB - build a wheel and install it into a virtual environment.
+
+Create a virtual environment (activation is required each time before use):
+
+```shell
+python3 -m venv --copies --system-site-packages --upgrade-deps .venv
+source .venv/bin/activate
+```
+
+Install the build requirements and build the wheel:
+
+```shell
+pip install -r requirements-build.txt
+pip wheel --wheel-dir dist --no-build-isolation --no-deps --verbose .
+```
+
+Install the built wheel:
+
+```shell
+pip install --force-reinstall --upgrade dist/powergslb-*-py3-none-any.whl
+```
+
+Run the service against a configuration file (`-c` / `--config` is required):
+
+```shell
+powergslb -c /etc/powergslb/powergslb.toml
+```
+
+The service also needs a MariaDB database with the schema and seed data loaded (`database/scheme.sql` and
+`database/data.sql`), and a PowerDNS Remote Backend pointed at the DNS interface. See the files under `docker/rootfs/`
+for reference configuration (`powergslb.toml` and `pdns.conf.powergslb`).
+
+## Configuration
+
+PowerGSLB is configured from a single TOML file, passed with `-c` / `--config`. The default file ships at
+[docker/rootfs/etc/powergslb/powergslb.toml](docker/rootfs/etc/powergslb/powergslb.toml) and is deployed to
+`/etc/powergslb/powergslb.toml` in the Docker image. Values are natively typed: ports and timeouts are integers, `ssl`
+is a boolean, and the rest are strings.
+
+| section      | purpose                        | key options                                                   |
+|--------------|--------------------------------|---------------------------------------------------------------|
+| `[database]` | MySQL / MariaDB connection     | `database`, `user`, `password`, `host`, `port`, `unix_socket` |
+| `[logging]`  | Python logging                 | `format`, `level`                                             |
+| `[monitor]`  | health-check engine            | `update_interval` (seconds), `icmp_privileged` (bool)         |
+| `[server]`   | DNS interface (Remote Backend) | `address`, `port`, `keep_alive_timeout`                       |
+| `[admin]`    | admin interface (web UI + API) | `address`, `port`, `ssl`, `cert`, `ciphers`, `root`           |
+
+`[database]` is passed straight to `mysql.connector` as connect kwargs; when `unix_socket` is set it takes precedence
+over `host` / `port`. The shipped `[admin]` certificate is self-signed; replace `cert` with your own PEM for production.
+
+### Environment overrides
+
+Every option can be overridden by an environment variable named `POWERGSLB_<SECTION>_<OPTION>` (uppercased), coerced to
+the configured value's type. This is how the Docker image is tuned without editing the file. Examples across sections:
+
+```shell
+POWERGSLB_DATABASE_HOST=192.168.1.20      # connect to a remote database
+POWERGSLB_DATABASE_PORT=3306
+POWERGSLB_DATABASE_UNIX_SOCKET=           # empty: use host/port over TCP instead of the socket
+POWERGSLB_LOGGING_LEVEL=INFO
+POWERGSLB_SERVER_ADDRESS=0.0.0.0          # expose the DNS backend beyond loopback
+POWERGSLB_ADMIN_PORT=8443
+```
+
+The `[monitor]` section tunes the health-check engine as a whole - `update_interval` is how often it re-reads the
+monitor configuration from the database, and `icmp_privileged` selects the raw vs. datagram ICMP socket:
+
+```shell
+POWERGSLB_MONITOR_UPDATE_INTERVAL=2       # pick up monitor changes faster (handy for testing)
+POWERGSLB_MONITOR_ICMP_PRIVILEGED=false   # use an unprivileged ICMP datagram socket
+```
+
+Individual health checks are not part of this file: each monitor is a row of JSON in the database, edited in the admin
+UI. See [Health checks](#health-checks) for the per-check parameters.
+
+## Database
+
+The DNS GSLB configuration lives in a MySQL 8 / MariaDB 10.5+ database. The schema uses a two-level model: an *rrset*
+is one `(domain, name, type)` and owns its `ttl` and `persistence`; a *record* is one answer inside it (`content` plus
+the `monitor`, `view`, `weight`, `disabled` and `fallback` flags). Record names are stored relative to the zone (`@` for
+the apex, otherwise the labels left of the domain), so in the admin grid the `Domain` column is authoritative and `Name`
+is relative.
+
+DNS invariants (CNAME exclusivity, SOA cardinality, rrset garbage collection) are enforced in the database itself via
+CHECK constraints and triggers, so both the web UI and handwritten SQL are covered.
+
+The schema, seed data, entity-relationship diagram, table reference, and the rationale behind the design are documented
+in [database/README.md](database/README.md).
+
+## Web administration interface
+
+**Status grid**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-status.png?raw=true)
+
+**Records grid**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-records.png?raw=true)
+
+**Advanced search**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-records-search.png?raw=true)
+
+**Add new record**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-records-add.png?raw=true)
+
+**Monitors**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-monitors.png?raw=true)
+
+[More images](images)
 
 ## Health checks
 
@@ -153,130 +510,137 @@ Health checks are configured in the "Monitors" sidebar section in JSON format.
 
 Supported check types:
 
-| type | description |
-|---|---|
+| type | description                 |
+|------|-----------------------------|
+| none | no check (always healthy)   |
 | exec | arbitrary command execution |
-| icmp | ICMP ping |
-| http | HTTP request |
-| tcp | TCP connect |
+| icmp | ICMP ping                   |
+| http | HTTP request                |
+| tcp  | TCP connect                 |
 
-### Mandatory parameters
+### General parameters
 
-General parameters for all checks:
+Parameters shared by all check types. Only `type` is required; the timing parameters are optional and fall back to
+their defaults, so a monitor JSON may omit them.
 
-| parameter | description |
-|---|---|
-| type | check type |
-| interval | interval between checks |
-| timeout | check timeout |
-| fall | number of failed checks to disable record |
-| rise | number of successful checks to enable record |
+| parameter | description                                  | default |
+|-----------|----------------------------------------------|---------|
+| type      | check type                                   |         |
+| interval  | seconds between checks                       | `3`     |
+| timeout   | per-run check timeout in seconds             | `1`     |
+| fall      | number of failed checks to disable record    | `3`     |
+| rise      | number of successful checks to enable record | `5`     |
+
+The `none` type takes no parameters (`{"type": "none"}`); it is the "No check" monitor and is never run.
+
+The token `${content}` in any string value is replaced with the record's content (typically its IP address), so one
+monitor can serve many records. Every other character - including `%`, `$`, `{` and `}` - is treated literally and
+needs no escaping.
 
 ### Exec parameters
 
-| parameter | description |
-|---|---|
-| type | exec |
-| args | command to execute and arguments |
+| parameter      | description                                                        | default |
+|----------------|--------------------------------------------------------------------|---------|
+| type           | exec                                                               |         |
+| args           | command to execute and arguments                                   |         |
+| expected_code  | exit code that counts as healthy                                   | `0`     |
+| output_match   | regex against the first 64 KiB of output; `""` skips the scan      | `""`    |
+| redirect_error | merge the command's stderr into stdout so `output_match` sees both | `true`  |
 
 Example:
+
+```json
+{"type": "exec", "args": ["/etc/powergslb/powergslb-check", "${content}"]}
 ```
-{"type": "exec", "args": ["/etc/powergslb/powergslb-check", "%(content)s"], "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
-```
+
+The whole run is bounded by `timeout`; on timeout the process is killed and the check fails. Only the first 64 KiB of
+output is kept for `output_match`; any excess is drained so a chatty command can still exit.
 
 ### ICMP parameters
 
-| parameter | description |
-|---|---|
-| type | icmp |
-| ip | endpoint IP address |
+| parameter | description         |
+|-----------|---------------------|
+| type      | icmp                |
+| ip        | endpoint IP address |
 
 Example:
+
+```json
+{"type": "icmp", "ip": "${content}"}
 ```
-{"type": "icmp", "ip": "%(content)s", "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
+
+ICMP checks open a raw ICMP socket and therefore need `CAP_NET_RAW` or root. The shipped container satisfies this:
+the service runs as root and `powergslb.service` keeps `CAP_NET_RAW` in `CapabilityBoundingSet`. To run unprivileged,
+set `icmp_privileged = false` in the `[monitor]` config section: this uses an ICMP datagram socket, but only works when
+the service's GID is inside the kernel `net.ipv4.ping_group_range` range:
+
+```bash
+sysctl -w net.ipv4.ping_group_range="0 2147483647"
 ```
 
 ### HTTP parameters
 
-| parameter | description |
-|---|---|
-| type | http |
-| url | endpoint URL |
+| parameter       | description                                                             | default |
+|-----------------|-------------------------------------------------------------------------|---------|
+| type            | http                                                                    |         |
+| url             | endpoint URL                                                            |         |
+| method          | request method, `GET` or `HEAD`                                         | `GET`   |
+| expected_status | required status code; `0` accepts the range `200 <= status < 400`       | `0`     |
+| body_match      | regex against the first 64 KiB of body; `GET` only; `""` skips the scan | `""`    |
+| tls_verify      | verify the server TLS certificate                                       | `true`  |
+| host            | override the HTTP `Host` header; TCP destination unchanged; `""` off    | `""`    |
+
+Redirects are never followed: a `3xx` is evaluated on its own status (accepted by the default success range,
+or matchable exactly via `expected_status`).
 
 Example:
+
+```json
+{"type": "http", "url": "http://${content}/status"}
 ```
-{"type": "http", "url": "http://%(content)s/status", "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
+
+Example with optional parameters - require an exact `200` carrying `"ok"` in the body, over self-signed HTTPS, and
+override two timing defaults:
+
+```json
+{
+  "type": "http",
+  "url": "https://${content}/health",
+  "method": "GET",
+  "expected_status": 200,
+  "body_match": "\"status\":\\s*\"ok\"",
+  "tls_verify": false,
+  "host": "health.example.com",
+  "interval": 5,
+  "fall": 2
+}
 ```
 
 ### TCP parameters
 
-| parameter | description |
-|---|---|
-| type | tcp |
-| ip | endpoint IP address |
-| port | endpoint port number |
+| parameter | description          |
+|-----------|----------------------|
+| type      | tcp                  |
+| ip        | endpoint IP address  |
+| port      | endpoint port number |
 
 Example:
-```
-{"type": "tcp", "ip": "%(content)s", "port": 80, "interval": 3, "timeout": 1, "fall": 3, "rise": 5}
-```
 
-## Building PowerGSLB RPM packages
-
-You should always create RPM packages in a clean environment and preferably on a separate machine!
-
-Please read [How to create an RPM package](https://fedoraproject.org/wiki/How_to_create_an_RPM_package).
-```shell
-yum -y update
-yum -y install @Development\ Tools
-
-VERSION=1.7.4
-curl "https://codeload.github.com/AlekseyChudov/powergslb/tar.gz/$VERSION" -o "powergslb-$VERSION.tar.gz"
-rpmbuild -tb --define "version $VERSION" "powergslb-$VERSION.tar.gz"
+```json
+{"type": "tcp", "ip": "${content}", "port": 80}
 ```
 
-Upon successful completion you will have three packages
-```
-~/rpmbuild/RPMS/noarch/powergslb-$VERSION-1.el7.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-admin-$VERSION-1.el7.noarch.rpm
-~/rpmbuild/RPMS/noarch/powergslb-pdns-$VERSION-1.el7.noarch.rpm
-```
+## Tests
 
+The repository ships with integration tests (against the Docker container) and unit tests. See
+[tests/README.md](tests/README.md) for the layout, how to run them, and how to point the suite at a non-default host or
+database.
 
-## Using PowerGSLB Docker image
-
-For quick setup, you can pull all-in-one Docker image from docker.io.
-
-```
-VERSION=1.7.4
-
-docker pull docker.io/alekseychudov/powergslb:"$VERSION"
-
-docker run -it --name powergslb --hostname powergslb \
-    -p 53:53/tcp -p 53:53/udp -p 443:443/tcp \
-    --tmpfs /run --tmpfs /tmp -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
-    docker.io/alekseychudov/powergslb:"$VERSION"
-
-docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' powergslb
-
-docker exec -it powergslb bash
-
-docker stop powergslb
+```bash
+.venv/bin/pytest tests/unit -q      # in-process unit tests, no container required
+tests/run-integration.sh            # build the image and run the integration suite
 ```
 
-For systemd to run in Docker container the following SELinux boolean should be enabled.
-```
-semanage boolean --modify --on container_manage_cgroup
-```
+## License
 
-
-## Building PowerGSLB Docker image
-
-To create an all-in-one Docker image.
-
-```
-VERSION=1.7.4
-
-docker build -f docker/Dockerfile --build-arg VERSION="$VERSION" \
-    --force-rm --no-cache -t powergslb:"$VERSION" https://github.com/AlekseyChudov/powergslb.git
-```
+PowerGSLB is released under the MIT License. See [LICENSE](LICENSE) for details.

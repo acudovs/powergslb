@@ -1,31 +1,53 @@
-import threading
+"""In-memory health status registry."""
 
-__all__ = ['ThreadSafeSet', 'get_status', 'init_status']
-
-__status = None
+__all__ = ['StatusRegistry', 'StatusWriter']
 
 
-class ThreadSafeSet(set):
-    """
-    Thread-safe set locks all public attributes
-    """
+class StatusWriter:
+    """Write access to a single content id in the StatusRegistry."""
 
-    def __init__(self, seq=()):
-        super(ThreadSafeSet, self).__init__(seq)
-        self.__lock = threading.RLock()
+    def __init__(self, registry: 'StatusRegistry', content_id: int) -> None:
+        self._registry = registry
+        self.content_id = content_id
 
-    def __getattribute__(self, name):
-        if not name.startswith('_'):
-            with self.__lock:
-                return super(ThreadSafeSet, self).__getattribute__(name)
-        else:
-            return super(ThreadSafeSet, self).__getattribute__(name)
+    def set_down(self) -> None:
+        """Mark the content as down."""
+        self._registry.add(self.content_id)
 
+    def set_up(self) -> None:
+        """Mark the content as up."""
+        self._registry.remove(self.content_id)
 
-def init_status():
-    global __status
-    __status = ThreadSafeSet()
+    def is_down(self) -> bool:
+        """Return True if the content is down."""
+        return self._registry.is_down(self.content_id)
 
 
-def get_status():
-    return __status
+class StatusRegistry:
+    """Tracks the content ids that are currently down."""
+
+    def __init__(self) -> None:
+        # A plain set is thread-safe for this usage under CPython (atomic add/remove/in on ints).
+        self._status: set[int] = set()
+
+    def add(self, content_id: int) -> None:
+        """Add a content id to the status set."""
+        self._status.add(content_id)
+
+    def remove(self, content_id: int) -> None:
+        """Remove a content id from the status set."""
+        self._status.discard(content_id)
+
+    def is_down(self, content_id: int) -> bool:
+        """Return True if the content id is in the status set."""
+        return content_id in self._status
+
+    def get_writer(self, content_id: int) -> StatusWriter:
+        """Return a StatusWriter for the given content id."""
+        return StatusWriter(self, content_id)
+
+    def retain(self, valid_ids: set[int]) -> set[int]:
+        """Drop any content ids not in valid_ids; return the ids that were removed."""
+        stale = self._status - valid_ids
+        self._status &= valid_ids
+        return stale

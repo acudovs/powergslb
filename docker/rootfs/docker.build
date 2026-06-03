@@ -1,65 +1,68 @@
 #!/bin/bash
 
 set -e
-shopt -s extglob
 
+# Generate random passwords for MariaDB root and powergslb application user.
 MYSQL_USER_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
 MYSQL_ROOT_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
 
+# Set timezone; TZ is passed as a Docker build-arg (default: UTC).
 ln -sfv "/usr/share/zoneinfo/$TZ" /etc/localtime
 
-yum -y install epel-release
-yum -y update
-yum -y install bash-completion bind-utils iproute less mariadb-server net-tools python2-pip
+# Install runtime packages.
+dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+dnf update -y
+dnf install --setopt install_weak_deps=false --nodocs -y \
+    bash-completion bind-utils iproute less MariaDB-server net-tools openssl pdns pdns-backend-remote
 
-pip install pyping
+# Generate a self-signed TLS certificate for the admin HTTPS interface.
+openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
+    -keyout /tmp/powergslb.key \
+    -out /tmp/powergslb.crt \
+    -subj "/CN=powergslb"
+cat /tmp/powergslb.crt /tmp/powergslb.key > /etc/powergslb/powergslb.pem
+rm /tmp/powergslb.crt /tmp/powergslb.key
+chmod 0600 /etc/powergslb/powergslb.pem
 
-yum -y --setopt=tsflags="" install \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-$VERSION-1.el7.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-admin-$VERSION-1.el7.noarch.rpm" \
-    "https://github.com/AlekseyChudov/powergslb/releases/download/$VERSION/powergslb-pdns-$VERSION-1.el7.noarch.rpm"
+# PowerDNS: replace the default pdns.conf installed by the package.
+mv /etc/pdns/pdns.conf.powergslb /etc/pdns/pdns.conf
 
-sed -i "s/^password = .*/password = $MYSQL_USER_PASSWORD/g" /etc/powergslb/powergslb.conf
+# MariaDB: bind to loopback only.
+sed -i '/\[mysqld\]/a bind-address=127.0.0.1' /etc/my.cnf.d/server.cnf
 
-cp -v /etc/pdns/pdns.conf /etc/pdns/pdns.conf~
-cp -v "/usr/share/doc/powergslb-pdns-$VERSION/pdns/pdns.conf" /etc/pdns/pdns.conf
+# Initialise the data directory, start the daemon in the background, and wait until it is ready.
+mariadb-install-db --user=mysql --datadir=/var/lib/mysql
+mariadbd --user=mysql --datadir=/var/lib/mysql &
+mariadb-admin --wait=30 ping
 
-sed -i '/\[mysqld\]/a bind-address=127.0.0.1\ncharacter_set_server=utf8' /etc/my.cnf.d/server.cnf
-
-su -s /bin/bash mysql /usr/libexec/mariadb-prepare-db-dir
-
-mysqld_safe --basedir=/usr &
-/usr/libexec/mariadb-wait-ready $$
-
-mysql << EOF
+# Create the powergslb database and user, then load the schema and seed data.
+mariadb -u root <<EOF
 CREATE DATABASE powergslb;
-GRANT ALL ON powergslb.* TO powergslb@localhost IDENTIFIED BY '$MYSQL_USER_PASSWORD';
+CREATE USER 'powergslb'@'localhost' IDENTIFIED BY '$MYSQL_USER_PASSWORD';
+GRANT ALL ON powergslb.* TO 'powergslb'@'localhost';
 USE powergslb;
-source /usr/share/doc/powergslb-$VERSION/database/scheme.sql
-source /usr/share/doc/powergslb-$VERSION/database/data.sql
+SOURCE /database/scheme.sql;
+SOURCE /database/data.sql;
 EOF
 
-mysqladmin -u root password "$MYSQL_ROOT_PASSWORD"
+# Set the root password and write /root/.my.cnf so the operator can run mariadb without a password prompt.
+mariadb -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; FLUSH PRIVILEGES;"
 
-cat << EOF > /root/.my.cnf
+cat <<EOF > /root/.my.cnf
 [client]
 user=root
 password=$MYSQL_ROOT_PASSWORD
 EOF
+chmod 0600 /root/.my.cnf
 
-pkill -f /usr/libexec/mysqld
+mariadb-admin shutdown
 
-rm -frv /etc/systemd/system/*.wants /usr/lib/systemd/system/*.wants/*
-ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/dbus.socket
-ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/systemd-journald.socket
-ln -rsvt /usr/lib/systemd/system/sockets.target.wants /usr/lib/systemd/system/systemd-shutdownd.socket
-ln -rsvt /usr/lib/systemd/system/sysinit.target.wants /usr/lib/systemd/system/systemd-tmpfiles-setup.service
-ln -rsvt /usr/lib/systemd/system/timers.target.wants /usr/lib/systemd/system/systemd-tmpfiles-clean.timer
+# Inject the generated application-user password into powergslb.toml.
+sed -i "s/^password = .*/password = \"$MYSQL_USER_PASSWORD\"/" /etc/powergslb/powergslb.toml
 
+# Enable services so systemd starts them on container boot.
 systemctl enable mariadb pdns powergslb
 
-yum clean all
-rm -frv /anaconda-post.log /root/anaconda-ks.cfg /tmp/* /var/cache/yum /var/log/!(mariadb) /var/tmp/*
-find /etc -name "*-" -o -name "*.bak" -o -name "*.rpmnew" -o -name "*.rpmsave" | xargs rm -fv
-
-rm -fv "$0"
+# Remove package cache, database seed files, logs, and this script.
+dnf clean all
+rm -rf /database /var/cache/dnf /var/log/* /tmp/* "$0"

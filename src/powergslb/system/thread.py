@@ -1,39 +1,20 @@
-import abc
-import logging
-import threading
-import time
+"""Service thread contract."""
 
-__all__ = ['AbstractThread']
+from typing import Protocol, runtime_checkable
+
+__all__ = ['ServiceThread']
 
 
-class AbstractThread(threading.Thread):
-    """
-    Abstract thread
-    """
-    __metaclass__ = abc.ABCMeta
+@runtime_checkable
+class ServiceThread(Protocol):
+    """The contract SystemService requires of a managed thread: name it, start it, poll it, stop it."""
+    name: str
 
-    def __init__(self, **kwargs):
-        super(AbstractThread, self).__init__(**kwargs)
-        self.__shutdown_event = threading.Event()
-        self.__shutdown_request = False
-        self.daemon = True
-        self.sleep_interval = 0
+    def start(self) -> None:
+        """Start the thread."""
 
-    def run(self):
-        logging.debug('{} thread started'.format(self.name))
-        try:
-            while not self.__shutdown_request:
-                self.task()
-                time.sleep(self.sleep_interval)
-        finally:
-            logging.debug('{} thread stopped'.format(self.name))
-            self.__shutdown_event.set()
+    def is_alive(self) -> bool:
+        """Return True while the thread is running."""
 
-    def shutdown(self, timeout=0):
-        logging.debug('{} thread shutdown'.format(self.name))
-        self.__shutdown_request = True
-        self.__shutdown_event.wait(timeout)
-
-    @abc.abstractmethod
-    def task(self):
-        pass
+    def shutdown(self, timeout: float = 0) -> None:
+        """Signal the thread to stop and wait up to timeout seconds for it to actually stop."""

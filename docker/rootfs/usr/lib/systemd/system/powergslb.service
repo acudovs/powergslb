@@ -1,0 +1,66 @@
+# PowerGSLB systemd service
+
+[Unit]
+Description=PowerGSLB service
+After=mariadb.service
+Before=pdns.service
+
+[Service]
+Type=notify
+ExecStart=/opt/powergslb/bin/powergslb -c /etc/powergslb/powergslb.toml
+PassEnvironment=POWERGSLB_DATABASE_DATABASE
+PassEnvironment=POWERGSLB_DATABASE_USER
+PassEnvironment=POWERGSLB_DATABASE_PASSWORD
+PassEnvironment=POWERGSLB_DATABASE_HOST
+PassEnvironment=POWERGSLB_DATABASE_PORT
+PassEnvironment=POWERGSLB_DATABASE_UNIX_SOCKET
+PassEnvironment=POWERGSLB_DATABASE_CONNECTION_TIMEOUT
+PassEnvironment=POWERGSLB_LOGGING_FORMAT
+PassEnvironment=POWERGSLB_LOGGING_LEVEL
+PassEnvironment=POWERGSLB_MONITOR_UPDATE_INTERVAL
+PassEnvironment=POWERGSLB_SERVER_ADDRESS
+PassEnvironment=POWERGSLB_SERVER_PORT
+PassEnvironment=POWERGSLB_SERVER_SSL
+PassEnvironment=POWERGSLB_SERVER_KEY
+PassEnvironment=POWERGSLB_SERVER_CERT
+PassEnvironment=POWERGSLB_SERVER_CIPHERS
+PassEnvironment=POWERGSLB_ADMIN_ADDRESS
+PassEnvironment=POWERGSLB_ADMIN_PORT
+PassEnvironment=POWERGSLB_ADMIN_SSL
+PassEnvironment=POWERGSLB_ADMIN_KEY
+PassEnvironment=POWERGSLB_ADMIN_CERT
+PassEnvironment=POWERGSLB_ADMIN_CIPHERS
+WatchdogSec=3
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Sandboxing
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+NoNewPrivileges=true
+LockPersonality=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+RemoveIPC=true
+DevicePolicy=closed
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+# Deny-list: the exec monitor runs arbitrary commands.
+SystemCallFilter=~ @clock @debug @module @mount @raw-io @reboot @swap @cpu-emulation @obsolete
+
+[Install]
+WantedBy=multi-user.target

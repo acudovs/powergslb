@@ -1,26 +1,17 @@
-""" QueryString parser
+"""Parser for PHP-style nested query strings (a[b][0]=v), as sent by the w2ui frontend."""
 
-QueryString parser for Python/Django that correctly handles nested dictionaries
-https://github.com/bernii/querystring-parser
-"""
-
-from urlparse import parse_qsl
+from typing import Any
+from urllib.parse import parse_qsl
 
 __all__ = ['QueryParserError', 'parse_query']
 
 
 class QueryParserError(Exception):
-    """
-    Query string is malformed
-    """
-    pass
+    """Raised when the query string is malformed."""
 
 
-def _get_key(s):
-    """
-    Get data between [ and ], remove ' if exist
-    @param s: string
-    """
+def _get_key(s: str) -> str | None:
+    """Return the text between the first [ and ], stripping surrounding quotes; None when brackets are missing."""
     start = s.find('[')
     end = s.find(']')
     if start == -1 or end == -1:
@@ -32,30 +23,20 @@ def _get_key(s):
     return s[start + 1:end]  # without brackets
 
 
-def _has_variable_name(s):
-    """
-    Variable name before [
-    @param s: string
-    """
+def _has_variable_name(s: str) -> bool:
+    """Return True when a variable name precedes the first [."""
     return s.find('[') > 0
 
 
-def _is_number(s):
-    """
-    Check if s is an int (for indexes in dict)
-    @param s: string
-    """
+def _is_number(s: str) -> bool:
+    """Return True when s is an optionally signed integer literal (a list index)."""
     if len(s) > 0 and s[0] in ('-', '+'):
         return s[1:].isdigit()
     return s.isdigit()
 
 
-def _more_than_one_index(s, brackets=2):
-    """
-    Search for two sets of [] []
-    @param s: string
-    @param brackets: int
-    """
+def _more_than_one_index(s: str, brackets: int = 2) -> bool:
+    """Return True when s contains at least `brackets` complete [...] groups."""
     start = 0
     brackets_num = 0
     while start != -1 and brackets_num < brackets:
@@ -69,30 +50,25 @@ def _more_than_one_index(s, brackets=2):
     return False
 
 
-def _normalize(d):
-    """
-    The parse() function generates output of list in dict form
-    i.e. {'abc' : {0: 'xyz', 1: 'pqr'}}. This function normalize it and turn
-    them into proper data type, i.e. {'abc': ['xyz', 'pqr']}
-    Note: if dict has element starts with 10, 11 etc.. this function won't fill
-    blanks, for eg: {'abc': {10: 'xyz', 12: 'pqr'}} will convert to
-    {'abc': ['xyz', 'pqr']}
-    @param d: dict
+def _normalize(d: Any) -> Any:
+    """Convert int-keyed dicts produced by parsing into lists, recursively.
+
+    {'abc': {0: 'xyz', 1: 'pqr'}} becomes {'abc': ['xyz', 'pqr']}; index gaps are not filled, so
+    {10: 'xyz', 12: 'pqr'} still yields a two-element list. An '' key unwraps to its single value.
     """
     newd = {}
     if not isinstance(d, dict):
         return d
-    # if dictionary. iterate over each element and append to newd
-    for k, v in d.iteritems():
+    for k, v in d.items():
         if isinstance(v, dict):
-            first_key = next(iter(v.viewkeys()))
+            first_key = next(iter(v.keys()))
             if isinstance(first_key, int):
                 temp_new = []
-                for k1, v1 in v.items():
+                for _, v1 in v.items():
                     temp_new.append(_normalize(v1))
                 newd[k] = temp_new
             elif first_key == '':
-                newd[k] = v.values()[0]
+                newd[k] = list(v.values())[0]
             else:
                 newd[k] = _normalize(v)
         else:
@@ -100,19 +76,18 @@ def _normalize(d):
     return newd
 
 
-def _parser_helper(key, val):
-    """
-    Helper for parser function
-    @param key:
-    @param val:
+def _parser_helper(key: str, val: str) -> dict[Any, Any]:
+    """Parse one key=val pair into a nested dict, one level per bracket group.
+
+    :raises QueryParserError: When a bracketed key is malformed.
     """
     start_bracket = key.find('[')
     end_bracket = key.find(']')
-    pdict = {}
+    pdict: dict[Any, Any] = {}
     if _has_variable_name(key):  # var['key'][3]
         pdict[key[:start_bracket]] = _parser_helper(key[start_bracket:], val)
     elif _more_than_one_index(key):  # ['key'][3]
-        newkey = _get_key(key)
+        newkey: Any = _get_key(key)
         newkey = int(newkey) if _is_number(newkey) else newkey
         pdict[newkey] = _parser_helper(key[end_bracket + 1:], val)
     else:  # key = val or ['key']
@@ -121,30 +96,34 @@ def _parser_helper(key, val):
             newkey = _get_key(key)
             if newkey is None:
                 raise QueryParserError
-        newkey = int(newkey) if _is_number(newkey) else newkey
-        if key == u'[]':  # val is the array key
-            val = int(val) if _is_number(val) else val
+        newkey = int(newkey) if _is_number(newkey) else newkey  # type: ignore[arg-type]
+        if key == '[]':  # val is the array key
+            val = int(val) if _is_number(val) else val  # type: ignore[assignment]
         pdict[newkey] = val
     return pdict
 
 
-def parse_query(query_string):
+def parse_query(query_string: str) -> dict[str, Any]:
+    """Parse a w2ui query string into a nested dict.
+
+    Bracketed keys nest (a[b][0]=v), repeated keys collect into lists, and int-keyed groups normalize
+    to lists, following the application/x-www-form-urlencoded algorithm.
+
+    :param query_string: Percent-encoded query string or POST body.
+    :returns: The parsed, normalized query.
+    :raises QueryParserError: When a bracketed key is malformed.
     """
-    Main parse function
-    http://www.w3.org/TR/html5/forms.html#application/x-www-form-urlencoded-encoding-algorithm
-    @param query_string: str
-    """
-    query_dict = {}
+    query_dict: dict[str, Any] = {}
     if not query_string:
         return query_dict
     piter = (_parser_helper(key, val) for key, val in parse_qsl(query_string))
     for di in piter:
         k, v = di.popitem()
         tempdict = query_dict
-        while k in tempdict and type(v) is dict:
+        while k in tempdict and isinstance(v, dict):
             tempdict = tempdict[k]
             k, v = v.popitem()
-        if k in tempdict and type(tempdict[k]).__name__ == 'list':
+        if k in tempdict and isinstance(tempdict[k], list):
             tempdict[k].append(v)
         elif k in tempdict:
             tempdict[k] = [tempdict[k], v]

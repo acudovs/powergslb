@@ -1,0 +1,6 @@
+# https://mariadb.org/download/
+[mariadb]
+name = MariaDB
+baseurl = https://rpm.mariadb.org/12.3/rhel/$releasever/$basearch
+gpgkey = https://rpm.mariadb.org/RPM-GPG-KEY-MariaDB
+gpgcheck = 1

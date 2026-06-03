@@ -1,153 +1,144 @@
-import base64
+"""Request routing base class, body reading, and response writing."""
+
+import abc
 import logging
-import os
-import SimpleHTTPServer
-import urllib2
+from http.server import SimpleHTTPRequestHandler
+from typing import Any, ClassVar
+from urllib.parse import urlsplit, unquote
 
-import netaddr
-
-from powergslb.server.http.handler.powerdns import PowerDNSContentHandler
-from powergslb.server.http.handler.w2ui import W2UIContentHandler
-
-import powergslb
-import powergslb.database
-import powergslb.system
+import powergslb.monitor
+from powergslb.database import Database
+from powergslb.monitor.status import StatusRegistry
+from powergslb.version import VERSION
 
 __all__ = ['HTTPRequestHandler']
 
 
-class HTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
-    """
-    HTTP request handler
+class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
+    """Shared plumbing for the role handlers: per-request state, body reading, and response writing.
+
+    One handler class serves one role on one port; the mounted segment is owned by 'route' and a subclass
+    implements '_handle_route()'. Each client connection gets one database connection, shared by its
+    keep-alive requests and bounded by the idle timeout.
+
+    :param database_config: mysql.connector connect kwargs.
+    :param status_registry: Shared health status registry.
+    :param timeout: Idle keep-alive timeout in seconds; bounds how long the handler holds its database connection.
     """
     protocol_version = 'HTTP/1.1'
-    server_version = 'PowerGSLB/' + powergslb.__version__
+    server_version = f'PowerGSLB/{VERSION}'
     rbufsize = -1
     wbufsize = -1
+    max_body_size = 1048576
+    route: ClassVar[str]
 
-    def __init__(self, *args):
-        self._authorization_header = None
-        self.body = None
-        self.close_connection = 0
-        self.database = None
-        self.dirs = None
-        self.path = None
-        self.remote_ip = None
-        self.query = None
-        super(HTTPRequestHandler, self).__init__(*args)
+    def __init__(self,
+                 *args: Any,
+                 database_config: dict[str, Any],
+                 status_registry: StatusRegistry,
+                 timeout: float | None = None,
+                 **kwargs: Any) -> None:
+        self.body: bytes | None = None
+        self.close_connection: bool = False
+        self.database: Database = None  # type: ignore[assignment]
+        self.database_config: dict[str, Any] = database_config
+        self.dirs: list[str] = []
+        self.path: str = ''
+        self.remote_ip: str | None = None
+        self.query: Any = None
+        self.status_registry: StatusRegistry = status_registry
+        self.timeout: float | None = timeout  # type: ignore[misc]
+        super().__init__(*args, **kwargs)
 
-    def _is_authorized(self):
-        authorized = False
-        authorization_header = self.headers.get('Authorization')
+    @abc.abstractmethod
+    def _handle_route(self) -> None:
+        """Serve the request once routing has matched this handler's 'route'."""
 
-        if self._authorization_header:
-            authorized = self._authorization_header == authorization_header
-
-        elif authorization_header:
-            try:
-                scheme, base64_user_password = authorization_header.split(' ')
-                user, password = base64.b64decode(base64_user_password).split(':')
-            except Exception as e:
-                logging.error('{}: authorization error: {}'.format(type(self).__name__, e))
-            else:
-                authorized = scheme == 'Basic' and self.database.check_user(user, password)
-                if authorized:
-                    logging.debug("{}: user '{}' authorized".format(type(self).__name__, user))
-                    self._authorization_header = authorization_header
-                else:
-                    logging.error("{}: user '{}' not authorized".format(type(self).__name__, user))
-
-        return authorized
-
-    def _handle_request(self):
+    def _handle_request(self) -> None:
         self._set_remote_ip()
         self._urlsplit()
 
-        if not self.dirs:
-            self.send_error(501)
-
-        elif self.command == 'GET' and self.dirs[0] == 'dns':
-            content_handler = PowerDNSContentHandler(self)
-            self._send_content(content_handler.content())
-
-        elif self.command in ['GET', 'POST'] and self.dirs[0] == 'admin':
-            if not self._is_authorized():
-                self._send_authenticate()
-
-            elif len(self.dirs) == 2 and self.dirs[1] == 'w2ui':
-                content_handler = W2UIContentHandler(self)
-                self._send_content(content_handler.content(), debug=self.command == 'GET')
-            else:
-                local_path = self.translate_path(self.path)
-                if os.path.isdir(local_path) and not self.path.endswith('/'):
-                    self._send_redirect(self.path + '/')
-                else:
-                    super(HTTPRequestHandler, self).do_GET()
+        if self.dirs and self.dirs[0] == self.route:
+            self._handle_route()
         else:
             self.send_error(404)
 
-    def _read_body(self):
+    def _read_body(self) -> None:
+        """Read the request body into self.body.
+
+        :raises ValueError: When the Content-Length header is not an int within 0..max_body_size.
+        """
+        content_length = self.headers.get('Content-Length', 0)
         try:
-            content_length = int(self.headers.get('Content-Length'), 0)
-        except ValueError:
-            raise Exception("'Content-Length' header invalid: '{}'".format(
-                self.headers.get('Content-Length')))
-        else:
-            self.body = self.rfile.read(content_length)
+            content_length = int(content_length)
+            if not 0 <= content_length <= self.max_body_size:
+                raise ValueError('out of range')
+        except ValueError as e:
+            raise ValueError(f"'Content-Length' header invalid: '{content_length}'") from e
+        self.body = self.rfile.read(content_length)
 
-    def _send_authenticate(self, code=401):
-        message, explain = self.responses[code]
-        content = self.error_message_format % {'code': code, 'message': message, 'explain': explain}
+    def _send_content(self, content: str, code: int = 200, debug: bool = True) -> None:
+        content_bytes = content.encode('utf-8')
         self.send_response(code)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
-        self.send_header('Content-Length', len(content))
-        self.send_header('WWW-Authenticate', 'Basic realm="{}"'.format(self.server_version))
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(content_bytes)))
         self.end_headers()
-        self.wfile.write(content)
-
-    def _send_content(self, content, code=200, debug=True):
-        self.send_response(code)
-        self.send_header('Content-Type', 'text/javascript; charset=utf-8')
-        self.send_header('Content-Length', len(content))
-        self.end_headers()
-        self.wfile.write(content)
+        self.wfile.write(content_bytes)
         if debug:
-            logging.debug('{}: {}'.format(type(self).__name__, content))
+            logging.debug('%s', content)
 
-    def _send_redirect(self, location, code=301):
-        self.send_response(code)
-        self.send_header('Location', location)
-        self.send_header('Connection', 'close')
-        self.end_headers()
-        logging.debug('{}: {}'.format(type(self).__name__, location))
+    def _set_remote_ip(self) -> None:
+        """Set the client IP to the TCP peer."""
+        self.remote_ip = self.client_address[0]
 
-    def _set_remote_ip(self):
-        remote_ip = self.client_address[0]
-        if 'X-Remotebackend-Real-Remote' in self.headers:
-            try:
-                real_remote_header = self.headers.get('X-Remotebackend-Real-Remote')
-                remote_ip = netaddr.IPNetwork(real_remote_header).ip.format()
-            except (netaddr.AddrFormatError, ValueError) as e:
-                logging.error("{}: 'X-Remotebackend-Real-Remote' header invalid: {}: {}".format(
-                    type(self).__name__, type(e).__name__, e))
+    def _urlsplit(self) -> None:
+        # self.path and self.query stay percent-encoded.
+        path, self.query = urlsplit(self.path)[2:4]
+        self.dirs = unquote(path).split('/')[1:]
 
-        self.remote_ip = remote_ip
-
-    def _urlsplit(self):
-        self.path, self.query = urllib2.httplib.urlsplit(urllib2.unquote(self.path))[2:4]
-        self.dirs = self.path.split('/')[1:]
-
-    def do_GET(self):
+    def do_GET(self) -> None:
+        """Dispatch a GET, clearing any body left over from a prior request on this keep-alive connection."""
+        self.body = None
         self._handle_request()
 
-    def do_POST(self):
-        self._read_body()
+    def do_HEAD(self) -> None:
+        """Dispatch a HEAD, clearing any body left over from a prior request on this keep-alive connection."""
+        self.body = None
         self._handle_request()
 
-    def handle(self):
+    def do_POST(self) -> None:  # pylint: disable=invalid-name
+        """Read the size-capped request body, then dispatch.
+
+        Draining the body keeps the keep-alive connection in sync even when the admin path answers 401
+        before reaching the body (matches nginx/Apache).
+        """
         try:
-            with powergslb.database.Database(**powergslb.system.get_config().items('database')) as self.database:
+            self._read_body()
+        except ValueError as e:
+            logging.error('request body invalid: %s', e)
+            self.send_error(400)
+            return
+        self._handle_request()
+
+    def handle(self) -> None:
+        """Serve requests on the connection, holding one database connection open for its lifetime.
+
+        A vanished client (connection reset, timeout) is expected and logged at debug. Any other error is
+        raised while building the response, before bytes are sent, so a 500 is safe; the connection is then
+        closed so a desynced keep-alive socket is not reused.
+        """
+        try:
+            with powergslb.database.Database(**self.database_config) as self.database:
                 while not self.close_connection:
                     self.handle_one_request()
-        except powergslb.database.Database.Error as e:
-            logging.error('{}: {}: {}'.format(type(self).__name__, type(e).__name__, e))
+        except (BrokenPipeError, ConnectionError, TimeoutError) as e:
+            logging.debug('connection closed: %s: %s', type(e).__name__, e)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error('%s: %s', type(e).__name__, e)
+            self.close_connection = True
+            # send_error needs a parsed request; self.command is unset until then.
+            if getattr(self, 'command', None):
+                try:
+                    self.send_error(500)
+                except OSError as send_error_exc:
+                    logging.debug('send_error failed: %s', send_error_exc)

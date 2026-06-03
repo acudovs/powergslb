@@ -1,41 +1,70 @@
+"""PowerDNS remote backend protocol handler."""
+
 import json
 import logging
+import operator
+import time
+from collections import defaultdict
+from typing import Any, ClassVar
+from urllib.parse import parse_qs
 
 import netaddr
 
-from powergslb.server.http.handler.abstract import AbstractContentHandler
+from powergslb.server.http.handler.request import HTTPRequestHandler
 
-import powergslb.monitor
-
-__all__ = ['PowerDNSContentHandler']
+__all__ = ['PowerDNSRequestHandler']
 
 
-class PowerDNSContentHandler(AbstractContentHandler):
+class PowerDNSRequestHandler(HTTPRequestHandler):
+    """Answers PowerDNS remote backend queries on the DNS interface: lookup and getAllDomains.
+
+    Lookup answers are filtered by view, health, weight, fallback, and client IP persistence.
     """
-    PowerDNS content handler
-    """
+    route: ClassVar[str] = 'dns'
 
-    def _filter_records(self, qtype_records):
-        records = []
+    def _handle_route(self) -> None:
+        """Answer GET /dns queries; any other method is not part of the remote backend protocol -> 404."""
+        if self.command == 'GET':
+            self._send_content(self.content())
+        else:
+            self.send_error(404)
+
+    def _set_remote_ip(self) -> None:
+        """Set the client IP, preferring a valid X-Remotebackend-Real-Remote header (set by PowerDNS)."""
+        remote_ip = self.client_address[0]
+        if 'X-Remotebackend-Real-Remote' in self.headers:
+            try:
+                real_remote_header = self.headers['X-Remotebackend-Real-Remote']
+                remote_ip = netaddr.IPNetwork(real_remote_header).ip.format()
+            except (netaddr.AddrFormatError, ValueError) as e:
+                logging.error("'X-Remotebackend-Real-Remote' header invalid: %s: %s", type(e).__name__, e)
+
+        self.remote_ip = remote_ip
+
+    def _filter_records(self, qtype_records: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        """Select the records to answer with, independently per qtype.
+
+        Within a qtype, only in-view records are considered. A record is live while it is up, and the
+        highest-weight live group wins; the fallback flag is additive, so a healthy fallback record serves in
+        that group like any other. Only when no record is live is the highest-weight group among the
+        fallback-flagged records answered, regardless of their health, so a failed check is ignored as a last
+        resort. Give fallback records a lower weight than the primaries to keep them out of normal responses.
+        Persistence then collapses the chosen group to a single record per client subnet.
+        """
+        records: list[dict[str, Any]] = []
         for qtype in qtype_records:
 
-            fallback_records = {}
-            live_records = {}
+            fallback_records: dict[int, list[dict[str, Any]]] = defaultdict(list)
+            live_records: dict[int, list[dict[str, Any]]] = defaultdict(list)
 
             for record in qtype_records[qtype]:
                 if not self._is_in_view(record):
                     continue
 
                 if record['fallback']:
-                    if record['weight'] not in fallback_records:
-                        fallback_records[record['weight']] = []
-
                     fallback_records[record['weight']].append(record)
 
-                if record['id'] not in powergslb.monitor.get_status():
-                    if record['weight'] not in live_records:
-                        live_records[record['weight']] = []
-
+                if not self.status_registry.is_down(record['id']):
                     live_records[record['weight']].append(record)
 
             if live_records:
@@ -55,69 +84,69 @@ class PowerDNSContentHandler(AbstractContentHandler):
 
         return records
 
-    def _get_lookup(self):
-        v3_format = True
-        if self.dirs[2].endswith('.'):
-            v3_format = False
-            self.dirs[2] = self.dirs[2].rstrip('.')
+    def _get_all_domains(self) -> list[dict[str, Any]]:
+        """Build the getAllDomains zone list; a domain with an unparsable SOA serial is skipped and logged."""
+        # A flat flag, so the stdlib parser suffices; strict: honored only for exactly one 'true' value.
+        include_disabled = parse_qs(self.query or '').get('includeDisabled') == ['true']
 
+        result = []
+        for domain in self.database.gslb_domains(include_disabled):
+            try:
+                serial = int(domain['soa_content'].split()[2])
+            except (IndexError, ValueError):
+                logging.error('domain id %s soa_content invalid', domain['id'])
+                continue
+
+            result.append({
+                'id': domain['id'],
+                'zone': domain['domain'] + '.',
+                'kind': 'native',
+                'serial': serial,
+                'notified_serial': serial,
+                'last_check': int(time.time()),
+                'masters': [],
+            })
+        return result
+
+    def _get_lookup(self) -> list[dict[str, Any]]:
+        """Answer a lookup: fetch the records for qname/qtype, filter them, and shape the response fields."""
+        self.dirs[2] = self.dirs[2].rstrip('.')
         records = self.database.gslb_records(*self.dirs[2:])
-        qtype_records = self._split_records(records, v3_format)
+        qtype_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in records:
+            qtype_records[record['qtype']].append(record)
         filtered_records = self._filter_records(qtype_records)
-        return self._strip_records(filtered_records, v3_format)
+        return [{'qname': r['qname'], 'qtype': r['qtype'], 'content': r['content'], 'ttl': r['ttl']}
+                for r in filtered_records]
 
-    def _is_in_view(self, record):
+    def _is_in_view(self, record: dict[str, Any]) -> bool:
+        """Return True when the client IP matches the record's view rule CIDRs; an invalid rule never matches."""
         result = False
         try:
-            result = bool(netaddr.smallest_matching_cidr(self.remote_ip, record.get('rule').split()))
+            rule = record.get('rule')
+            result = bool(netaddr.smallest_matching_cidr(self.remote_ip, rule.split()))  # type: ignore[union-attr]
         except (AttributeError, netaddr.AddrFormatError, ValueError) as e:
-            logging.error('{}: record id {} view rule invalid: {}: {}'.format(
-                type(self).__name__, record['id'], type(e).__name__, e))
+            logging.error('record id %s view rule invalid: %s: %s', record['id'], type(e).__name__, e)
 
         return result
 
-    def _remote_ip_persistence(self, records):
+    def _remote_ip_persistence(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        """Pick one record for the client, deterministically.
+
+        The client IP is taken as a whole integer (IPv4 or IPv6) and shifted right by the record's 'persistence' bits,
+        so every address in the same subnet collapses to one value. A 'persistence' value at or above the client address
+        width collapses every client to a single record (maximum stickiness).
+        """
+        records = sorted(records, key=operator.itemgetter('content'))
         persistence_value = netaddr.IPAddress(self.remote_ip).value >> records[0]['persistence']
-        return records[hash(persistence_value) % len(records)]
+        return records[persistence_value % len(records)]
 
-    def _split_records(self, records, v3_format=False):
-        qtype_records = {}
-        for record in records:
-            if v3_format and record['qtype'] in ['MX', 'SRV']:
-                content_split = record['content'].split()
-                try:
-                    record['priority'] = int(content_split[0])
-                    record['content'] = ' '.join(content_split[1:])
-                except (KeyError, ValueError) as e:
-                    logging.error('{}: record id {} priority missing or invalid: {}: {}'.format(
-                        type(self).__name__, record['id'], type(e).__name__, e))
-                    continue
-
-            if record['qtype'] not in qtype_records:
-                qtype_records[record['qtype']] = []
-
-            qtype_records[record['qtype']].append(record)
-
-        return qtype_records
-
-    @staticmethod
-    def _strip_records(records, v3_format=False):
-        result = []
-        for record in records:
-            if v3_format and record['qtype'] in ['MX', 'SRV']:
-                names = ['qname', 'qtype', 'content', 'ttl', 'priority']
-                values = [record['qname'], record['qtype'], record['content'], record['ttl'], record['priority']]
-            else:
-                names = ['qname', 'qtype', 'content', 'ttl']
-                values = [record['qname'], record['qtype'], record['content'], record['ttl']]
-
-            result.append(dict(zip(names, values)))
-
-        return result
-
-    def content(self):
+    def content(self) -> str:
+        """Dispatch /dns/lookup/<qname>/<qtype> and /dns/getAllDomains; anything else yields a false result."""
         if len(self.dirs) == 4 and self.dirs[1] == 'lookup':
-            content = {'result': self._get_lookup()}
+            content: dict[str, Any] = {'result': self._get_lookup()}
+        elif len(self.dirs) == 2 and self.dirs[1] == 'getAllDomains':
+            content = {'result': self._get_all_domains()}
         else:
             content = {'result': False}
 

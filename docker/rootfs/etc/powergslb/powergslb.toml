@@ -1,0 +1,33 @@
+# PowerGSLB configuration file
+
+[database]
+# https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html
+database = "powergslb"
+user = "powergslb"
+password = "secret"
+host = "127.0.0.1"
+port = 3306
+unix_socket = "/var/lib/mysql/mysql.sock"
+connection_timeout = 1
+
+[logging]
+# https://docs.python.org/3/library/logging.html
+format = "%(levelname)s [%(threadName)s] %(module)s.%(funcName)s:%(lineno)d %(message)s"
+level = "DEBUG"
+
+[monitor]
+update_interval = 60
+icmp_privileged = true
+
+[server]
+address = "127.0.0.1"
+port = 8080
+keep_alive_timeout = 300
+
+[admin]
+address = "0.0.0.0"
+port = 443
+ssl = true
+cert = "/etc/powergslb/powergslb.pem"
+ciphers = "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256"
+#root = "/tmp/powergslb" # optional override for the admin UI document root

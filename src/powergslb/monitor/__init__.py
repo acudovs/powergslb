@@ -1,4 +1,6 @@
-from powergslb.monitor.monitor import MonitorThread
-from powergslb.monitor.status import get_status
+"""Health check monitoring for DNS record endpoints."""
 
-__all__ = ['MonitorThread', 'get_status']
+from powergslb.monitor.monitor import MonitorManager
+from powergslb.monitor.status import StatusRegistry, StatusWriter
+
+__all__ = ['MonitorManager', 'StatusRegistry', 'StatusWriter']

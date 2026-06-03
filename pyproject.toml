@@ -1,0 +1,62 @@
+# See https://packaging.python.org/en/latest/overview/
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "powergslb"
+dynamic = ["version", "dependencies"]
+description = "PowerGSLB is a PowerDNS Global Server Load Balancing (GSLB) solution"
+urls = { homepage = "https://github.com/acudovs/powergslb" }
+authors = [{ name = "Aleksejs Cudovs", email = "aleksejs.cudovs@gmail.com" }]
+license = { text = "MIT" }
+scripts = { powergslb = "powergslb.main:PowerGSLB.main" }
+requires-python = ">=3.12"
+
+[tool.setuptools.dynamic]
+version = { attr = "powergslb.version.VERSION" }
+dependencies = { file = "requirements.txt" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# See https://peps.python.org/pep-0561/#packaging-type-information
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+"powergslb.resources" = ["admin/**"]
+
+# See https://coverage.readthedocs.io/en/latest/config.html
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+    "if TYPE_CHECKING:",
+]
+
+# See https://mypy.readthedocs.io/en/stable/config_file.html
+[tool.mypy]
+python_version = "3.12"
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+# See https://pylint.pycqa.org/en/stable/user_guide/configuration/all-options.html
+[tool.pylint.options]
+disable = ["duplicate-code"]
+enable = ["useless-suppression"]
+ignored-modules = ["legacycrypt"]
+max-args = 15
+max-branches = 15
+max-attributes = 20
+max-line-length = 120
+max-locals = 20
+max-positional-arguments = 15
+min-public-methods = 0
+max-public-methods = 25
+py-version = 3.12
+
+# See https://docs.pytest.org/en/stable/reference/reference.html
+[tool.pytest.ini_options]
+pythonpath = "src"
+log_level = "DEBUG"
+filterwarnings = ["ignore::urllib3.exceptions.InsecureRequestWarning"]

@@ -1,0 +1,17 @@
+[powerdns-auth-51]
+name=PowerDNS repository for PowerDNS Authoritative Server - version 5.1.X (stable)
+baseurl=http://repo.powerdns.com/el/$basearch/$releasever/auth-51
+gpgkey=https://repo.powerdns.com/FD380FBB-pub.asc
+gpgcheck=1
+enabled=1
+priority=90
+includepkg=pdns*
+
+[powerdns-auth-51-debuginfo]
+name=PowerDNS repository for PowerDNS Authoritative Server - version 5.1.X (stable) debug symbols
+baseurl=http://repo.powerdns.com/el/$basearch/$releasever/auth-51/debug
+gpgkey=https://repo.powerdns.com/FD380FBB-pub.asc
+gpgcheck=1
+enabled=0
+priority=90
+includepkg=pdns*

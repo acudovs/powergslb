@@ -15,12 +15,19 @@ persistence, DNS views, and fallback rules.
 * [Configuration](#configuration)
 * [Database](#database)
 * [Web administration interface](#web-administration-interface)
+* [Record selection](#record-selection)
+    * [Views](#views)
+    * [Weight (priority)](#weight-priority)
+    * [Fallback](#fallback)
+    * [Persistence](#persistence)
+    * [Disabled records](#disabled-records)
 * [Health checks](#health-checks)
     * [General parameters](#general-parameters)
     * [Exec parameters](#exec-parameters)
     * [ICMP parameters](#icmp-parameters)
     * [HTTP parameters](#http-parameters)
     * [TCP parameters](#tcp-parameters)
+* [API](#api)
 * [Tests](#tests)
 * [License](#license)
 
@@ -363,6 +370,8 @@ the browser shows a security warning; proceed past it to reach the UI.
 * Default username: `admin`
 * Default password: `admin`
 
+Change the default password after first login. Edit the `admin` user in the admin UI under the "Users" section.
+
 Manage and stop the container:
 
 ```shell
@@ -436,10 +445,14 @@ is a boolean, and the rest are strings.
 | `[logging]`  | Python logging                 | `format`, `level`                                             |
 | `[monitor]`  | health-check engine            | `update_interval` (seconds), `icmp_privileged` (bool)         |
 | `[server]`   | DNS interface (Remote Backend) | `address`, `port`, `keep_alive_timeout`                       |
-| `[admin]`    | admin interface (web UI + API) | `address`, `port`, `ssl`, `cert`, `ciphers`, `root`           |
+| `[admin]`    | admin interface (web UI + API) | `address`, `port`, `ssl`, `cert`, `key`, `ciphers`, `root`    |
 
-`[database]` is passed straight to `mysql.connector` as connect kwargs; when `unix_socket` is set it takes precedence
-over `host` / `port`. The shipped `[admin]` certificate is self-signed; replace `cert` with your own PEM for production.
+The `[database]` is passed straight to `mysql.connector` as connect kwargs. When `unix_socket` is set it takes
+precedence over `host` / `port`.
+
+The `[admin]` certificate is self-signed. Replace `cert` with your own PEM for production - `cert` may bundle the
+private key, or point `key` at a separate key file. Both `[server]` and `[admin]` accept `keep_alive_timeout`,
+the HTTP keep-alive idle timeout in seconds.
 
 ### Environment overrides
 
@@ -504,6 +517,47 @@ in [database/README.md](database/README.md).
 
 [More images](images)
 
+## Record selection
+
+For each query PowerGSLB starts from every enabled record at the requested `(name, type)` and narrows the set with
+record-level controls before answering, applied in order: view, then health, then weight, then persistence, with
+fallback as a safety net. The client IP used for view and persistence is read from the `X-Remotebackend-Real-Remote`
+header PowerDNS sends (the real resolver address), not the PowerDNS host.
+
+### Views
+
+A view maps client subnets to records, so one name can resolve differently per client. Each view holds a
+space-separated list of CIDR ranges (IPv4 and IPv6), and a record references exactly one view; a record is a candidate
+only when the client IP falls inside its view's ranges. The seed data ships a `Public` view (`0.0.0.0/0 ::/0`, matching
+every client) and a `Private` view (the RFC 1918 ranges).
+
+### Weight (priority)
+
+Among the in-view, live records, only the **highest-weight group** is answered; equal-weight records all serve and
+load-share, while lower-weight records stay on standby. Giving a record a lower weight turns it into a backup that is
+used only once every higher-weight record at that name is down.
+
+### Fallback
+
+The `fallback` flag is **additive, not backup-only**. A healthy fallback record competes in the normal (highest-weight
+live) group like any other. Only when no record at the name is live are the fallback-flagged records answered
+regardless of their own health, so the name still resolves during a full outage instead of going empty. To use a
+fallback record as a true backup, give it a lower weight than the primaries. Liveness is decided by the
+[health checks](#health-checks) below.
+
+### Persistence
+
+Persistence pins a client to a stable answer without server-side state. The rrset's `persistence` value is a number of
+bits: the client IP (as a whole integer) is shifted right by that many bits and taken modulo the records count, so
+every client in the same subnet deterministically gets the same record. `0` returns the answer set unchanged; a value
+at or above the address width collapses all clients onto a single record.
+
+### Disabled records
+
+A record can be administratively disabled in the admin UI. A disabled record is excluded from every DNS answer
+regardless of health, view, or weight - handy for draining an endpoint for maintenance without deleting its
+configuration.
+
 ## Health checks
 
 Health checks are configured in the "Monitors" sidebar section in JSON format.
@@ -536,6 +590,15 @@ The `none` type takes no parameters (`{"type": "none"}`); it is the "No check" m
 The token `${content}` in any string value is replaced with the record's content (typically its IP address), so one
 monitor can serve many records. Every other character - including `%`, `$`, `{` and `}` - is treated literally and
 needs no escaping.
+
+A check does not have to target the record's own content. Because the target is whatever you put in the monitor JSON,
+you can omit `${content}` and hard-code any IP, URL, or command, so a record's liveness is gated on a separate endpoint
+or a script. This is useful when a record should serve only while some dependency is reachable - an origin behind a CDN
+record, an upstream gateway, a database, or any external API:
+
+```json
+{"type": "http", "url": "https://origin.example.com/health"}
+```
 
 ### Exec parameters
 
@@ -628,6 +691,74 @@ Example:
 
 ```json
 {"type": "tcp", "ip": "${content}", "port": 80}
+```
+
+## API
+
+PowerGSLB exposes two HTTP interfaces, both returning JSON:
+
+* **DNS backend** - the PowerDNS Remote Backend protocol, read-only, plain HTTP (default `127.0.0.1:8080`). It binds
+  loopback by default, so reach it from inside the container or set `POWERGSLB_SERVER_ADDRESS=0.0.0.0` to expose it.
+  `GET /dns/lookup/<qname>./<qtype>` returns the filtered answers and `GET /dns/getAllDomains` returns the zone list.
+* **Admin API** - the w2ui CRUD endpoint at `POST /admin/w2ui` over HTTPS (default `:443`), behind HTTP Basic Auth.
+  Parameters are form-encoded (also accepted on the GET query string); records are addressed by `cmd` and a `data`
+  table, and `monitor` and `view` are matched by name, not id.
+
+### curl
+
+```shell
+# DNS backend (inside the container; loopback by default)
+curl 'http://127.0.0.1:8080/dns/lookup/example.com./A'
+curl 'http://127.0.0.1:8080/dns/getAllDomains'
+
+# Admin API: list records (-k accepts the self-signed certificate)
+curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-records -d data=records
+
+# Admin API: create an A record (omitted fields - disabled, fallback, weight, persistence - default to 0)
+curl -sk -u admin:admin https://powergslb/admin/w2ui \
+    --data-urlencode cmd=save-record \
+    --data-urlencode data=records \
+    --data-urlencode recid=0 \
+    --data-urlencode 'record[domain]=example.com' \
+    --data-urlencode 'record[name]=app' \
+    --data-urlencode 'record[name_type]=A' \
+    --data-urlencode 'record[ttl]=60' \
+    --data-urlencode 'record[content]=192.0.2.10' \
+    --data-urlencode 'record[monitor]=No check' \
+    --data-urlencode 'record[view]=Public'
+
+# Admin API: delete a record by id
+curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=delete-records -d data=records -d 'selected[0]=133'
+```
+
+### Python
+
+The integration suite ships ready-made `DNSClient` and `W2UIClient` wrappers in
+[tests/integration/conftest.py](tests/integration/conftest.py); reuse them as a reference client. A minimal
+`requests`-based equivalent:
+
+```python
+import requests
+
+# DNS backend (loopback by default)
+requests.get("http://127.0.0.1:8080/dns/lookup/example.com./A", timeout=10).json()
+
+# Admin API
+ADMIN = "https://powergslb/admin/w2ui"
+AUTH = ("admin", "admin")
+
+def w2ui(cmd, data, **params):
+    params.update(cmd=cmd, data=data)
+    # verify=False: the demo image ships a self-signed certificate
+    return requests.get(ADMIN, params=params, auth=AUTH, verify=False, timeout=15).json()
+
+records = w2ui("get-records", "records")["records"]
+
+fields = {"domain": "example.com", "name": "app", "name_type": "A", "ttl": 60,
+          "content": "192.0.2.10", "monitor": "No check", "view": "Public"}
+w2ui("save-record", "records", recid=0, **{f"record[{k}]": v for k, v in fields.items()})
+
+w2ui("delete-records", "records", **{"selected[0]": 133})
 ```
 
 ## Tests

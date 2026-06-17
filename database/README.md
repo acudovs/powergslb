@@ -200,8 +200,9 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 
 `data.sql` gives a working, self-consistent starting point:
 
-- **Users**: `admin` / `admin` - the default account. The stored hash is crypt(3) SHA-512 of `admin`.
-  **Change it before any real deployment** (re-hash via `powergslb`'s `hash_password`, then `UPDATE users`).
+- **Users**: `admin` / `admin` - the default account. The stored hash is crypt(3) SHA-512.
+  **Change it before any real deployment** - easiest from the admin UI (edit the `admin` user and set a new
+  password) or via `powergslb`'s `hash_password` function, then `UPDATE users`.
 - **Views**: `Public` (`0.0.0.0/0 ::/0`) and `Private` (RFC 1918 ranges).
 - **Types**: the common DNS types (A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, SRV) keyed by their IANA numeric value.
 - **Monitors**: `No check` (id 1, the inert default every seed record uses; its JSON is `{"type": "none"}` - the

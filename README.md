@@ -194,7 +194,7 @@ classDiagram
         +name = "http"
         +str url
         +str method
-        +int expected_status
+        +str expected_status
         +str body_match
         +bool tls_verify
         +str host
@@ -644,18 +644,17 @@ sysctl -w net.ipv4.ping_group_range="0 2147483647"
 
 ### HTTP parameters
 
-| parameter       | description                                                             | default |
-|-----------------|-------------------------------------------------------------------------|---------|
-| type            | http                                                                    |         |
-| url             | endpoint URL                                                            |         |
-| method          | request method, `GET` or `HEAD`                                         | `GET`   |
-| expected_status | required status code; `0` accepts the range `200 <= status < 400`       | `0`     |
-| body_match      | regex against the first 64 KiB of body; `GET` only; `""` skips the scan | `""`    |
-| tls_verify      | verify the server TLS certificate                                       | `true`  |
-| host            | override the HTTP `Host` header; TCP destination unchanged; `""` off    | `""`    |
+| parameter       | description                                                              | default     |
+|-----------------|--------------------------------------------------------------------------|-------------|
+| type            | http                                                                     |             |
+| url             | endpoint URL                                                             |             |
+| method          | request method, `GET` or `HEAD`                                          | `GET`       |
+| expected_status | comma-separated codes and inclusive ranges, e.g. `"101,200-204,300-308"` | `"200-399"` |
+| body_match      | regex against the first 64 KiB of body; `GET` only; `""` skips the scan  | `""`        |
+| tls_verify      | verify the server TLS certificate                                        | `true`      |
+| host            | override the HTTP `Host` header; TCP destination unchanged; `""` off     | `""`        |
 
-Redirects are never followed: a `3xx` is evaluated on its own status (accepted by the default success range,
-or matchable exactly via `expected_status`).
+Redirects are never followed: a `3xx` is evaluated on its own status (accepted by the default success range).
 
 Example:
 
@@ -671,7 +670,7 @@ override two timing defaults:
   "type": "http",
   "url": "https://${content}/health",
   "method": "GET",
-  "expected_status": 200,
+  "expected_status": "200",
   "body_match": "\"status\":\\s*\"ok\"",
   "tls_verify": false,
   "host": "health.example.com",

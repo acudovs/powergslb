@@ -300,7 +300,7 @@ def test_http_optional_fields(
     """HttpCheck optional fields each flip the verdict end to end.
 
       body_match      - regex against the GET body (a SOA token matches; a bogus token misses -> Off)
-      expected_status - exact status match (a 404 path matches 404; the 200 SOA lookup mismatches 404 -> Off)
+      expected_status - status spec match (a 404 path matches "404"; the 200 SOA lookup mismatches "404" -> Off)
       tls_verify      - False trusts the self-signed admin cert and matches its 401; True fails verification -> Off
     """
     cases: dict[str, tuple[dict[str, Any], str, str]] = {
@@ -309,14 +309,14 @@ def test_http_optional_fields(
         'http_body_fail':
             ({**_T, 'type': 'http', 'url': _SOA_URL, 'body_match': 'no-such-token'}, '192.0.2.51', 'Off'),
         'http_status_pass':
-            ({**_T, 'type': 'http', 'url': _NOTFOUND_URL, 'expected_status': 404}, '192.0.2.52', 'On'),
+            ({**_T, 'type': 'http', 'url': _NOTFOUND_URL, 'expected_status': '404'}, '192.0.2.52', 'On'),
         'http_status_fail':
-            ({**_T, 'type': 'http', 'url': _SOA_URL, 'expected_status': 404}, '192.0.2.53', 'Off'),
+            ({**_T, 'type': 'http', 'url': _SOA_URL, 'expected_status': '404'}, '192.0.2.53', 'Off'),
         'http_tls_noverify_pass':
-            ({**_T, 'type': 'http', 'url': _ADMIN_URL, 'tls_verify': False, 'expected_status': 401},
+            ({**_T, 'type': 'http', 'url': _ADMIN_URL, 'tls_verify': False, 'expected_status': '401'},
              '192.0.2.54', 'On'),
         'http_tls_verify_fail':
-            ({**_T, 'type': 'http', 'url': _ADMIN_URL, 'tls_verify': True, 'expected_status': 401},
+            ({**_T, 'type': 'http', 'url': _ADMIN_URL, 'tls_verify': True, 'expected_status': '401'},
              '192.0.2.55', 'Off'),
     }
 

@@ -83,7 +83,7 @@ def _patch_expired_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(http_module.time, 'monotonic', monotonic)
 
 
-# status range (expected_status == 0): Route 53 default, 200..399 healthy
+# status range (default '200-399'): 200..399 healthy
 
 def test_2xx_is_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _FakeResponse(200, chunks=2)
@@ -110,16 +110,60 @@ def test_connection_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert connection.closed is True
 
 
-# expected_status: exact match
+# expected_status: exact match, comma list, range, and combined forms
 
 def test_expected_status_exact_match_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_connection(monkeypatch, _FakeResponse(401, chunks=0))
-    assert _check(expected_status=401).execute() is True
+    assert _check(expected_status='401').execute() is True
 
 
 def test_expected_status_mismatch_unhealthy(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_connection(monkeypatch, _FakeResponse(200, chunks=1))
-    assert _check(expected_status=201).execute() is False
+    assert _check(expected_status='201').execute() is False
+
+
+def test_expected_status_comma_list_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(204, chunks=0))
+    assert _check(expected_status='200,204').execute() is True
+
+
+def test_expected_status_comma_list_unhealthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(203, chunks=0))
+    assert _check(expected_status='200,204').execute() is False
+
+
+def test_expected_status_range_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(250, chunks=0))
+    assert _check(expected_status='200-299').execute() is True
+
+
+def test_expected_status_range_unhealthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(300, chunks=0))
+    assert _check(expected_status='200-299').execute() is False
+
+
+@pytest.mark.parametrize('status', [101, 250, 350])
+def test_expected_status_combined_healthy(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(status, chunks=0))
+    assert _check(expected_status='101,200-299,300-399').execute() is True
+
+
+@pytest.mark.parametrize('status', [400, 150])
+def test_expected_status_combined_unhealthy(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(status, chunks=0))
+    assert _check(expected_status='101,200-299,300-399').execute() is False
+
+
+def test_expected_status_whitespace_tolerated(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(101, chunks=0))
+    assert _check(expected_status='101, 200-299').execute() is True
+
+
+# range bounds 100..599 are inclusive: the boundary codes themselves are accepted, as single codes and in ranges
+@pytest.mark.parametrize('spec, status', [('100', 100), ('599', 599), ('100-599', 100), ('100-599', 599)])
+def test_expected_status_boundary_accepted(monkeypatch: pytest.MonkeyPatch, spec: str, status: int) -> None:
+    _patch_connection(monkeypatch, _FakeResponse(status, chunks=0))
+    assert _check(expected_status=spec).execute() is True
 
 
 # method
@@ -164,10 +208,15 @@ def test_invalid_url_rejected(url: str) -> None:
         _check(url=url)
 
 
-@pytest.mark.parametrize('status', [50, 99, 600, -1])
-def test_out_of_range_expected_status_rejected(status: int) -> None:
+@pytest.mark.parametrize('spec', ['', 'abc', '200-', '-200', '300-200', '99', '600', '99-200', '500-600', '200,xyz'])
+def test_invalid_expected_status_rejected(spec: str) -> None:
     with pytest.raises(ValueError, match="check parameter 'expected_status' invalid"):
-        _check(expected_status=status)
+        _check(expected_status=spec)
+
+
+def test_non_string_expected_status_rejected() -> None:
+    with pytest.raises(ValueError, match="check parameter 'expected_status' invalid"):
+        _check(expected_status=200)
 
 
 def test_invalid_body_match_regex_rejected() -> None:

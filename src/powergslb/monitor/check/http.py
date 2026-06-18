@@ -23,7 +23,7 @@ class HttpCheck(Check):
 
     :param url: Target http:// or https:// URL.
     :param method: 'GET' or 'HEAD'.
-    :param expected_status: 0 accepts the success range (200 <= status < 400); any other value requires an exact match.
+    :param expected_status: Comma-separated codes and inclusive ranges, e.g. '101,200-204,300-308'.
     :param body_match: Regex searched in the first 'body_chunk' bytes of the body; GET-only; empty disables the match.
     :param tls_verify: Verify the server certificate; False disables TLS verification.
     :param host: HTTP Host header override; the TCP connection still goes to the URL's host.
@@ -34,7 +34,7 @@ class HttpCheck(Check):
 
     url: str
     method: str = 'GET'
-    expected_status: int = 0
+    expected_status: str = '200-399'
     body_match: Regex = ''
     tls_verify: bool = True
     host: str = ''
@@ -44,12 +44,34 @@ class HttpCheck(Check):
         parts = urlsplit(self.url)
         if parts.scheme not in ('http', 'https') or not parts.netloc:
             raise ValueError("check parameter 'url' invalid")
-        if self.expected_status != 0 and not 100 <= self.expected_status <= 599:
-            raise ValueError("check parameter 'expected_status' invalid")
+        self._expected_statuses: frozenset[int] = self._parse_status_spec(self.expected_status)
         if self.method not in ('GET', 'HEAD'):
             raise ValueError("check parameter 'method' unsupported")
         if self.method == 'HEAD' and self.body_match:
             raise ValueError("check parameter 'body_match' unsupported for HEAD requests")
+
+    @staticmethod
+    def _parse_status_spec(spec: str) -> frozenset[int]:
+        """Parse an 'expected_status' spec into the set of accepted status codes.
+
+        Each comma-separated token is a single code 'N' or an inclusive range 'LOW-HIGH'.
+        Every code must be in 100..599 and each range must have LOW <= HIGH.
+
+        :param spec: Comma-separated codes and inclusive ranges, e.g. '101,200-204,300-308'.
+        :returns: The frozenset of accepted status codes.
+        :raises ValueError: When a token is empty, non-numeric, malformed, or out of range.
+        """
+        statuses: set[int] = set()
+        for token in spec.split(','):
+            low, sep, high = token.strip().partition('-')
+            try:
+                bounds = range(int(low), int(high if sep else low) + 1)
+            except ValueError as e:
+                raise ValueError("check parameter 'expected_status' invalid") from e
+            if not bounds or bounds.start < 100 or bounds.stop - 1 > 599:
+                raise ValueError("check parameter 'expected_status' invalid")
+            statuses.update(bounds)
+        return frozenset(statuses)
 
     def execute(self) -> bool:
         deadline = time.monotonic() + self.timeout
@@ -83,11 +105,12 @@ class HttpCheck(Check):
             logging.error('HTTP request timed out after %s seconds', self.timeout)
             return False
 
-        status_ok = status == self.expected_status if self.expected_status else 200 <= status < 400
-        if not status_ok:
+        if status not in self._expected_statuses:
             return False
+
         if not self.body_match:
             return True
+
         return bool(re.search(self.body_match, body.decode('utf-8', errors='replace')))
 
     def _read_body(self, response: HTTPResponse, deadline: float) -> tuple[bytes, bool]:

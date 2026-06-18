@@ -364,8 +364,8 @@ dig @${CONTAINER_IP} example.com AAAA
 dig @${CONTAINER_IP} example.com ANY
 ```
 
-Then open the admin interface at `https://${CONTAINER_IP}/admin/`. The container ships a self-signed certificate, so
-the browser shows a security warning; proceed past it to reach the UI.
+Then open the admin interface at `https://${CONTAINER_IP}/admin/`. Each container generates its own self-signed
+certificate on first start, so the browser shows a security warning; proceed past it to reach the UI.
 
 * Default username: `admin`
 * Default password: `admin`
@@ -450,9 +450,10 @@ is a boolean, and the rest are strings.
 The `[database]` is passed straight to `mysql.connector` as connect kwargs. When `unix_socket` is set it takes
 precedence over `host` / `port`.
 
-The `[admin]` certificate is self-signed. Replace `cert` with your own PEM for production - `cert` may bundle the
-private key, or point `key` at a separate key file. Both `[server]` and `[admin]` accept `keep_alive_timeout`,
-the HTTP keep-alive idle timeout in seconds.
+The `[admin]` certificate is self-signed, generated once on first container start (the `powergslb-certgen` oneshot
+unit writes `/etc/powergslb/powergslb.pem` only if it is missing) so each deployment gets its own unique cert. Replace
+`cert` with your own PEM for production - `cert` may bundle the private key, or point `key` at a separate key file.
+Both `[server]` and `[admin]` accept `keep_alive_timeout`, the HTTP keep-alive idle timeout in seconds.
 
 ### Environment overrides
 

@@ -1,0 +1,13 @@
+#!/bin/bash
+
+set -e
+
+CERT="/etc/powergslb/powergslb.pem"
+TMP_CRT="$(mktemp)"
+TMP_KEY="$(mktemp)"
+
+trap '/bin/rm -f "${TMP_CRT}" "${TMP_KEY}"' EXIT
+
+openssl req -x509 -newkey rsa:4096 -keyout "${TMP_KEY}" -nodes -out "${TMP_CRT}" -days 3650 -subj "/CN=powergslb" -quiet
+cat "${TMP_CRT}" "${TMP_KEY}" > "${CERT}"
+chmod 0600 "${CERT}"

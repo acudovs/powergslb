@@ -15,15 +15,6 @@ dnf update -y
 dnf install --setopt install_weak_deps=false --nodocs -y \
     bash-completion bind-utils iproute less MariaDB-server net-tools openssl pdns pdns-backend-remote
 
-# Generate a self-signed TLS certificate for the admin HTTPS interface.
-openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
-    -keyout /tmp/powergslb.key \
-    -out /tmp/powergslb.crt \
-    -subj "/CN=powergslb"
-cat /tmp/powergslb.crt /tmp/powergslb.key > /etc/powergslb/powergslb.pem
-rm /tmp/powergslb.crt /tmp/powergslb.key
-chmod 0600 /etc/powergslb/powergslb.pem
-
 # PowerDNS: replace the default pdns.conf installed by the package.
 mv /etc/pdns/pdns.conf.powergslb /etc/pdns/pdns.conf
 
@@ -61,7 +52,7 @@ mariadb-admin shutdown
 sed -i "s/^password = .*/password = \"$MYSQL_USER_PASSWORD\"/" /etc/powergslb/powergslb.toml
 
 # Enable services so systemd starts them on container boot.
-systemctl enable mariadb pdns powergslb
+systemctl enable mariadb pdns powergslb powergslb-certgen
 
 # Remove package cache, database seed files, logs, and this script.
 dnf clean all

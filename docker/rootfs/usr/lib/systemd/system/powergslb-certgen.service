@@ -1,0 +1,12 @@
+[Unit]
+Description=PowerGSLB self-signed certificate generation
+Before=powergslb.service
+ConditionPathExists=!/etc/powergslb/powergslb.pem
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/powergslb-certgen
+
+[Install]
+WantedBy=multi-user.target

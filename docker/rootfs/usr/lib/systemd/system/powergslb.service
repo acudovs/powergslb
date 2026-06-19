@@ -2,8 +2,8 @@
 
 [Unit]
 Description=PowerGSLB service
-Wants=powergslb-certgen.service
-After=mariadb.service powergslb-certgen.service
+Wants=powergslb-certgen.service powergslb-dbinit.service
+After=mariadb.service powergslb-certgen.service powergslb-dbinit.service
 Before=pdns.service
 
 [Service]

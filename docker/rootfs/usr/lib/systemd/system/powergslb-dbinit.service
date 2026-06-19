@@ -1,0 +1,14 @@
+[Unit]
+Description=PowerGSLB database initialization
+Requires=mariadb.service
+After=mariadb.service
+Before=powergslb.service
+ConditionPathExists=!/var/lib/mysql/powergslb
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/powergslb-dbinit
+
+[Install]
+WantedBy=multi-user.target

@@ -10,6 +10,8 @@ persistence, DNS views, and fallback rules.
 * [Main features](#main-features)
 * [Architecture](#architecture)
 * [Quick start with the published Docker image](#quick-start-with-the-published-docker-image)
+* [Persisting data](#persisting-data)
+* [Upgrading](#upgrading)
 * [Building the Docker image](#building-the-docker-image)
 * [Manual setup](#manual-setup)
 * [Configuration](#configuration)
@@ -341,10 +343,15 @@ classDiagram
 The fastest way to try PowerGSLB is the all-in-one image, which bundles PowerGSLB, PowerDNS Authoritative Server,
 MariaDB, and systemd on a single RHEL UBI 10 base.
 
+The run below is volume-less and disposable: each `docker run` starts from a clean, freshly-initialized database, and
+removing the container discards everything. That is the right mode for a demo and tests. For any data that must outlive
+the container, see [Persisting data](#persisting-data) below.
+
 ```shell
 docker pull docker.io/acudovs/powergslb:2.0.0
 
-docker run -it --privileged --name powergslb --hostname powergslb \
+docker run -it --privileged \
+    --name powergslb --hostname powergslb \
     --tmpfs /run --tmpfs /tmp \
     docker.io/acudovs/powergslb:2.0.0
 ```
@@ -382,6 +389,40 @@ docker stop powergslb
 To reach the services on the host instead of the container IP, publish the ports with
 `-p 53:53/tcp -p 53:53/udp -p 443:443/tcp`. Note that these may conflict with a DNS resolver or HTTPS service already
 listening on the host, so connecting to the container IP is usually simpler.
+
+## Persisting data
+
+The image ships an empty datadir and initializes the database on first start, so without a volume every run begins from
+scratch. Any deployment whose data must outlive the container must mount a **named** volume at `/var/lib/mysql`:
+
+```shell
+docker volume create powergslb-db
+
+docker run -it --privileged \
+    --name powergslb --hostname powergslb \
+    --tmpfs /run --tmpfs /tmp \
+    -v powergslb-db:/var/lib/mysql \
+    docker.io/acudovs/powergslb:2.0.0
+```
+
+First boot initializes the database inside the volume; later runs detect the existing data and reuse it untouched. A
+bind mount (`-v "$PWD/db:/var/lib/mysql"`) or a Kubernetes PVC works the same way.
+
+## Upgrading
+
+Upgrading between PowerGSLB versions is a container swap; the volume is the only state carried across. Stop and remove
+the old container, pull (or rebuild) the new image, and run it with the **same** named volume:
+
+```shell
+docker stop powergslb && docker rm powergslb
+docker pull docker.io/acudovs/powergslb:"$NEW_VERSION"
+
+docker run -it --privileged \
+    --name powergslb --hostname powergslb \
+    --tmpfs /run --tmpfs /tmp \
+    -v powergslb-db:/var/lib/mysql \
+    docker.io/acudovs/powergslb:"$NEW_VERSION"
+```
 
 ## Building the Docker image
 

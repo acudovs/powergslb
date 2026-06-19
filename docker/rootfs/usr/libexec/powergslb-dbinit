@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -e
+
+# Create the powergslb database, user, and schema on first boot. The powergslb user is created with an empty password.
+# That is safe because MariaDB binds 127.0.0.1 only and the account is '@localhost' (Unix socket-only).
+
+mariadb -u root <<'EOF'
+CREATE DATABASE powergslb;
+CREATE USER 'powergslb'@'localhost' IDENTIFIED BY '';
+GRANT ALL ON powergslb.* TO 'powergslb'@'localhost';
+USE powergslb;
+SOURCE /usr/share/powergslb/scheme.sql;
+SOURCE /usr/share/powergslb/data.sql;
+EOF

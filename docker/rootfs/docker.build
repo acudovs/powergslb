@@ -2,10 +2,6 @@
 
 set -e
 
-# Generate random passwords for MariaDB root and powergslb application user.
-MYSQL_USER_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
-MYSQL_ROOT_PASSWORD="$(</dev/urandom tr -dc '[:alnum:]' | head -c32)"
-
 # Set timezone; TZ is passed as a Docker build-arg (default: UTC).
 ln -sfv "/usr/share/zoneinfo/$TZ" /etc/localtime
 
@@ -15,45 +11,12 @@ dnf update -y
 dnf install --setopt install_weak_deps=false --nodocs -y \
     bash-completion bind-utils iproute less MariaDB-server net-tools openssl pdns pdns-backend-remote
 
-# PowerDNS: replace the default pdns.conf installed by the package.
+# Replace the default PowerDNS configuration file installed by the package.
 mv /etc/pdns/pdns.conf.powergslb /etc/pdns/pdns.conf
 
-# MariaDB: bind to loopback only.
-sed -i '/\[mysqld\]/a bind-address=127.0.0.1' /etc/my.cnf.d/server.cnf
-
-# Initialise the data directory, start the daemon in the background, and wait until it is ready.
-mariadb-install-db --user=mysql --datadir=/var/lib/mysql
-mariadbd --user=mysql --datadir=/var/lib/mysql &
-mariadb-admin --wait=30 ping
-
-# Create the powergslb database and user, then load the schema and seed data.
-mariadb -u root <<EOF
-CREATE DATABASE powergslb;
-CREATE USER 'powergslb'@'localhost' IDENTIFIED BY '$MYSQL_USER_PASSWORD';
-GRANT ALL ON powergslb.* TO 'powergslb'@'localhost';
-USE powergslb;
-SOURCE /database/scheme.sql;
-SOURCE /database/data.sql;
-EOF
-
-# Set the root password and write /root/.my.cnf so the operator can run mariadb without a password prompt.
-mariadb -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; FLUSH PRIVILEGES;"
-
-cat <<EOF > /root/.my.cnf
-[client]
-user=root
-password=$MYSQL_ROOT_PASSWORD
-EOF
-chmod 0600 /root/.my.cnf
-
-mariadb-admin shutdown
-
-# Inject the generated application-user password into powergslb.toml.
-sed -i "s/^password = .*/password = \"$MYSQL_USER_PASSWORD\"/" /etc/powergslb/powergslb.toml
-
 # Enable services so systemd starts them on container boot.
-systemctl enable mariadb pdns powergslb powergslb-certgen
+systemctl enable mariadb pdns powergslb powergslb-certgen powergslb-dbinit
 
-# Remove package cache, database seed files, logs, and this script.
+# Remove package cache, MariaDB datadir, logs, and this script.
 dnf clean all
-rm -rf /database /var/cache/dnf /var/log/* /tmp/* "$0"
+rm -rf /var/cache/dnf /var/lib/mysql/* /var/log/* /tmp/* "$0"

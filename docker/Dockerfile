@@ -17,7 +17,7 @@ EXPOSE 53/tcp 53/udp 443/tcp
 ARG TZ=UTC
 
 COPY --from=builder /opt/powergslb /opt/powergslb
-COPY database /database
+COPY database /usr/share/powergslb
 COPY docker/rootfs /
 
 RUN /docker.build

@@ -1,0 +1,10 @@
+# PowerGSLB MariaDB overrides; zz- sorts last.
+[mysqld]
+# Listen on loopback only.
+bind-address=127.0.0.1
+
+# Shrink buffers for small DB to save RSS.
+innodb_buffer_pool_size=16M
+key_buffer_size=8M
+aria_pagecache_buffer_size=8M
+innodb_log_buffer_size=2M

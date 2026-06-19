@@ -4,7 +4,7 @@
 # https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html
 database = "powergslb"
 user = "powergslb"
-password = "secret"
+password = ""
 host = "127.0.0.1"
 port = 3306
 unix_socket = "/var/lib/mysql/mysql.sock"

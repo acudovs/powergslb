@@ -23,7 +23,7 @@ INSERT INTO `monitors` (`id`, `monitor`, `monitor_json`) VALUES
   (3, 'ICMP ping', '{"type": "icmp", "ip": "${content}"}'),
   (4, 'HTTP request /status', '{"type": "http", "url": "http://${content}/status"}'),
   (5, 'TCP connect to port 80', '{"type": "tcp", "ip": "${content}", "port": 80}'),
-  (6, 'TCP connect to port 443', '{"type": "tcp", "ip": "${content}", "port": 443}');
+  (6, 'TLS connect to port 443', '{"type": "tls", "ip": "${content}", "port": 443}');
 
 INSERT INTO `domains` (`id`, `domain`) VALUES
   (1, 'example.com'),

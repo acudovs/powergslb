@@ -29,6 +29,7 @@ persistence, DNS views, and fallback rules.
     * [ICMP parameters](#icmp-parameters)
     * [HTTP parameters](#http-parameters)
     * [TCP parameters](#tcp-parameters)
+    * [TLS parameters](#tls-parameters)
 * [API](#api)
 * [Tests](#tests)
 * [License](#license)
@@ -57,6 +58,7 @@ persistence, DNS views, and fallback rules.
     * ICMP ping
     * HTTP request
     * TCP connect
+    * TLS connect
 
 ## Architecture
 
@@ -194,6 +196,14 @@ classDiagram
         +int port
         +execute() bool
     }
+    class TlsCheck {
+        +name = "tls"
+        +str ip
+        +int port
+        +bool tls_verify
+        +str host
+        +execute() bool
+    }
     class HttpCheck {
         +name = "http"
         +str url
@@ -298,6 +308,7 @@ classDiagram
     Check <|-- NoCheck
     Check <|-- IcmpCheck
     Check <|-- TcpCheck
+    Check <|-- TlsCheck
     Check <|-- HttpCheck
     Check <|-- ExecCheck
     Thread <|-- HTTPServerManager
@@ -628,6 +639,7 @@ Supported check types:
 | icmp | ICMP ping                   |
 | http | HTTP request                |
 | tcp  | TCP connect                 |
+| tls  | TLS connect                 |
 
 ### General parameters
 
@@ -751,6 +763,28 @@ Example:
 
 The check opens a TCP connection to `ip:port` and passes as soon as the handshake completes; it sends no data and
 reads no response. Connection setup is bounded by `timeout`; a refused connection or a timeout fails the check.
+
+### TLS parameters
+
+| parameter  | description                                                            | default |
+|------------|------------------------------------------------------------------------|---------|
+| type       | tls                                                                    |         |
+| ip         | endpoint IP address                                                    |         |
+| port       | endpoint port number                                                   |         |
+| tls_verify | verify the server TLS certificate                                      | `true`  |
+| host       | SNI server name and verified certificate name; `""` falls back to `ip` | `""`    |
+
+Example:
+
+```json
+{"type": "tls", "ip": "${content}", "port": 443}
+```
+
+The check opens a TCP connection to `ip:port` and completes the TLS handshake. Connection setup and the handshake are
+bounded by `timeout`. With `tls_verify` (the default `true`), an untrusted chain, an expired certificate, or a
+hostname mismatch fails the check; set `tls_verify` to `false` to require only that the handshake completes. Unlike
+`tcp`, which stops at the TCP handshake, `tls` confirms the endpoint actually serves TLS - use it for non-HTTP TLS
+services (SMTPS, IMAPS, LDAPS, etc.) that the `http` check cannot handle.
 
 ## API
 

@@ -1,7 +1,7 @@
 """Monitor type tests.
 
-Verifies that each of the four monitor types (icmp, tcp, http, exec) can be created, retrieved, and deleted via the
-admin API with valid parameters matching the schema enforced by the per-type Check dataclasses (MonitorManager
+Verifies that each of the five monitor types (icmp, tcp, http, tls, exec) can be created, retrieved, and deleted via
+the admin API with valid parameters matching the schema enforced by the per-type Check dataclasses (MonitorManager
 parses the monitor JSON and Check.create validates it).
 """
 
@@ -22,6 +22,10 @@ _MONITORS = {
         'type': 'http', 'url': 'http://192.0.2.1:8080/health',
         'interval': 10, 'timeout': 3, 'fall': 3, 'rise': 5,
     },
+    'tls': {
+        'type': 'tls', 'ip': '192.0.2.1', 'port': 443,
+        'interval': 10, 'timeout': 3, 'fall': 3, 'rise': 5,
+    },
     'exec': {
         'type': 'exec', 'args': ['/usr/local/bin/check.sh', '192.0.2.1'],
         'interval': 10, 'timeout': 3, 'fall': 3, 'rise': 5,
@@ -30,7 +34,7 @@ _MONITORS = {
 
 
 def test_all_monitor_types_crud(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -> None:
-    """Each of the four check types (icmp, tcp, http, exec) round-trips through the admin CRUD API.
+    """Each of the five check types (icmp, tcp, http, tls, exec) round-trips through the admin CRUD API.
 
     For each type:
     - create the monitor with the required JSON fields

@@ -206,7 +206,7 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 - **Views**: `Public` (`0.0.0.0/0 ::/0`) and `Private` (RFC 1918 ranges).
 - **Types**: the common DNS types (A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, SRV) keyed by their IANA numeric value.
 - **Monitors**: `No check` (id 1, the inert default every seed record uses; its JSON is `{"type": "none"}` - the
-  registered `none` check type that MonitorManager never threads) plus exec / icmp / http / two tcp examples.
+  registered `none` check type that MonitorManager never threads) plus exec / icmp / http / tcp / tls examples.
   `${content}` in a monitor's JSON is replaced with the record content at check time, and the shared timing fields
   (`interval`/`timeout`/`fall`/`rise`) may be omitted to take their defaults (`3`/`1`/`3`/`5`).
 - **Zones**: `example.com`, `example.net`, `example.org`, each with SOA, NS + glue (A/AAAA), apex A/AAAA, `www`/`mobile`

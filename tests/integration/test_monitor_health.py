@@ -327,6 +327,37 @@ def test_http_optional_fields(
         assert st is not None and st['status'] == expected, f'{key}: {st}'
 
 
+def test_tls_optional_fields(
+        w2ui: W2UIClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    """TlsCheck drives the verdict end to end against the in-container :443 and :8080 endpoints.
+
+      tls_verify False - trusts the self-signed admin cert; the handshake completes -> On
+      tls_verify True  - the self-signed admin cert is untrusted; verification fails -> Off
+      closed port      - connection refused -> Off
+      plaintext :8080  - the port speaks HTTP, not TLS, so the handshake fails -> Off (stronger than tcp_pass)
+      host/SNI         - survives the JSON round-trip without breaking the handshake (verify off) -> On
+    """
+    cases: dict[str, tuple[dict[str, Any], str, str]] = {
+        'tls_noverify_pass':
+            ({**_T, 'type': 'tls', 'ip': '127.0.0.1', 'port': 443, 'tls_verify': False}, '192.0.2.70', 'On'),
+        'tls_verify_fail':
+            ({**_T, 'type': 'tls', 'ip': '127.0.0.1', 'port': 443, 'tls_verify': True}, '192.0.2.71', 'Off'),
+        'tls_closed_fail':
+            ({**_T, 'type': 'tls', 'ip': '127.0.0.1', 'port': 19999}, '192.0.2.72', 'Off'),
+        'tls_plaintext_fail':
+            ({**_T, 'type': 'tls', 'ip': '127.0.0.1', 'port': 8080, 'tls_verify': False}, '192.0.2.73', 'Off'),
+        'tls_host_noverify_pass':
+            ({**_T, 'type': 'tls', 'ip': '127.0.0.1', 'port': 443, 'tls_verify': False, 'host': 'powergslb'},
+             '192.0.2.74', 'On'),
+    }
+
+    statuses = _run_field_cases(w2ui, base_record, cleanup, cases)
+
+    for key, (_spec, _content, expected) in cases.items():
+        st = statuses[key]
+        assert st is not None and st['status'] == expected, f'{key}: {st}'
+
+
 def test_exec_optional_fields(
         w2ui: W2UIClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
     """ExecCheck optional fields each flip the verdict end to end.

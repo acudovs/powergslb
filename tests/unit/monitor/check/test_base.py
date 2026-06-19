@@ -29,7 +29,7 @@ def _tcp(**overrides: Any) -> dict[str, Any]:
 # registry
 
 def test_builtin_types_are_registered() -> None:
-    assert {'exec', 'http', 'icmp', 'tcp'} <= set(Check._registry)
+    assert {'exec', 'http', 'icmp', 'tcp', 'tls'} <= set(Check._registry)
 
 
 def test_duplicate_type_name_raises() -> None:

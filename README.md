@@ -35,26 +35,28 @@ persistence, DNS views, and fallback rules.
 
 ## Main features
 
-* Quick installation and setup
 * Written in Python 3.12
 * Built as PowerDNS Authoritative Server [Remote Backend](https://doc.powerdns.com/authoritative/backends/remote.html)
-* Web-based administration interface using [w2ui](https://github.com/vitmalina/w2ui)
-* HTTPS support for the web server
+* Modular and multithreaded architecture
+* Systemd status and watchdog support
+* Quick installation and setup
+* All-in-one Docker image
 * DNS GSLB configuration stored in a MySQL / MariaDB database
 * Master-Slave DNS GSLB using native MySQL / MariaDB [replication](https://mariadb.com/kb/en/standard-replication/)
 * Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster](https://galeracluster.com/)
-* Modular and multithreaded architecture
-* Systemd status and watchdog support
+* Web-based administration interface using [w2ui](https://github.com/vitmalina/w2ui)
+* JSON [HTTP API](#api) for DNS queries and CRUD administration
+* HTTPS support for the web server
+* Record selection:
+    * DNS GSLB views support
+    * Weighted (priority) records
+    * Fallback if all the checks fail
+    * Per-record client IP / subnet persistence
 * Extendable health checks:
-    * ICMP ping
-    * TCP connect
-    * HTTP request
     * Arbitrary command execution
-* Fallback if all the checks fail
-* Weighted (priority) records
-* Per-record client IP / subnet persistence
-* DNS GSLB views support
-* All-in-one Docker image
+    * ICMP ping
+    * HTTP request
+    * TCP connect
 
 ## Architecture
 
@@ -579,6 +581,10 @@ Among the in-view, live records, only the **highest-weight group** is answered; 
 load-share, while lower-weight records stay on standby. Giving a record a lower weight turns it into a backup that is
 used only once every higher-weight record at that name is down.
 
+This enables a **blue-green deployment**: run the new servers alongside the old ones at a lower weight, then raise
+their weight above the current group to cut all traffic over at once. The old servers fall to standby but keep serving,
+so rolling back is just lowering the weight again.
+
 ### Fallback
 
 The `fallback` flag is **additive, not backup-only**. A healthy fallback record competes in the normal (highest-weight
@@ -587,12 +593,21 @@ regardless of their own health, so the name still resolves during a full outage 
 fallback record as a true backup, give it a lower weight than the primaries. Liveness is decided by the
 [health checks](#health-checks) below.
 
+**Best practice:** set the `fallback` flag on the monitored records (or at least some of them). Then, if all checks
+fail at once, PowerGSLB answers with the flagged records rather than an empty response, so the name keeps resolving and
+clients reach a possibly recovering endpoint instead of a guaranteed failure.
+
 ### Persistence
 
 Persistence pins a client to a stable answer without server-side state. The rrset's `persistence` value is a number of
 bits: the client IP (as a whole integer) is shifted right by that many bits and taken modulo the records count, so
 every client in the same subnet deterministically gets the same record. `0` returns the answer set unchanged; a value
 at or above the address width collapses all clients onto a single record.
+
+The bit count is the host part to discard, so it pins clients per subnet: the address width minus the prefix you want
+to group by. For IPv4 (32 bits), `8` pins each `/24` and `16` pins each `/16`; for IPv6 (128 bits), `64` pins each
+`/64`. Example: with `persistence = 8`, clients `192.0.2.10` and `192.0.2.200` share the `192.0.2.0/24` subnet and
+always get the same record, while `198.51.100.10` may get a different one.
 
 ### Disabled records
 
@@ -734,6 +749,9 @@ Example:
 {"type": "tcp", "ip": "${content}", "port": 80}
 ```
 
+The check opens a TCP connection to `ip:port` and passes as soon as the handshake completes; it sends no data and
+reads no response. Connection setup is bounded by `timeout`; a refused connection or a timeout fails the check.
+
 ## API
 
 PowerGSLB exposes two HTTP interfaces, both returning JSON:
@@ -745,6 +763,17 @@ PowerGSLB exposes two HTTP interfaces, both returning JSON:
   Parameters are form-encoded (also accepted on the GET query string); records are addressed by `cmd` and a `data`
   table, and `monitor` and `view` are matched by name, not id.
 
+  The same commands apply to every table - `data` is one of `domains`, `monitors`, `views`, `records`, `types`,
+  `users`, `status`:
+    * `get-records` - list a table; supports `search`, `sort`, and `limit`/`offset` paging.
+    * `get-record` (`recid=<id>`) - fetch one row by id.
+    * `get-items` (`field=<column>`) - list the distinct values of one column.
+    * `save-record` (`recid=0` to insert, `recid=<id>` to update) - write one row from `record[...]` fields.
+    * `delete-records` (`selected[0]=<id>`) - delete rows by id.
+
+  An update re-sends the whole row, so editing one field (a record's weight, say) is a read-modify-write:
+  `get-record`, change the field, `save-record` with the unchanged fields preserved.
+
 ### curl
 
 ```shell
@@ -755,22 +784,58 @@ curl 'http://127.0.0.1:8080/dns/getAllDomains'
 # Admin API: list records (-k accepts the self-signed certificate)
 curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-records -d data=records
 
+# Admin API: fetch one record by id (the id is the recid field from get-records)
+curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-record -d data=records -d recid=133
+
 # Admin API: create an A record (omitted fields - disabled, fallback, weight, persistence - default to 0)
 curl -sk -u admin:admin https://powergslb/admin/w2ui \
-    --data-urlencode cmd=save-record \
-    --data-urlencode data=records \
-    --data-urlencode recid=0 \
-    --data-urlencode 'record[domain]=example.com' \
-    --data-urlencode 'record[name]=app' \
-    --data-urlencode 'record[name_type]=A' \
-    --data-urlencode 'record[ttl]=60' \
-    --data-urlencode 'record[content]=192.0.2.10' \
-    --data-urlencode 'record[monitor]=No check' \
-    --data-urlencode 'record[view]=Public'
+    -d cmd=save-record -d data=records -d recid=0 \
+    -d 'record[domain]=example.com' \
+    -d 'record[name]=app' \
+    -d 'record[name_type]=A' \
+    -d 'record[ttl]=60' \
+    -d 'record[content]=192.0.2.10' \
+    -d 'record[monitor]=No check' \
+    -d 'record[view]=Public'
+
+# Admin API: change a record's weight (recid=133 updates in place; re-send the row's other fields unchanged)
+curl -sk -u admin:admin https://powergslb/admin/w2ui \
+    -d cmd=save-record -d data=records -d recid=133 \
+    -d 'record[domain]=example.com' \
+    -d 'record[name]=app' \
+    -d 'record[name_type]=A' \
+    -d 'record[ttl]=60' \
+    -d 'record[content]=192.0.2.10' \
+    -d 'record[monitor]=No check' \
+    -d 'record[view]=Public' \
+    -d 'record[weight]=10'
 
 # Admin API: delete a record by id
 curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=delete-records -d data=records -d 'selected[0]=133'
+
+# Admin API: list / add domains
+curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-records -d data=domains
+curl -sk -u admin:admin https://powergslb/admin/w2ui \
+    -d cmd=save-record -d data=domains -d recid=0 \
+    -d 'record[domain]=example.net'
+
+# Admin API: list monitors / add a TCP check (monitor_json is the check definition; ${content} expands to the record)
+curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-records -d data=monitors
+curl -sk -u admin:admin https://powergslb/admin/w2ui \
+    -d cmd=save-record -d data=monitors -d recid=0 \
+    -d 'record[monitor]=TCP 443' \
+    -d 'record[monitor_json]={"type": "tcp", "ip": "${content}", "port": 443}'
+
+# Admin API: list views / add a view (rule is a space-separated CIDR list)
+curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-records -d data=views
+curl -sk -u admin:admin https://powergslb/admin/w2ui \
+    -d cmd=save-record -d data=views -d recid=0 \
+    -d 'record[view]=Internal' \
+    -d 'record[rule]=10.0.0.0/8 192.168.0.0/16'
 ```
+
+The values here need no URL-encoding (none contain `&`, `+`, `%`, or `=`), so plain `-d` is enough; reach for
+`--data-urlencode` if a field ever carries one of those characters.
 
 ### Python
 
@@ -793,13 +858,28 @@ def w2ui(cmd, data, **params):
     # verify=False: the demo image ships a self-signed certificate
     return requests.get(ADMIN, params=params, auth=AUTH, verify=False, timeout=15).json()
 
+def save(data, recid, fields):
+    return w2ui("save-record", data, recid=recid, **{f"record[{k}]": v for k, v in fields.items()})
+
+# Records: list, create, delete
 records = w2ui("get-records", "records")["records"]
-
-fields = {"domain": "example.com", "name": "app", "name_type": "A", "ttl": 60,
-          "content": "192.0.2.10", "monitor": "No check", "view": "Public"}
-w2ui("save-record", "records", recid=0, **{f"record[{k}]": v for k, v in fields.items()})
-
+save("records", 0, {"domain": "example.com", "name": "app", "name_type": "A", "ttl": 60,
+                    "content": "192.0.2.10", "monitor": "No check", "view": "Public"})
 w2ui("delete-records", "records", **{"selected[0]": 133})
+
+# Change a record's weight: read-modify-write (an update re-sends the whole row)
+record = w2ui("get-record", "records", recid=133)["record"]
+record["weight"] = 10
+save("records", record["recid"], record)
+
+# Domains
+save("domains", 0, {"domain": "example.net"})
+
+# Monitors: monitor_json is the check definition; ${content} expands to the record content
+save("monitors", 0, {"monitor": "TCP 443", "monitor_json": '{"type": "tcp", "ip": "${content}", "port": 443}'})
+
+# Views: rule is a space-separated CIDR list
+save("views", 0, {"view": "Internal", "rule": "10.0.0.0/8 192.168.0.0/16"})
 ```
 
 ## Tests

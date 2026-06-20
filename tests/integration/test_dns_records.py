@@ -242,6 +242,40 @@ def test_ipv6_view_matching(
     assert dns.lookup(fqdn, 'AAAA', real_remote='8.8.8.8/32') == []
 
 
+# geo (country / continent) view matching
+
+def test_geo_view_matching(
+        w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    """A view with a country/continent rule matches a client by geolocation, resolved from the bundled MMDB.
+
+    The image ships the DB-IP IP-to-Country Lite database, so geo tokens are live. Rule ``country:US continent:NA``
+    matches a stable US client (8.8.8.8) and excludes a stable European one (193.0.6.139, RIPE NCC, NL).
+    """
+    name = 'geo-view-test'
+    fqdn = f'{name}.example.com'
+    content = '192.0.2.120'
+
+    r = w2ui.save('views', view='Geo US', rule='country:US continent:NA')
+    assert r.json()['status'] == 'success', r.json()
+    view_recid = w2ui.find_recid('views', view='Geo US')
+    assert view_recid is not None
+    cleanup.append(('views', view_recid))
+
+    r = w2ui.save('records', name=name, content=content, **{**base_record, 'view': 'Geo US'})
+    assert r.json()['status'] == 'success'
+    record_recid = w2ui.find_recid('records', name=name, content=content)
+    assert record_recid is not None
+    cleanup.append(('records', record_recid))
+
+    # US client -> matches country:US / continent:NA -> record returned
+    result = dns.lookup(fqdn, 'A', real_remote='8.8.8.8/32')
+    assert len(result) == 1
+    assert result[0]['content'] == content
+
+    # European client -> not US and not NA -> empty
+    assert dns.lookup(fqdn, 'A', real_remote='193.0.6.139/32') == []
+
+
 # MX record without priority number
 
 def test_mx_record_without_priority_number(

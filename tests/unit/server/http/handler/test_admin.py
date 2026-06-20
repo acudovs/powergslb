@@ -19,6 +19,7 @@ import pytest
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http.handler import admin as admin_module
 from powergslb.server.http.handler.admin import AdminRequestHandler
+from powergslb.system.geoip import GeoIPReader
 
 from .conftest import Recorder, build_recorder
 
@@ -63,7 +64,14 @@ class _FakeDatabase:
         return self.delete_count
 
 
-def _handler(query: Any = None, body: bytes | None = None, status_registry: Any = None) -> AdminRequestHandler:
+class _FakeGeoIP:
+    """Stub GeoIP reader exposing the real token grammar the admin validator consults."""
+
+    parse_geo_token = staticmethod(GeoIPReader.parse_geo_token)
+
+
+def _handler(query: Any = None, body: bytes | None = None,
+             geoip_reader: Any = None, status_registry: Any = None) -> AdminRequestHandler:
     """Build a handler without running __init__ (which would open a socket and call handle())."""
     handler = AdminRequestHandler.__new__(AdminRequestHandler)
     handler.body = body
@@ -73,6 +81,7 @@ def _handler(query: Any = None, body: bytes | None = None, status_registry: Any 
     handler.path = '/admin/w2ui'
     handler.remote_ip = '203.0.113.1'
     handler.query = query
+    handler.geoip_reader = geoip_reader or _FakeGeoIP()  # type: ignore[assignment]
     handler.status_registry = status_registry or StatusRegistry()
     return handler
 
@@ -489,6 +498,28 @@ def test_validate_record_view_invalid_raises(rule: str) -> None:
     handler = _handler()
     with pytest.raises(ValueError):
         handler._validate_record('views', {'rule': rule})
+
+
+# _validate_record: geo tokens
+
+@pytest.mark.parametrize('rule', ['country:US', 'continent:EU', '10.0.0.0/8 country:DE', 'continent:NA country:US'])
+def test_validate_record_view_geo_valid(rule: str) -> None:
+    # Geo tokens are accepted regardless of whether a GeoIP database is configured.
+    handler = _handler()
+    handler._validate_record('views', {'rule': rule})  # no raise
+
+
+@pytest.mark.parametrize('rule', ['country:USA', 'continent:XX'])
+def test_validate_record_view_malformed_geo_token_raises(rule: str) -> None:
+    handler = _handler()
+    with pytest.raises(ValueError, match='geo token invalid'):
+        handler._validate_record('views', {'rule': rule})
+
+
+def test_validate_record_view_bad_cidr_still_rejected_with_geo_token() -> None:
+    handler = _handler()
+    with pytest.raises(ValueError, match='CIDR invalid'):
+        handler._validate_record('views', {'rule': 'country:US not-a-cidr'})
 
 
 def test_save_record_view_invalid_raises_and_skips_db() -> None:

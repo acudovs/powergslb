@@ -181,22 +181,24 @@ class AdminRequestHandler(HTTPRequestHandler):
             return {'status': 'error', 'message': 'record not changed'}
         return {'status': 'success'}
 
-    @staticmethod
-    def _validate_record(data: Any, record: dict[str, Any]) -> None:
+    def _validate_record(self, data: Any, record: dict[str, Any]) -> None:
         """Reject an invalid record before the database write.
 
-        :raises ValueError: When a monitor's 'monitor_json' is malformed or view's 'rule' is not a valid CIDR.
+        :raises ValueError: When validation failed.
         """
         if data == 'monitors':
             # The record content is unknown at monitor-definition time; validate a placeholder IP.
             MonitorManager.build_check({'content': '127.0.0.1', 'monitor_json': record['monitor_json']})
 
         elif data == 'views':
-            # The rule is the space-separated CIDR list; reject anything netaddr cannot parse.
+            # The rule is a space-separated list or CIDR and geo tokens; reject anything unparsable.
             tokens = record['rule'].split()
             if not tokens:
-                raise ValueError('view rule must hold at least one CIDR')
+                raise ValueError('view rule must hold at least one token')
+
             for token in tokens:
+                if self.geoip_reader.parse_geo_token(token) is not None:
+                    continue
                 try:
                     netaddr.IPNetwork(token)
                 except netaddr.AddrFormatError as e:

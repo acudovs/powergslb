@@ -19,6 +19,10 @@ level = "DEBUG"
 update_interval = 60
 icmp_privileged = true
 
+[geoip]
+# DB-IP Lite bundled by default; override with a MaxMind GeoLite2/GeoIP2.
+database = "/usr/share/powergslb/dbip-country-lite.mmdb"
+
 [server]
 address = "127.0.0.1"
 port = 8080

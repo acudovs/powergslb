@@ -20,6 +20,7 @@ import powergslb.database
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http.handler import request as request_module
 from powergslb.server.http.handler.request import HTTPRequestHandler
+from powergslb.system.geoip import GeoIPReader
 
 from .conftest import FakeDatabase, Recorder, build_recorder
 
@@ -350,7 +351,8 @@ def test_handle_request_empty_path_sends_404(monkeypatch: pytest.MonkeyPatch) ->
 def test_init_sets_per_request_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(request_module.SimpleHTTPRequestHandler, '__init__', lambda self, *a, **k: None)
     registry = StatusRegistry()
-    handler = _Concrete(database_config={'host': 'db'}, status_registry=registry)
+    geoip = GeoIPReader({})  # inert stand-in for the shared reader; only identity matters here
+    handler = _Concrete(database_config={'host': 'db'}, geoip_reader=geoip, status_registry=registry, timeout=30)
     assert handler.body is None
     assert handler.close_connection is False
     assert handler.database is None
@@ -359,4 +361,6 @@ def test_init_sets_per_request_defaults(monkeypatch: pytest.MonkeyPatch) -> None
     assert handler.path == ''
     assert handler.remote_ip is None
     assert handler.query is None
+    assert handler.geoip_reader is geoip  # the shared reader is stored as-is
     assert handler.status_registry is registry
+    assert handler.timeout == 30

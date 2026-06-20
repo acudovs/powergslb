@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 # Set timezone; TZ is passed as a Docker build-arg (default: UTC).
 ln -sfv "/usr/share/zoneinfo/$TZ" /etc/localtime
@@ -13,6 +13,11 @@ dnf install --setopt install_weak_deps=false --nodocs -y \
 
 # Replace the default PowerDNS configuration file installed by the package.
 mv /etc/pdns/pdns.conf.powergslb /etc/pdns/pdns.conf
+
+# Bundle the DB-IP database (CC BY 4.0) for geo routing. The URL is month-stamped.
+mkdir -p /usr/share/powergslb
+dbip_url="https://download.db-ip.com/free/dbip-country-lite-$(date -u +%Y-%m).mmdb.gz"
+curl -fsSL "$dbip_url" | gunzip > /usr/share/powergslb/dbip-country-lite.mmdb
 
 # Enable services so systemd starts them on container boot.
 systemctl enable mariadb pdns powergslb powergslb-certgen powergslb-dbinit

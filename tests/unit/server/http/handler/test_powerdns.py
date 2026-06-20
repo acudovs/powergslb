@@ -15,6 +15,7 @@ import pytest
 
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http.handler.powerdns import PowerDNSRequestHandler
+from powergslb.system.geoip import GeoIPReader
 
 
 class _FakeDatabase:
@@ -33,8 +34,23 @@ class _FakeDatabase:
         return self.domains
 
 
+class _FakeGeoIP:
+    """Stub GeoIP reader returning a fixed (country, continent) for every lookup."""
+
+    parse_geo_token = staticmethod(GeoIPReader.parse_geo_token)  # the real token grammar
+
+    def __init__(self, country: str | None = None, continent: str | None = None) -> None:
+        self.country = country
+        self.continent = continent
+        self.queried: list[str | None] = []
+
+    def lookup(self, ip: str | None) -> tuple[str | None, str | None]:
+        self.queried.append(ip)
+        return self.country, self.continent
+
+
 def _handler(dirs: list[str], remote_ip: str = '203.0.113.5', query: Any = None,
-             status_registry: Any = None) -> PowerDNSRequestHandler:
+             geoip_reader: Any = None, status_registry: Any = None) -> PowerDNSRequestHandler:
     """Build a handler without running __init__ (which would open a socket and call handle())."""
     handler = PowerDNSRequestHandler.__new__(PowerDNSRequestHandler)
     handler.body = None
@@ -44,6 +60,7 @@ def _handler(dirs: list[str], remote_ip: str = '203.0.113.5', query: Any = None,
     handler.path = '/' + '/'.join(dirs)
     handler.remote_ip = remote_ip
     handler.query = query
+    handler.geoip_reader = geoip_reader or _FakeGeoIP()  # type: ignore[assignment]
     handler.status_registry = status_registry or StatusRegistry()
     return handler
 
@@ -127,6 +144,64 @@ def test_is_in_view_none_rule_is_false() -> None:
 def test_is_in_view_malformed_rule_is_false() -> None:
     handler = _handler(['dns'])
     assert handler._is_in_view(_record(rule='not-a-cidr')) is False
+
+
+# _is_in_view: geo tokens
+
+def test_is_in_view_country_matches() -> None:
+    handler = _handler(['dns'], geoip_reader=_FakeGeoIP(country='US', continent='NA'))
+    assert handler._is_in_view(_record(rule='country:US')) is True
+
+
+def test_is_in_view_country_no_match() -> None:
+    handler = _handler(['dns'], geoip_reader=_FakeGeoIP(country='DE', continent='EU'))
+    assert handler._is_in_view(_record(rule='country:US')) is False
+
+
+def test_is_in_view_continent_matches() -> None:
+    handler = _handler(['dns'], geoip_reader=_FakeGeoIP(country='US', continent='NA'))
+    assert handler._is_in_view(_record(rule='continent:NA')) is True
+
+
+def test_is_in_view_mixed_cidr_and_geo_is_a_union() -> None:
+    # A client outside the CIDR but inside the geo token still matches; the rule is a union.
+    handler = _handler(['dns'], remote_ip='203.0.113.5', geoip_reader=_FakeGeoIP(country='US'))
+    assert handler._is_in_view(_record(rule='10.0.0.0/8 country:US')) is True
+
+
+def test_is_in_view_cidr_matches_without_consulting_geoip() -> None:
+    # When the CIDR already matches, the geo reader is not queried (CIDR is checked first).
+    geoip = _FakeGeoIP(country='DE')
+    handler = _handler(['dns'], remote_ip='203.0.113.5', geoip_reader=geoip)
+    assert handler._is_in_view(_record(rule='203.0.113.0/24 country:US')) is True
+    assert not geoip.queried
+
+
+def test_is_in_view_geo_inert_with_unloaded_geoip() -> None:
+    # An unloaded reader resolves to no location, so geo tokens never match (CIDR behaviour is unchanged).
+    handler = _handler(['dns'], geoip_reader=_FakeGeoIP(country=None, continent=None))
+    assert handler._is_in_view(_record(rule='continent:EU')) is False
+
+
+def test_is_in_view_malformed_geo_token_is_false(caplog: pytest.LogCaptureFixture) -> None:
+    handler = _handler(['dns'], geoip_reader=_FakeGeoIP(country='US'))
+    with caplog.at_level('ERROR'):
+        assert handler._is_in_view(_record(rule='country:USA')) is False
+    assert any('view rule invalid' in r.getMessage() for r in caplog.records)
+
+
+def test_client_geo_is_memoized_per_client() -> None:
+    # The geo lookup is constant per client, so checking several records queries the reader once.
+    geoip = _FakeGeoIP(country='US')
+    handler = _handler(['dns'], remote_ip='203.0.113.5', geoip_reader=geoip)
+    assert handler._is_in_view(_record(rule='country:US')) is True
+    assert handler._is_in_view(_record(rule='country:DE')) is False
+    assert geoip.queried == ['203.0.113.5']
+
+    # A different client (e.g. a new query on the keep-alive connection) invalidates the memo.
+    handler.remote_ip = '198.51.100.7'
+    assert handler._is_in_view(_record(rule='country:US')) is True
+    assert geoip.queried == ['203.0.113.5', '198.51.100.7']
 
 
 # _remote_ip_persistence

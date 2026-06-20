@@ -24,6 +24,7 @@ import powergslb.database
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http import server as server_module
 from powergslb.server.http.handler import AdminRequestHandler
+from powergslb.system.geoip import GeoIPReader
 
 _INDEX_HTML = '<html>admin</html>'
 
@@ -52,8 +53,8 @@ def address(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[s
     (tmp_path / 'admin' / 'index.html').write_text(_INDEX_HTML)
     (tmp_path / 'top-secret.txt').write_text('document root file outside admin/')
 
-    handler = functools.partial(AdminRequestHandler, directory=str(tmp_path),
-                                database_config={}, status_registry=StatusRegistry(), timeout=5)
+    handler = functools.partial(AdminRequestHandler, directory=str(tmp_path), database_config={},
+                                geoip_reader=GeoIPReader({}), status_registry=StatusRegistry(), timeout=5)
     httpd = server_module._ThreadingHTTPServer(('127.0.0.1', 0), handler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()

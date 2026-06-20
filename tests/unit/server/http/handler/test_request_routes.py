@@ -21,6 +21,7 @@ import powergslb.database
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http import server as server_module
 from powergslb.server.http.handler import AdminRequestHandler, HTTPRequestHandler, PowerDNSRequestHandler
+from powergslb.system.geoip import GeoIPReader
 
 from .conftest import FakeDatabase
 
@@ -35,8 +36,8 @@ def serve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[
     servers: list[Any] = []
 
     def factory(handler_class: type[HTTPRequestHandler]) -> tuple[str, int]:
-        handler = functools.partial(handler_class, directory=str(tmp_path),
-                                    database_config={}, status_registry=StatusRegistry(), timeout=5)
+        handler = functools.partial(handler_class, directory=str(tmp_path), database_config={},
+                                    geoip_reader=GeoIPReader({}), status_registry=StatusRegistry(), timeout=5)
         httpd = server_module._ThreadingHTTPServer(('127.0.0.1', 0), handler)
         httpd.daemon_threads = True
         threading.Thread(target=httpd.serve_forever, daemon=True).start()

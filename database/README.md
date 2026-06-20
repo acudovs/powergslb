@@ -53,7 +53,7 @@ erDiagram
     views {
         int     id    PK
         varchar view  UK
-        varchar rule  UK "space-separated CIDR list"
+        varchar rule  UK "CIDR + geo tokens"
     }
     types {
         int     value        PK "IANA numeric type"
@@ -95,14 +95,14 @@ Unique keys not shown as columns: `rrsets (domain_id, name, type_value)` and `re
 
 Seven tables.
 
-| Table      | Purpose                                                                                          |
-|------------|--------------------------------------------------------------------------------------------------|
-| `users`    | Admin-interface accounts. `password` is a crypt(3) SHA-512 hash (Linux shadow `$6$` format).     |
-| `views`    | Named client-IP groups. `rule` is a space-separated CIDR list (IPv4 and IPv6) matched per query. |
-| `types`    | DNS record-type catalogue keyed by the numeric type value (`A=1`, `CNAME=5`, `SOA=6`, ...).      |
-| `monitors` | Health-check definitions as `monitor_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed. |
-| `domains`  | Authoritative zones, one row per zone apex (`example.com`).                                       |
-| `rrsets`   | One `(domain_id, name, type_value)`; owns `ttl` and `persistence`.                               |
+| Table      | Purpose                                                                                                |
+|------------|--------------------------------------------------------------------------------------------------------|
+| `users`    | Admin-interface accounts. `password` is a crypt(3) SHA-512 hash (Linux shadow `$6$` format).           |
+| `views`    | Named client groups. `rule` is a space-separated list of CIDR and geo tokens matched per query.        |
+| `types`    | DNS record-type catalogue keyed by the numeric type value (`A=1`, `CNAME=5`, `SOA=6`, ...).            |
+| `monitors` | Health-check definitions as `monitor_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed.      |
+| `domains`  | Authoritative zones, one row per zone apex (`example.com`).                                            |
+| `rrsets`   | One `(domain_id, name, type_value)`; owns `ttl` and `persistence`.                                     |
 | `records`  | One answer inside an rrset: `content`, plus `monitor_id`, `view_id`, `disabled`, `fallback`, `weight`. |
 
 Key relationships and constraints:
@@ -203,7 +203,8 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 - **Users**: `admin` / `admin` - the default account. The stored hash is crypt(3) SHA-512.
   **Change it before any real deployment** - easiest from the admin UI (edit the `admin` user and set a new
   password) or via `powergslb`'s `hash_password` function, then `UPDATE users`.
-- **Views**: `Public` (`0.0.0.0/0 ::/0`) and `Private` (RFC 1918 ranges).
+- **Views**: `Public` (`0.0.0.0/0 ::/0`), `Private` (RFC 1918 ranges),
+  and `Europe` (`country:DE country:FR continent:EU`) as a GeoIP example.
 - **Types**: the common DNS types (A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, SRV) keyed by their IANA numeric value.
 - **Monitors**: `No check` (id 1, the inert default every seed record uses; its JSON is `{"type": "none"}` - the
   registered `none` check type that MonitorManager never threads) plus exec / icmp / http / tcp / tls examples.

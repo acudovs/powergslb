@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, unquote
 import powergslb.monitor
 from powergslb.database import Database
 from powergslb.monitor.status import StatusRegistry
+from powergslb.system.geoip import GeoIPReader
 from powergslb.version import VERSION
 
 __all__ = ['HTTPRequestHandler']
@@ -22,6 +23,7 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     keep-alive requests and bounded by the idle timeout.
 
     :param database_config: mysql.connector connect kwargs.
+    :param geoip_reader: GeoIP reader for lookup and validation.
     :param status_registry: Shared health status registry.
     :param timeout: Idle keep-alive timeout in seconds; bounds how long the handler holds its database connection.
     """
@@ -35,8 +37,9 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     def __init__(self,
                  *args: Any,
                  database_config: dict[str, Any],
+                 geoip_reader: GeoIPReader,
                  status_registry: StatusRegistry,
-                 timeout: float | None = None,
+                 timeout: float,
                  **kwargs: Any) -> None:
         self.body: bytes | None = None
         self.close_connection: bool = False
@@ -46,8 +49,9 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         self.path: str = ''
         self.remote_ip: str | None = None
         self.query: Any = None
+        self.geoip_reader: GeoIPReader = geoip_reader
         self.status_registry: StatusRegistry = status_registry
-        self.timeout: float | None = timeout  # type: ignore[misc]
+        self.timeout: float = timeout  # type: ignore[misc]
         super().__init__(*args, **kwargs)
 
     @abc.abstractmethod

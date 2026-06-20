@@ -4,7 +4,8 @@ INSERT INTO `users` (`id`, `user`, `name`, `password`) VALUES
 
 INSERT INTO `views` (`id`, `view`, `rule`) VALUES
   (1, 'Public', '0.0.0.0/0 ::/0'),
-  (2, 'Private', '10.0.0.0/8 172.16.0.0/12 192.168.0.0/16');
+  (2, 'Private', '10.0.0.0/8 172.16.0.0/12 192.168.0.0/16'),
+  (3, 'Europe', 'country:DE country:FR continent:EU');
 
 INSERT INTO `types` (`value`, `type`, `description`) VALUES
   (1, 'A', 'Address record'),

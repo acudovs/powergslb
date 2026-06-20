@@ -22,6 +22,9 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
     """
     route: ClassVar[str] = 'dns'
 
+    # Per-request memo of (client IP, (country, continent)).
+    _geo_cache: tuple[Any, tuple[str | None, str | None]] = (object(), (None, None))
+
     def _handle_route(self) -> None:
         """Answer GET /dns queries; any other method is not part of the remote backend protocol -> 404."""
         if self.command == 'GET':
@@ -120,15 +123,43 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
                 for r in filtered_records]
 
     def _is_in_view(self, record: dict[str, Any]) -> bool:
-        """Return True when the client IP matches the record's view rule CIDRs; an invalid rule never matches."""
+        """Return True when the client IP matches the record's view rule; an invalid rule never matches.
+
+        A rule is a space-separated list or CIDR and geo tokens. The client IP matches when it satisfies any one token.
+        """
         result = False
         try:
-            rule = record.get('rule')
-            result = bool(netaddr.smallest_matching_cidr(self.remote_ip, rule.split()))  # type: ignore[union-attr]
+            cidr_tokens: list[str] = []
+            geo_tokens: list[tuple[str, str]] = []
+            for token in record.get('rule').split():  # type: ignore[union-attr]
+                geo = self.geoip_reader.parse_geo_token(token)
+                if geo is None:
+                    cidr_tokens.append(token)
+                else:
+                    geo_tokens.append(geo)
+
+            if cidr_tokens and netaddr.smallest_matching_cidr(self.remote_ip, cidr_tokens):
+                result = True
+            elif geo_tokens:
+                country, continent = self._client_geo()
+                result = any((kind == 'country' and value == country) or
+                             (kind == 'continent' and value == continent) for kind, value in geo_tokens)
         except (AttributeError, netaddr.AddrFormatError, ValueError) as e:
             logging.error('record id %s view rule invalid: %s: %s', record['id'], type(e).__name__, e)
 
         return result
+
+    def _client_geo(self) -> tuple[str | None, str | None]:
+        """Resolve the client's country and continent, caching the result by client IP.
+
+        The client geo is constant for a query yet '_is_in_view' runs per record, so the GeoIP lookup is memoized
+        and recomputed only when 'remote_ip' changes (a new query reuses the keep-alive connection's handler).
+        """
+        ip, geo = self._geo_cache
+        if ip != self.remote_ip:
+            geo = self.geoip_reader.lookup(self.remote_ip)
+            self._geo_cache = (self.remote_ip, geo)
+        return geo
 
     def _remote_ip_persistence(self, records: list[dict[str, Any]]) -> dict[str, Any]:
         """Pick one record for the client, deterministically.

@@ -11,6 +11,7 @@ from typing import Any
 
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http.handler import HTTPRequestHandler
+from powergslb.system.geoip import GeoIPReader
 
 __all__ = ['HTTPServerManager']
 
@@ -20,6 +21,7 @@ class HTTPServerManager(threading.Thread):
 
     :param server_config: The [server] or [admin] config section (address, port, TLS material, root, timeout).
     :param database_config: mysql.connector connect kwargs passed on to every request handler.
+    :param geoip_reader: GeoIP reader for lookup and validation.
     :param status_registry: Shared health status registry the handlers read.
     :param handler: The request handler class this port serves; selects the DNS or admin surface.
     """
@@ -27,6 +29,7 @@ class HTTPServerManager(threading.Thread):
     def __init__(self,
                  server_config: dict[str, Any],
                  database_config: dict[str, Any],
+                 geoip_reader: GeoIPReader,
                  status_registry: StatusRegistry,
                  handler: type[HTTPRequestHandler],
                  **kwargs: Any) -> None:
@@ -43,6 +46,7 @@ class HTTPServerManager(threading.Thread):
         self.root: str = server_config.get('root') or _default_root()
         self.keep_alive_timeout: float = server_config.get('keep_alive_timeout', 30)
         self._database_config = database_config
+        self._geoip_reader = geoip_reader
         self._status_registry = status_registry
         self._handler = handler
         self._lock = threading.Lock()
@@ -56,6 +60,7 @@ class HTTPServerManager(threading.Thread):
             self._handler,
             directory=self.root,
             database_config=self._database_config,
+            geoip_reader=self._geoip_reader,
             status_registry=self._status_registry,
             timeout=self.keep_alive_timeout)
         server = _ThreadingHTTPServer(address, handler)  # binds the socket

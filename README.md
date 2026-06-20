@@ -3,7 +3,7 @@
 PowerGSLB is a DNS-based Global Server Load Balancing (GSLB) solution built as a PowerDNS Authoritative Server
 [Remote Backend](https://doc.powerdns.com/authoritative/backends/remote.html). It continuously health-checks the
 endpoints behind your DNS records and returns only the live ones, honoring weighted priorities, client-IP / subnet
-persistence, DNS views, and fallback rules.
+persistence, DNS views (CIDR and GeoIP), and fallback rules.
 
 ## Table of Contents
 
@@ -49,7 +49,7 @@ persistence, DNS views, and fallback rules.
 * JSON [HTTP API](#api) for DNS queries and CRUD administration
 * HTTPS support for the web server
 * Record selection:
-    * DNS GSLB views support
+    * DNS GSLB views (CIDR and GeoIP)
     * Weighted (priority) records
     * Fallback if all the checks fail
     * Per-record client IP / subnet persistence
@@ -126,6 +126,14 @@ classDiagram
         <<module>>
         +hash_password(password)$ str
         +verify_password(password, stored)$ bool
+    }
+    class GeoIPReader {
+        +frozenset~str~ CONTINENT_CODES$
+        +frozenset~str~ COUNTRY_CODES$
+        -Reader _reader
+        +parse_geo_token(token)$ tuple | None
+        +lookup(ip) tuple
+        +close() None
     }
 
     %% ===== monitor =====
@@ -326,6 +334,7 @@ classDiagram
     %% ===== Associations / composition =====
     PowerGSLB ..> Config : creates
     PowerGSLB ..> StatusRegistry : creates
+    PowerGSLB ..> GeoIPReader : creates
     PowerGSLB ..> MonitorManager : creates
     PowerGSLB ..> HTTPServerManager : creates
     PowerGSLB ..> SystemService : creates
@@ -340,9 +349,11 @@ classDiagram
     StatusWriter --> StatusRegistry
     HTTPServerManager o--> _ThreadingHTTPServer : owns
     HTTPServerManager --> StatusRegistry
+    HTTPServerManager --> GeoIPReader
     HTTPServerManager ..> HTTPRequestHandler : instantiates per request
     HTTPRequestHandler --> MySQLDatabase : per-connection
     HTTPRequestHandler --> StatusRegistry
+    HTTPRequestHandler --> GeoIPReader
     AdminRequestHandler ..> MonitorManager : build_check (validate)
     AdminRequestHandler ..> queryparser : parse_query
     queryparser ..> QueryParserError : raises
@@ -493,13 +504,14 @@ PowerGSLB is configured from a single TOML file, passed with `-c` / `--config`. 
 `/etc/powergslb/powergslb.toml` in the Docker image. Values are natively typed: ports and timeouts are integers, `ssl`
 is a boolean, and the rest are strings.
 
-| section      | purpose                        | key options                                                   |
-|--------------|--------------------------------|---------------------------------------------------------------|
-| `[database]` | MySQL / MariaDB connection     | `database`, `user`, `password`, `host`, `port`, `unix_socket` |
-| `[logging]`  | Python logging                 | `format`, `level`                                             |
-| `[monitor]`  | health-check engine            | `update_interval` (seconds), `icmp_privileged` (bool)         |
-| `[server]`   | DNS interface (Remote Backend) | `address`, `port`, `keep_alive_timeout`                       |
-| `[admin]`    | admin interface (web UI + API) | `address`, `port`, `ssl`, `cert`, `key`, `ciphers`, `root`    |
+| section      | purpose                         | key options                                                   |
+|--------------|---------------------------------|---------------------------------------------------------------|
+| `[database]` | MySQL / MariaDB connection      | `database`, `user`, `password`, `host`, `port`, `unix_socket` |
+| `[logging]`  | Python logging                  | `format`, `level`                                             |
+| `[monitor]`  | health-check engine             | `update_interval` (seconds), `icmp_privileged` (bool)         |
+| `[server]`   | DNS interface (Remote Backend)  | `address`, `port`, `keep_alive_timeout`                       |
+| `[admin]`    | admin interface (web UI + API)  | `address`, `port`, `ssl`, `cert`, `key`, `ciphers`, `root`    |
+| `[geoip]`    | geo routing for [views](#views) | `database` (path to a GeoIP database)                         |
 
 The `[database]` is passed straight to `mysql.connector` as connect kwargs. When `unix_socket` is set it takes
 precedence over `host` / `port`.
@@ -509,18 +521,24 @@ unit writes `/etc/powergslb/powergslb.pem` only if it is missing) so each deploy
 `cert` with your own PEM for production - `cert` may bundle the private key, or point `key` at a separate key file.
 Both `[server]` and `[admin]` accept `keep_alive_timeout`, the HTTP keep-alive idle timeout in seconds.
 
+The `[geoip]` section `database` is the path to a [MaxMind DB](https://maxminddb.com/). The Docker image bundles the
+[DB-IP IP-to-Country Lite](https://db-ip.com/db/download/ip-to-country-lite) at
+`/usr/share/powergslb/dbip-country-lite.mmdb`; point `database` at a
+[MaxMind GeoLite2 / GeoIP2](https://www.maxmind.com/) file to swap it.
+
 ### Environment overrides
 
 Every option can be overridden by an environment variable named `POWERGSLB_<SECTION>_<OPTION>` (uppercased), coerced to
 the configured value's type. This is how the Docker image is tuned without editing the file. Examples across sections:
 
 ```shell
-POWERGSLB_DATABASE_HOST=192.168.1.20      # connect to a remote database
+POWERGSLB_DATABASE_HOST=192.168.1.20                  # connect to a remote database
 POWERGSLB_DATABASE_PORT=3306
-POWERGSLB_DATABASE_UNIX_SOCKET=           # empty: use host/port over TCP instead of the socket
+POWERGSLB_DATABASE_UNIX_SOCKET=                       # empty: use host/port over TCP instead of the socket
 POWERGSLB_LOGGING_LEVEL=INFO
-POWERGSLB_SERVER_ADDRESS=0.0.0.0          # expose the DNS backend beyond loopback
+POWERGSLB_SERVER_ADDRESS=0.0.0.0                      # expose the DNS backend beyond loopback
 POWERGSLB_ADMIN_PORT=8443
+POWERGSLB_GEOIP_DATABASE=/data/GeoLite2-Country.mmdb  # use a MaxMind file instead of the bundled DB-IP Lite
 ```
 
 The `[monitor]` section tunes the health-check engine as a whole - `update_interval` is how often it re-reads the
@@ -550,13 +568,9 @@ in [database/README.md](database/README.md).
 
 ## Web administration interface
 
-**Status grid**
+**Status**
 
 ![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-status.png?raw=true)
-
-**Records grid**
-
-![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-records.png?raw=true)
 
 **Advanced search**
 
@@ -570,6 +584,10 @@ in [database/README.md](database/README.md).
 
 ![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-monitors.png?raw=true)
 
+**Views**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-views.png?raw=true)
+
 [More images](images)
 
 ## Record selection
@@ -581,10 +599,21 @@ header PowerDNS sends (the real resolver address), not the PowerDNS host.
 
 ### Views
 
-A view maps client subnets to records, so one name can resolve differently per client. Each view holds a
-space-separated list of CIDR ranges (IPv4 and IPv6), and a record references exactly one view; a record is a candidate
-only when the client IP falls inside its view's ranges. The seed data ships a `Public` view (`0.0.0.0/0 ::/0`, matching
-every client) and a `Private` view (the RFC 1918 ranges).
+A view maps clients to records, so one name can resolve differently per client. Each view holds a space-separated
+`rule`, and a record references exactly one view; a record is a candidate only when the client matches the rule. The
+seed data ships a `Public` view (`0.0.0.0/0 ::/0`, matching every client), a `Private` view (the RFC 1918 ranges),
+and a geo `Europe` view (`country:DE country:FR continent:EU`).
+
+A rule is a space-separated list or CIDR and geo tokens - the client matches when it satisfies any one of them:
+
+* **CIDR** (IPv4 or IPv6): `10.0.0.0/8`, `2001:db8::/32` - matches when the client IP falls inside the range.
+* `country:<ISO>` - a two-letter [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) country
+  code, e.g. `country:DE`.
+* `continent:<CODE>` - a two-letter continent code (`AF`, `AN`, `AS`, `EU`, `NA`, `OC`, `SA`), e.g. `continent:EU`.
+
+Geo tokens are case-insensitive and may be mixed freely with CIDRs, e.g. `10.0.0.0/8 country:DE continent:EU`. The
+client's country and continent are resolved from the [`[geoip]`](#configuration) database for each query. When no
+database is loaded the geo tokens never match and CIDR behavior is unchanged.
 
 ### Weight (priority)
 
@@ -860,12 +889,18 @@ curl -sk -u admin:admin https://powergslb/admin/w2ui \
     -d 'record[monitor]=TCP 443' \
     -d 'record[monitor_json]={"type": "tcp", "ip": "${content}", "port": 443}'
 
-# Admin API: list views / add a view (rule is a space-separated CIDR list)
+# Admin API: list views / add a view (rule is a space-separated list or CIDR and geo tokens)
 curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-records -d data=views
 curl -sk -u admin:admin https://powergslb/admin/w2ui \
     -d cmd=save-record -d data=views -d recid=0 \
     -d 'record[view]=Internal' \
     -d 'record[rule]=10.0.0.0/8 192.168.0.0/16'
+
+# Admin API: add a geo view
+curl -sk -u admin:admin https://powergslb/admin/w2ui \
+    -d cmd=save-record -d data=views -d recid=0 \
+    -d 'record[view]=Europe' \
+    -d 'record[rule]=country:DE country:FR continent:EU'
 ```
 
 The values here need no URL-encoding (none contain `&`, `+`, `%`, or `=`), so plain `-d` is enough; reach for
@@ -912,8 +947,9 @@ save("domains", 0, {"domain": "example.net"})
 # Monitors: monitor_json is the check definition; ${content} expands to the record content
 save("monitors", 0, {"monitor": "TCP 443", "monitor_json": '{"type": "tcp", "ip": "${content}", "port": 443}'})
 
-# Views: rule is a space-separated CIDR list
+# Views: rule is a space-separated list or CIDR and geo tokens
 save("views", 0, {"view": "Internal", "rule": "10.0.0.0/8 192.168.0.0/16"})
+save("views", 0, {"view": "Europe", "rule": "country:DE country:FR continent:EU"})
 ```
 
 ## Tests
@@ -930,3 +966,6 @@ tests/run-integration.sh            # build the image and run the integration su
 ## License
 
 PowerGSLB is released under the MIT License. See [LICENSE](LICENSE) for details.
+
+The Docker image bundles the [IP Geolocation by DB-IP](https://db-ip.com/) database,
+licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

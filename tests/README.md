@@ -17,48 +17,53 @@
 
 ```
 tests/
-├── integration/                     end-to-end tests against a running Docker container
-│   ├── conftest.py                  W2UIClient/DNSClient helpers and fixtures: base_url, admin_url, dns_addr,
-│   │                                require_container (autouse), w2ui, dns, base_record, cleanup
-│   ├── test_admin.py                admin HTTPS API: CRUD, search, sort, pagination, static files, malformed input
-│   ├── test_dns_backend.py          DNS HTTP backend: record types, routing, headers, getAllDomains
-│   ├── test_dns_records.py          DNS behaviour via admin CRUD (disabled, views, weight, persistence, IPv6, fallback)
-│   ├── test_health.py               static health status reporting and DNS consistency
-│   ├── test_lifecycle.py            graceful systemctl stop/restart: clean exit, no SIGKILL, rebind (needs POWERGSLB_CONTAINER)
-│   ├── test_monitor_health.py       active fall/rise lifecycle, interpolation, bad-config resilience, real fallback
-│   ├── test_monitor_types.py        all four check types: icmp, tcp, http, exec
-│   └── test_powerdns.py             DNS responses via PowerDNS, A/AAAA/NS/SOA/CNAME/MX/TXT/SRV (requires dig)
-└── unit/                            in-process unit tests (no container required); mirrors src/powergslb/ layout
-    ├── test_main.py                 entry point: argument parsing, thread wiring, SystemService startup
-    ├── test_version.py              version constant is a semver string
+├── integration/                        end-to-end tests against a running Docker container
+│   ├── conftest.py                     W2UIClient/DNSClient helpers and fixtures: base_url, admin_url, dns_addr,
+│   │                                   require_container (autouse), w2ui, dns, base_record, cleanup
+│   ├── test_admin.py                   admin HTTPS API: CRUD, search, sort, pagination, static files, malformed input
+│   ├── test_dns_backend.py             DNS HTTP backend: record types, routing, headers, getAllDomains
+│   ├── test_dns_records.py             records via admin: disabled, views, geo, weight, persistence, IPv6, fallback
+│   ├── test_health.py                  static health status reporting and DNS consistency
+│   ├── test_lifecycle.py               systemctl stop/restart: no SIGKILL, clean rebind (needs POWERGSLB_CONTAINER)
+│   ├── test_monitor_health.py          active fall/rise lifecycle, interpolation, bad-config resilience, real fallback
+│   ├── test_monitor_types.py           all five check types: icmp, tcp, http, tls, exec
+│   ├── test_powerdns.py                DNS responses via PowerDNS, A/AAAA/NS/SOA/CNAME/MX/TXT/SRV (requires dig)
+│   └── test_schema_constraints.py      raw-SQL constraints/triggers, GC, longest-zone-match (needs POWERGSLB_CONTAINER)
+└── unit/                               in-process unit tests (no container required); mirrors src/powergslb/ layout
+    ├── test_main.py                    entry point: argument parsing, thread wiring, SystemService startup
+    ├── test_version.py                 version constant is a semver string
     ├── database/mysql/
-    │   ├── test_database.py         MySQLDatabase: SQL flattener, context manager, autocommit, result shaping
-    │   ├── test_powerdns.py         PowerDNSDatabaseMixIn SQL builders: gslb_checks/gslb_domains/gslb_records
-    │   └── test_w2ui.py             W2UIDatabaseMixIn SQL builders: check_user, CRUD, insert/clean helpers
+    │   ├── test_database.py            MySQLDatabase: SQL flattener, context manager, autocommit, result shaping
+    │   ├── test_powerdns.py            PowerDNSDatabaseMixIn SQL builders: gslb_checks/gslb_domains/gslb_records
+    │   └── test_w2ui.py                W2UIDatabaseMixIn SQL builders: check_user, CRUD, insert/clean helpers
     ├── monitor/
     │   ├── check/
-    │   │   ├── test_base.py         Check: type registry, create() validation branches, timeout clamp
-    │   │   ├── test_exec.py         ExecCheck.execute(): subprocess exit code
-    │   │   ├── test_http.py         HttpCheck.execute(): 2xx vs non-2xx, body drained
-    │   │   ├── test_icmp.py         IcmpCheck.execute(): ping alive, privileged flag, unknown host
-    │   │   ├── test_tcp.py          TcpCheck.execute(): socket connect
-    │   │   └── test_thread.py       CheckThread: rise/fall debounce, task() dispatch
-    │   ├── test_monitor.py          MonitorManager: parse/build, status cleanup, thread lifecycle, task()
-    │   ├── test_status.py           StatusRegistry/StatusWriter health set: add/remove/is_down/retain/get_writer
-    │   └── test_thread.py           AbstractThread: run loop, daemon flag, graceful shutdown
+    │   │   ├── test_base.py            Check: type registry, create() validation branches, timeout clamp
+    │   │   ├── test_exec.py            ExecCheck.execute(): subprocess exit code
+    │   │   ├── test_http.py            HttpCheck.execute(): 2xx vs non-2xx, body drained
+    │   │   ├── test_icmp.py            IcmpCheck.execute(): ping alive, privileged flag, unknown host
+    │   │   ├── test_none.py            NoCheck: skip flag set, base defaults, execute() always healthy
+    │   │   ├── test_tcp.py             TcpCheck.execute(): socket connect
+    │   │   ├── test_thread.py          CheckThread: rise/fall debounce, task() dispatch
+    │   │   └── test_tls.py             TlsCheck.execute(): TLS handshake, tls_verify toggle, SNI/host override
+    │   ├── test_monitor.py             MonitorManager: parse/build, status cleanup, thread lifecycle, task()
+    │   ├── test_status.py              StatusRegistry/StatusWriter health set: add/remove/is_down/retain/get_writer
+    │   └── test_thread.py              AbstractThread: run loop, daemon flag, graceful shutdown
     ├── server/http/
-    │   ├── test_server.py           HTTPServerManager: config unpacking, bundled-resources root, plain/TLS run() wiring
+    │   ├── test_server.py              HTTPServerManager: config unpacking, bundled-resources root, plain/TLS run()
     │   └── handler/
-    │       ├── test_admin.py        AdminRequestHandler: auth, route, w2ui parsing/CRUD/search/sort, dispatch
-    │       ├── test_powerdns.py     PowerDNSRequestHandler: header override, route, filter, lookup, dispatch
-    │       ├── test_queryparser.py  w2ui query-string parser: flat/nested/indexed/array forms, helpers
-    │       ├── test_request.py      HTTPRequestHandler base: handle() errors, body, route skeleton, writers
-    │       ├── test_request_head.py HEAD over a real socket: always 404, never serves static metadata
+    │       ├── test_admin.py           AdminRequestHandler: auth, route, w2ui parsing/CRUD/search/sort, dispatch
+    │       ├── test_powerdns.py        PowerDNSRequestHandler: header override, route, filter, lookup, dispatch
+    │       ├── test_queryparser.py     w2ui query-string parser: flat/nested/indexed/array forms, helpers
+    │       ├── test_request.py         HTTPRequestHandler base: handle() errors, body, route skeleton, writers
+    │       ├── test_request_head.py    HEAD over a real socket: always 404, never serves static metadata
     │       └── test_request_routes.py  cross-port routing: each role 404s the other surface
     └── system/
-        ├── test_config.py           TOML config: typed values, items(), env overrides, singleton
-        ├── test_service.py          SystemService thread supervision: exit non-zero when a thread dies
-        └── test_thread.py           ServiceThread Protocol: structural conformance, isinstance checks
+        ├── test_config.py              TOML config: typed values, items(), env overrides, singleton
+        ├── test_geoip.py               GeoIPReader: parse_geo_token classes, inert without DB, IP->country/continent
+        ├── test_password.py            crypt(3) SHA-512 helpers: $6$ format, random salt, verify accept/reject
+        ├── test_service.py             SystemService thread supervision: exit non-zero when a thread dies
+        └── test_thread.py              ServiceThread Protocol: structural conformance, isinstance checks
 ```
 
 ---

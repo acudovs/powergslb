@@ -14,6 +14,9 @@ dnf install --setopt install_weak_deps=false --nodocs -y \
 # Replace the default PowerDNS configuration file installed by the package.
 mv /etc/pdns/pdns.conf.powergslb /etc/pdns/pdns.conf
 
+# Add custom CA certificates into the system trust store used by the `http`/`tls` health checks.
+update-ca-trust
+
 # Bundle the DB-IP database (CC BY 4.0) for geo routing. The URL is month-stamped.
 mkdir -p /usr/share/powergslb
 dbip_url="https://download.db-ip.com/free/dbip-country-lite-$(date -u +%Y-%m).mmdb.gz"

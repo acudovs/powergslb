@@ -30,6 +30,7 @@ persistence, DNS views (CIDR and GeoIP), and fallback rules.
     * [HTTP parameters](#http-parameters)
     * [TCP parameters](#tcp-parameters)
     * [TLS parameters](#tls-parameters)
+    * [Trust custom CA certificates](#trust-custom-ca-certificates)
 * [API](#api)
 * [Tests](#tests)
 * [License](#license)
@@ -814,6 +815,17 @@ bounded by `timeout`. With `tls_verify` (the default `true`), an untrusted chain
 hostname mismatch fails the check; set `tls_verify` to `false` to require only that the handshake completes. Unlike
 `tcp`, which stops at the TCP handshake, `tls` confirms the endpoint actually serves TLS - use it for non-HTTP TLS
 services (SMTPS, IMAPS, LDAPS, etc.) that the `http` check cannot handle.
+
+### Trust custom CA certificates
+
+With `tls_verify` (used by the `http` and `tls` checks), each check validates the endpoint chain against the image's
+system trust store. To check endpoints served by a private or internal CA, add that CA so the checks trust it:
+
+1. Copy the CA certificate (PEM or DER, named `.crt` or `.pem`) into `docker/rootfs/etc/pki/ca-trust/source/anchors/`.
+2. [Rebuild the image](#building-the-docker-image).
+
+The build runs `update-ca-trust`, folding the certificate into the system trust store that OpenSSL and Python's `ssl`
+read, so `tls_verify` succeeds.
 
 ## API
 

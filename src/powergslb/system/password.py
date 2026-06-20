@@ -12,12 +12,23 @@ def hash_password(password: str) -> str:
     return crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
 
 
+# A valid $6$ hash used whenever the stored hash is empty (an unknown user), so verification still runs a
+# full crypt and compare_digest. The result is forced to False, so this dummy never authenticates anyone.
+_DUMMY_HASH = hash_password('')
+
+
 def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored crypt(3) hash in constant time; an empty or malformed hash never matches."""
-    if not stored:
-        return False
+    """Verify a password against a stored crypt(3) hash in constant time.
+
+    An empty stored hash (an unknown user) never matches, yet verification still performs a full crypt and
+    comparison against a dummy hash, so the response time does not reveal that the hash was absent. A malformed
+    stored hash is rejected outright.
+    """
+    accept = bool(stored)
+    salt = stored if accept else _DUMMY_HASH
     try:
-        computed = crypt.crypt(password, stored)
+        computed = crypt.crypt(password, salt)
     except (TypeError, ValueError, OSError):
         return False
-    return bool(computed) and hmac.compare_digest(computed, stored)
+    matched = bool(computed) and hmac.compare_digest(computed, salt)
+    return accept and matched

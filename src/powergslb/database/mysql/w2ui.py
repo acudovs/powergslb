@@ -15,10 +15,6 @@ class W2UIDatabaseMixIn(abc.ABC):
     # so save_users treats it as "keep the existing password".
     password_mask: ClassVar[str] = '********'
 
-    # A valid crypt(3) SHA-512 hash with the same cost as a real one; check_user verifies against it for an
-    # unknown user, so the response time does not reveal whether the user exists.
-    _dummy_hash: ClassVar[str] = hash_password('never matches')
-
     def _delete(self, operation: str, ids: list[Any]) -> int:
         """Expand the operation's IN (%s) placeholder to the ids and delete; an empty list deletes nothing."""
         if not ids:
@@ -45,16 +41,17 @@ class W2UIDatabaseMixIn(abc.ABC):
         """Return [{'valid': 1}] if the user/password pair is valid, an empty list otherwise.
 
         The stored crypt(3) hash carries its own salt, so the password is verified in Python rather than in SQL.
-        An unknown user is still verified against a dummy hash, so the timing does not reveal that the user is absent.
+        An unknown user yields an empty stored hash, which verify_password rejects in constant time, so the timing
+        does not reveal that the user is absent.
         """
         operation = """
             SELECT `password` FROM `users`
             WHERE `user` = %s
         """
         rows = self._select(operation, (user,))
-        stored = rows[0]['password'] if rows else self._dummy_hash
+        stored = rows[0]['password'] if rows else ''
 
-        if verify_password(password, stored) and rows:  # rows = [] for an unknown user
+        if verify_password(password, stored):
             return [{'valid': 1}]
 
         return []

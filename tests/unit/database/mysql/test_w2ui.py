@@ -1,4 +1,4 @@
-# pylint: disable=missing-function-docstring, redefined-outer-name, protected-access
+# pylint: disable=missing-function-docstring, redefined-outer-name
 
 """Tests for the W2UIDatabaseMixIn SQL builders.
 
@@ -73,10 +73,10 @@ def test_check_user_unknown_user(database: _FakeW2UIDatabase) -> None:
     assert database.check_user('ghost', 'secret') == []
 
 
-def test_check_user_unknown_user_verifies_dummy_hash(
+def test_check_user_unknown_user_still_verifies(
         database: _FakeW2UIDatabase, monkeypatch: pytest.MonkeyPatch) -> None:
-    # An unknown user must still run a verify against the dummy hash, so login timing does not reveal the user is
-    # absent. Spy on verify_password to confirm it is called with the dummy hash and the request still fails.
+    # An unknown user must still run a verify so login timing does not reveal the user is absent. verify_password
+    # owns the constant-time guarantee, so check_user hands it an empty stored hash and must call it regardless.
     verified: list[tuple[str, str]] = []
 
     def fake_verify(password: str, stored: str) -> bool:
@@ -86,7 +86,7 @@ def test_check_user_unknown_user_verifies_dummy_hash(
     monkeypatch.setattr(w2ui_module, 'verify_password', fake_verify)
     database.select_result = []
     assert database.check_user('ghost', 'secret') == []
-    assert verified == [('secret', W2UIDatabaseMixIn._dummy_hash)]
+    assert verified == [('secret', '')]
 
 
 # delete_* (via _delete) expand the IN clause to one placeholder per id

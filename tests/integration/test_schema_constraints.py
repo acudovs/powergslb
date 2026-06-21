@@ -238,6 +238,34 @@ def test_moving_last_record_garbage_collects_source_rrset(scratch: int) -> None:
     assert _ok(f"SELECT COUNT(*) FROM `records` WHERE `rrset_id` = {dst_id}") == '1'
 
 
+# hard rule for the write path: a records DELETE/UPDATE must not reference `rrsets` (the AFTER GC trigger fires within
+# the statement and would touch `rrsets`, raising MySQL error 1442)
+
+def test_records_delete_referencing_rrsets_rejected(scratch: int) -> None:
+    # the records_after_delete GC trigger touches `rrsets`; a DELETE that also reads `rrsets` in a subquery collides
+    rrset_id = _new_rrset(scratch, 'hard', 1)
+    _new_record(rrset_id, '192.0.2.1')
+    err = _err(f"DELETE FROM `records` WHERE `rrset_id` IN "
+               f"(SELECT `id` FROM `rrsets` WHERE `id` = {rrset_id})")
+    assert 'ERROR 1442' in err
+    # the record (and its rrset) survive the failed statement
+    assert _ok(f"SELECT COUNT(*) FROM `records` WHERE `rrset_id` = {rrset_id}") == '1'
+
+
+def test_records_update_reassignment_referencing_rrsets_rejected(scratch: int) -> None:
+    # the records_after_update GC trigger touches `rrsets` when a reassignment empties the source rrset; an UPDATE that
+    # resolves the new `rrset_id` from a `rrsets` subquery collides with it
+    src_id = _new_rrset(scratch, 'src', 1)
+    _new_rrset(scratch, 'dst', 1)
+    record_id = _new_record(src_id, '192.0.2.9')
+    err = _err(f"UPDATE `records` SET `rrset_id` = "
+               f"(SELECT `id` FROM `rrsets` WHERE `domain_id` = {scratch} AND `name` = 'dst' AND `type_value` = 1) "
+               f"WHERE `id` = {record_id}")
+    assert 'ERROR 1442' in err
+    # the record stays put on its original rrset
+    assert _ok(f"SELECT `rrset_id` FROM `records` WHERE `id` = {record_id}") == str(src_id)
+
+
 # case-insensitive lookup
 
 def test_uppercase_qname_matches_lowercase_seed(dns: DNSClient) -> None:

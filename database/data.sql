@@ -22,9 +22,10 @@ INSERT INTO `monitors` (`id`, `monitor`, `monitor_json`) VALUES
   (1, 'No check', '{"type": "none"}'),
   (2, 'Command execution', '{"type": "exec", "args": ["/etc/powergslb/powergslb-check", "${content}"]}'),
   (3, 'ICMP ping', '{"type": "icmp", "ip": "${content}"}'),
-  (4, 'HTTP request /status', '{"type": "http", "url": "http://${content}/status"}'),
-  (5, 'TCP connect to port 80', '{"type": "tcp", "ip": "${content}", "port": 80}'),
-  (6, 'TLS connect to port 443', '{"type": "tls", "ip": "${content}", "port": 443}');
+  (4, 'HTTP request to /health', '{"type": "http", "url": "http://${content}/health"}'),
+  (5, 'HTTPS request to /health', '{"type": "http", "url": "https://${content}/health"}'),
+  (6, 'TCP connect to port 80', '{"type": "tcp", "ip": "${content}", "port": 80}'),
+  (7, 'TLS connect to port 443', '{"type": "tls", "ip": "${content}", "port": 443}');
 
 INSERT INTO `domains` (`id`, `domain`) VALUES
   (1, 'example.com'),

@@ -58,7 +58,7 @@ def test_list_domains(w2ui: W2UIClient) -> None:
 def test_list_monitors(w2ui: W2UIClient) -> None:
     data = w2ui.request('get-records', 'monitors').json()
     assert data['status'] == 'success'
-    assert data['total'] == 6
+    assert data['total'] == 7
     assert all({'recid', 'monitor', 'monitor_json'}.issubset(r.keys()) for r in data['records'])
     assert 'No check' in {r['monitor'] for r in data['records']}
 

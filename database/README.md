@@ -3,8 +3,8 @@
 This directory holds the database definition for PowerGSLB:
 
 - `scheme.sql` - tables, constraints, the `rrset_guard` procedure, and the triggers that enforce DNS invariants.
-- `data.sql` - seed data: the default `admin` user, two views, the DNS type catalogue, six example monitors, and three
-  fully populated example zones.
+- `data.sql` - seed data: the default `admin` user, three views, the DNS type catalogue, seven example monitors, and
+  three fully populated example zones.
 
 The schema targets MySQL 8 / MariaDB 10.5+ (CHECK constraints and `SIGNAL` in triggers are required). In the
 all-in-one Docker image both files are loaded into MariaDB at build time.
@@ -207,7 +207,8 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
   and `Europe` (`country:DE country:FR continent:EU`) as a GeoIP example.
 - **Types**: the common DNS types (A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, SRV) keyed by their IANA numeric value.
 - **Monitors**: `No check` (id 1, the inert default every seed record uses; its JSON is `{"type": "none"}` - the
-  registered `none` check type that MonitorManager never threads) plus exec / icmp / http / tcp / tls examples.
+  registered `none` check type that MonitorManager never threads) plus one example per other check type - `exec`,
+  `icmp`, `http`, `tcp`, `tls` - with two `http` examples, one plain HTTP and one HTTPS.
   `${content}` in a monitor's JSON is replaced with the record content at check time, and the shared timing fields
   (`interval`/`timeout`/`fall`/`rise`) may be omitted to take their defaults (`3`/`1`/`3`/`5`).
 - **Zones**: `example.com`, `example.net`, `example.org`, each with SOA, NS + glue (A/AAAA), apex A/AAAA, `www`/`mobile`

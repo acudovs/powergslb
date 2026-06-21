@@ -757,7 +757,7 @@ Redirects are never followed: a `3xx` is evaluated on its own status (accepted b
 Example:
 
 ```json
-{"type": "http", "url": "http://${content}/status"}
+{"type": "http", "url": "http://${content}/health"}
 ```
 
 Example with optional parameters - require an exact `200` carrying `"ok"` in the body, over self-signed HTTPS, and

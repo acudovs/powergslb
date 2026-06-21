@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  lint-unit-wheel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Create virtual environment
+        run: python3 -m venv --copies --system-site-packages --upgrade-deps .venv
+
+      - name: Install build requirements
+        run: .venv/bin/pip install -r requirements-build.txt
+
+      - name: Lint
+        run: .venv/bin/pylint src tests
+
+      - name: Type-check
+        run: .venv/bin/mypy src tests
+
+      - name: Unit tests with coverage
+        run: |
+          .venv/bin/coverage run --source=src -m pytest tests/unit -q
+          .venv/bin/coverage report -m --fail-under=100
+
+      - name: Build wheel
+        run: .venv/bin/pip wheel --wheel-dir dist --no-build-isolation --no-deps --verbose .
+
+  docker-integration-publish:
+    needs: lint-unit-wheel
+    if: >-
+      github.event_name != 'push'
+      || github.ref == 'refs/heads/master'
+      || github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: docker
+    env:
+      IS_RELEASE: ${{ github.ref_type == 'tag' }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Verify VERSION matches tag
+        if: env.IS_RELEASE == 'true'
+        run: |
+          VERSION=$(PYTHONPATH=src python3 -c "from powergslb.version import VERSION; print(VERSION)")
+          if [[ "$VERSION" != "$TAG" ]]; then
+            echo "::error::VERSION ($VERSION) does not match tag ($TAG)"
+            exit 1
+          fi
+          echo "VERSION $VERSION matches tag $TAG"
+
+      - name: Create virtual environment
+        run: python3 -m venv --copies --upgrade-deps .venv
+
+      - name: Install build requirements
+        run: .venv/bin/pip install -r requirements-build.txt
+
+      - name: Integration tests
+        run: tests/run-integration.sh
+
+      - name: Capture container logs on failure
+        if: failure()
+        run: |
+          docker logs powergslb || true
+          for unit in powergslb mariadb pdns; do
+            docker exec powergslb journalctl -u "$unit" --no-pager || true
+          done
+
+      - name: Log in to Docker Hub
+        if: env.IS_RELEASE == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push tested image to Docker Hub
+        if: env.IS_RELEASE == 'true'
+        run: |
+          image=docker.io/acudovs/powergslb
+          docker tag powergslb:dev "$image:$TAG"
+          docker tag powergslb:dev "$image:latest"
+          docker push "$image:$TAG"
+          docker push "$image:latest"

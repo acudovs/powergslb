@@ -2,6 +2,7 @@
 
 pip == 26.*
 setuptools == 82.*
+packaging == 26.*
 wheel == 0.*
 
 coverage == 7.*

@@ -10,7 +10,7 @@ dynamic = ["version", "dependencies"]
 description = "PowerGSLB is a PowerDNS Global Server Load Balancing (GSLB) solution"
 urls = { homepage = "https://github.com/acudovs/powergslb" }
 authors = [{ name = "Aleksejs Cudovs", email = "aleksejs.cudovs@gmail.com" }]
-license = { text = "MIT" }
+license = "MIT"
 scripts = { powergslb = "powergslb.main:PowerGSLB.main" }
 requires-python = ">=3.12"
 

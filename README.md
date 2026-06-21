@@ -35,6 +35,8 @@ persistence, DNS views (CIDR and GeoIP), and fallback rules.
 * [Tests](#tests)
 * [License](#license)
 
+---
+
 ## Main features
 
 * Written in Python 3.12
@@ -60,6 +62,8 @@ persistence, DNS views (CIDR and GeoIP), and fallback rules.
     * HTTP request
     * TCP connect
     * TLS connect
+
+---
 
 ## Architecture
 
@@ -363,6 +367,8 @@ classDiagram
 
 </details>
 
+---
+
 ## Quick start with the published Docker image
 
 The fastest way to try PowerGSLB is the all-in-one image, which bundles PowerGSLB, PowerDNS Authoritative Server,
@@ -415,6 +421,8 @@ To reach the services on the host instead of the container IP, publish the ports
 `-p 53:53/tcp -p 53:53/udp -p 443:443/tcp`. Note that these may conflict with a DNS resolver or HTTPS service already
 listening on the host, so connecting to the container IP is usually simpler.
 
+---
+
 ## Persisting data
 
 The image ships an empty datadir and initializes the database on first start, so without a volume every run begins from
@@ -433,6 +441,8 @@ docker run -it --privileged \
 First boot initializes the database inside the volume; later runs detect the existing data and reuse it untouched. A
 bind mount (`-v "$PWD/db:/var/lib/mysql"`) or a Kubernetes PVC works the same way.
 
+---
+
 ## Upgrading
 
 Upgrading between PowerGSLB versions is a container swap; the volume is the only state carried across. Stop and remove
@@ -449,6 +459,8 @@ docker run -it --privileged \
     docker.io/acudovs/powergslb:"$NEW_VERSION"
 ```
 
+---
+
 ## Building the Docker image
 
 Build the image from a checkout of the repository instead of pulling it:
@@ -462,6 +474,8 @@ docker run -it --privileged --name powergslb --hostname powergslb \
     --tmpfs /run --tmpfs /tmp \
     powergslb:"$VERSION"
 ```
+
+---
 
 ## Manual setup
 
@@ -497,6 +511,8 @@ powergslb -c /etc/powergslb/powergslb.toml
 The service also needs a MariaDB database with the schema and seed data loaded (`database/scheme.sql` and
 `database/data.sql`), and a PowerDNS Remote Backend pointed at the DNS interface. See the files under `docker/rootfs/`
 for reference configuration (`powergslb.toml` and `pdns.conf.powergslb`).
+
+---
 
 ## Configuration
 
@@ -553,6 +569,8 @@ POWERGSLB_MONITOR_ICMP_PRIVILEGED=false   # use an unprivileged ICMP datagram so
 Individual health checks are not part of this file: each monitor is a row of JSON in the database, edited in the admin
 UI. See [Health checks](#health-checks) for the per-check parameters.
 
+---
+
 ## Database
 
 The DNS GSLB configuration lives in a MySQL 8 / MariaDB 10.5+ database. The schema uses a two-level model: an *rrset*
@@ -566,6 +584,8 @@ CHECK constraints and triggers, so both the web UI and handwritten SQL are cover
 
 The schema, seed data, entity-relationship diagram, table reference, and the rationale behind the design are documented
 in [database/README.md](database/README.md).
+
+---
 
 ## Web administration interface
 
@@ -590,6 +610,8 @@ in [database/README.md](database/README.md).
 ![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-views.png?raw=true)
 
 [More images](images)
+
+---
 
 ## Record selection
 
@@ -655,6 +677,8 @@ always get the same record, while `198.51.100.10` may get a different one.
 A record can be administratively disabled in the admin UI. A disabled record is excluded from every DNS answer
 regardless of health, view, or weight - handy for draining an endpoint for maintenance without deleting its
 configuration.
+
+---
 
 ## Health checks
 
@@ -827,6 +851,8 @@ system trust store. To check endpoints served by a private or internal CA, add t
 The build runs `update-ca-trust`, folding the certificate into the system trust store that OpenSSL and Python's `ssl`
 read, so `tls_verify` succeeds.
 
+---
+
 ## API
 
 PowerGSLB exposes two HTTP interfaces, both returning JSON:
@@ -964,16 +990,20 @@ save("views", 0, {"view": "Internal", "rule": "10.0.0.0/8 192.168.0.0/16"})
 save("views", 0, {"view": "Europe", "rule": "country:DE country:FR continent:EU"})
 ```
 
+---
+
 ## Tests
 
-The repository ships with integration tests (against the Docker container) and unit tests. See
-[tests/README.md](tests/README.md) for the layout, how to run them, and how to point the suite at a non-default host or
-database.
+The repository ships with three checks:
 
-```bash
-.venv/bin/pytest tests/unit -q      # in-process unit tests, no container required
-tests/run-integration.sh            # build the image and run the integration suite
-```
+* **Linting** - `pylint` and `mypy` over `src` and `tests`.
+* **Unit tests** - in-process tests under `tests/unit/`, run under coverage; no container required.
+* **Integration tests** - black-box tests under `tests/integration/` against a freshly built Docker container.
+
+See [tests/README.md](tests/README.md) for the layout, the exact commands, and how to point the suite at a non-default
+host or database.
+
+---
 
 ## License
 

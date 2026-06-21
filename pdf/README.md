@@ -18,6 +18,8 @@ These documents are kept here as the original academic context for the software.
 **Supervisor:** Boriss Mišņevs  
 **Year:** 2016
 
+---
+
 ## Contents
 
 The thesis covers two parts:
@@ -28,6 +30,8 @@ The thesis covers two parts:
 
 2. **Application development:** requirements, architecture, database design, implementation, testing, and quality
    assessment of what became PowerGSLB.
+
+---
 
 ## Note
 

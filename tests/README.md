@@ -3,13 +3,15 @@
 ## Contents
 
 - [Layout](#layout)
+- [Create virtual environment](#create-virtual-environment)
+- [Install build requirements](#install-build-requirements)
+- [Linting](#linting)
+- [Unit tests with coverage](#unit-tests-with-coverage)
 - [Integration tests](#integration-tests)
     - [Manual steps](#manual-steps)
     - [Running against a non-default host](#running-against-a-non-default-host)
     - [Running against a non-default database](#running-against-a-non-default-database)
     - [Debugging](#debugging)
-- [Unit tests with coverage](#unit-tests-with-coverage)
-- [Linting](#linting)
 
 ---
 
@@ -64,6 +66,53 @@ tests/
         ├── test_password.py            crypt(3) SHA-512 helpers: $6$ format, random salt, verify accept/reject
         ├── test_service.py             SystemService thread supervision: exit non-zero when a thread dies
         └── test_thread.py              ServiceThread Protocol: structural conformance, isinstance checks
+```
+
+---
+
+## Create virtual environment
+
+```bash
+python3 -m venv --copies --system-site-packages --upgrade-deps .venv
+```
+
+---
+
+## Install build requirements
+
+```bash
+.venv/bin/pip install -r requirements-build.txt
+```
+
+---
+
+## Linting
+
+```bash
+.venv/bin/pylint src tests
+.venv/bin/mypy src tests
+```
+
+---
+
+## Unit tests with coverage
+
+In-process tests under `tests/unit/` that import the package directly and need no Docker container. Run them under
+coverage - the integration tests exercise the service inside the Docker container (a separate process), so only the
+unit tests contribute to coverage. The unit tests cover the package in full (100%).
+
+```bash
+.venv/bin/coverage run --source=src -m pytest tests/unit
+.venv/bin/coverage report -m
+
+# browsable report under htmlcov/
+.venv/bin/coverage html
+```
+
+To run the tests on their own, without coverage:
+
+```bash
+.venv/bin/pytest tests/unit -v
 ```
 
 ---
@@ -169,37 +218,4 @@ If tests fail, the container is left running:
 docker exec -it powergslb journalctl -u powergslb
 docker exec -it powergslb journalctl -u mariadb
 docker exec -it powergslb journalctl -u pdns
-```
-
----
-
-## Unit tests with coverage
-
-In-process tests under `tests/unit/` that import the package directly and need no Docker container. Run them under
-coverage - the integration tests exercise the service inside the Docker container (a separate process), so only the
-unit tests contribute to coverage. The unit tests cover the package in full (100%).
-
-```bash
-.venv/bin/python -m coverage run --source=powergslb -m pytest tests/unit
-
-# terminal summary with missing line numbers
-.venv/bin/python -m coverage report -m
-
-# browsable report under htmlcov/
-.venv/bin/python -m coverage html
-```
-
-To run the tests on their own, without coverage:
-
-```bash
-.venv/bin/pytest tests/unit -v
-```
-
----
-
-## Linting
-
-```bash
-.venv/bin/pylint src tests
-.venv/bin/mypy src tests
 ```

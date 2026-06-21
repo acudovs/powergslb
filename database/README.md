@@ -7,7 +7,7 @@ This directory holds the database definition for PowerGSLB:
   three fully populated example zones.
 
 The schema targets MySQL 8 / MariaDB 10.5+ (CHECK constraints and `SIGNAL` in triggers are required). In the
-all-in-one Docker image both files are loaded into MariaDB at build time.
+all-in-one Docker image both files are copied to the image and loaded into MariaDB on first boot.
 
 ## Contents
 
@@ -20,17 +20,19 @@ all-in-one Docker image both files are loaded into MariaDB at build time.
 - [Read and write paths](#read-and-write-paths)
 - [Seed data](#seed-data)
 - [Working with the database by hand](#working-with-the-database-by-hand)
-- [Recreating or migrating](#recreating-or-migrating)
+- [Recreating](#recreating)
 
 ---
 
 ## Why a relational schema
 
 PowerGSLB is a PowerDNS Remote Backend: PowerDNS asks it for the records at a name, and PowerGSLB answers from this
-database after filtering by health, view, weight, and client-IP persistence. The data is naturally relational - many
+database after filtering by view, health, weight, and client-IP persistence. The data is naturally relational - many
 records share a view, a monitor, or a type - so the schema is normalised: `views`, `types`, `monitors`, and `domains`
 are lookup tables, and `rrsets` / `records` reference them by id. This keeps a monitor definition or a view rule in one
 place and lets the read path JOIN the pieces back together per query.
+
+---
 
 ## Entity-relationship diagram
 
@@ -91,6 +93,8 @@ erDiagram
 
 Unique keys not shown as columns: `rrsets (domain_id, name, type_value)` and `records (rrset_id, view_id, content)`.
 
+---
+
 ## Table reference
 
 Seven tables.
@@ -116,6 +120,8 @@ Key relationships and constraints:
 - CHECK constraints: SOA only at the apex (`type_value <> 6 OR name = '@'`), `ttl <= 2147483647`, `persistence <= 128`
   (a bit count for the persistence shift).
 
+---
+
 ## The two-level rrset / record model
 
 A DNS RRset (RFC 2181) is the set of records sharing a record name and type; `ttl` and `persistence` are properties of
@@ -126,6 +132,8 @@ rrset; it automatically inherits the rrset's TTL and persistence.
 
 Because the record name is relative, a record's full name is its `domains.domain` joined with a non-apex `rrsets.name`.
 The admin grid shows `Domain` and a relative `Name` for this reason; there is no stored FQDN column to keep in sync.
+
+---
 
 ## Invariants and where they live
 
@@ -148,6 +156,8 @@ enforces.
 > (e.g. in a subquery). The AFTER trigger fires within that statement and would touch `rrsets`, raising MySQL error
 > 1442 ("Can't update table in trigger because it is already used by the statement"). The application threads the
 > rrset id through `LAST_INSERT_ID()` instead of a `rrsets` subquery for exactly this reason.
+
+---
 
 ## Why triggers (DB logic vs. app logic)
 
@@ -175,6 +185,8 @@ The dividing line used here: invariants that must hold for the data to be valid 
 matching, persistence selection, password hashing, w2ui grid shaping). The runtime GSLB decisions are deliberately
 *not* in the database - they change per query and depend on live monitor state, so they belong in the read path.
 
+---
+
 ## Read and write paths
 
 The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql/`):
@@ -196,6 +208,8 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
   upserts the rrset and pins its id with `LAST_INSERT_ID(id)`, then the record statement reads that id back from
   `LAST_INSERT_ID()` - honouring the "no `rrsets` reference in a `records` write" rule above.
 
+---
+
 ## Seed data
 
 `data.sql` gives a working, self-consistent starting point:
@@ -211,18 +225,20 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
   `icmp`, `http`, `tcp`, `tls` - with two `http` examples, one plain HTTP and one HTTPS.
   `${content}` in a monitor's JSON is replaced with the record content at check time, and the shared timing fields
   (`interval`/`timeout`/`fall`/`rise`) may be omitted to take their defaults (`3`/`1`/`3`/`5`).
-- **Zones**: `example.com`, `example.net`, `example.org`, each with SOA, NS + glue (A/AAAA), apex A/AAAA, `www`/`mobile`
-  CNAMEs, an `m` dual-stack host, MX + mail hosts, an SPF TXT record, and a SIP SRV with its target. All addresses are
-  from the documentation ranges (`192.0.2.0/24`, `2001:db8::/32`) so the seed is safe to publish.
+- **Zones**: `example.com`, `example.net`, `example.org`, each with SOA, NS, A, AAAA, CNAME, MX, SPF, TXT, and SRV.
+  All addresses are from the documentation ranges (`192.0.2.0/24`, `2001:db8::/32`) so the seed is safe to publish.
 
-The three zones are identical in structure, which makes the seed a useful template: copy a zone's rows, swap the
-`domain_id` and contents, and you have a new zone in the same shape.
+The three zones are identical in structure, which makes the seed a useful template. Because record names are stored
+relative to the zone, you can adopt a seed zone by renaming it: edit its `Domain` in the admin UI, or run
+`UPDATE domains` against the database. Note that PowerDNS refreshes domains every 5 minutes by default.
+
+---
 
 ## Working with the database by hand
 
 ```bash
 # Inside the Docker image (MariaDB is local):
-mysql powergslb
+mariadb powergslb
 
 # A point query the way the backend resolves a name:
 SELECT r.content, t.type, rs.ttl
@@ -238,16 +254,14 @@ record, `DELETE FROM records WHERE ...`; the AFTER-delete trigger drops the rrse
 not delete the rrset yourself. The trigger invariants apply to manual SQL exactly as they do to the UI - an `INSERT`
 that violates CNAME exclusivity or SOA cardinality fails with the `SIGNAL` message.
 
-## Recreating or migrating
+---
 
-There is no automated migration. The two-level rrset schema (relative record names) is a breaking change from earlier
-releases. To start fresh:
+## Recreating
+
+To start fresh:
 
 ```bash
-mysql -e "DROP DATABASE IF EXISTS powergslb; CREATE DATABASE powergslb CHARACTER SET utf8mb4;"
-mysql powergslb < database/scheme.sql
-mysql powergslb < database/data.sql   # optional: seed/example data
+mariadb -e "DROP DATABASE IF EXISTS powergslb; CREATE DATABASE powergslb CHARACTER SET utf8mb4;"
+mariadb powergslb < database/scheme.sql
+mariadb powergslb < database/data.sql   # optional: seed/example data
 ```
-
-Existing databases from a pre-2.0 release must be recreated from these files or migrated by hand to the relative-name,
-rrset/record layout.

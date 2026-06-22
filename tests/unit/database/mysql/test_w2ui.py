@@ -283,3 +283,20 @@ def test_save_records_content_only_edit_reports_truthy(database: _FakeW2UIDataba
 def test_save_records_true_noop_reports_falsy(database: _FakeW2UIDatabase) -> None:
     database.affected_queue = [0, 0]
     assert database.save_records(9, **_record_kwargs()) == 0
+
+
+@pytest.mark.parametrize(('disabled', 'fallback', 'expected'), [
+    ('true', 'false', (1, 0)),  # w2ui toggle posts the JS boolean as 'true' / 'false'
+    ('false', 'true', (0, 1)),
+    ('1', '0', (1, 0)),
+    (1, 0, (1, 0)),
+    (True, False, (1, 0)),
+])
+def test_save_records_coerces_toggle_flags(database: _FakeW2UIDatabase, disabled: Any, fallback: Any,
+                                           expected: tuple[int, int]) -> None:
+    database.affected_queue = [1, 1]
+    kwargs = _record_kwargs() | {'disabled': disabled, 'fallback': fallback}
+    database.save_records(0, **kwargs)
+    _, record_params = database.calls[1]
+    # record params: content, monitor, view, disabled, fallback, weight
+    assert record_params[3:5] == expected

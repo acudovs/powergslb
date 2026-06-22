@@ -296,7 +296,7 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._modify(operation, params)
 
     def save_records(self, save_recid: int, domain: str, name: str, name_type: str, ttl: int, content: str,
-                     monitor: str, view: str, disabled: int = 0, fallback: int = 0,
+                     monitor: str, view: str, disabled: Any = 0, fallback: Any = 0,
                      persistence: int = 0, weight: int = 0, **_: Any) -> int:
         """Insert or update a record across the rrset and record levels in one transaction.
 
@@ -306,6 +306,10 @@ class W2UIDatabaseMixIn(abc.ABC):
         same statement would raise error 1442). The summed affected-row count is returned so a ttl-only edit and a
         content-only edit both report success.
         """
+        # The admin form posts 'toggle' value as string 'true'/'false'; coerce to int.
+        disabled = int(str(disabled).lower() in ('1', 'true'))
+        fallback = int(str(fallback).lower() in ('1', 'true'))
+
         rrset_upsert = ("""
             INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `persistence`)
               SELECT (SELECT `id` FROM `domains` WHERE `domain` = %s), %s,

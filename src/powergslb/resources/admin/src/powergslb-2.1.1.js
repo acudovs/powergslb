@@ -379,14 +379,8 @@ var config = {
                 field: 'ttl', type: 'int', required: true, html: {caption: 'TTL: '},
                 options: {autoFormat: false}
             },
-            {
-                field: 'disabled', type: 'int', required: false, html: {caption: 'Disabled: '},
-                options: {autoFormat: false}
-            },
-            {
-                field: 'fallback', type: 'int', required: false, html: {caption: 'Fallback: '},
-                options: {autoFormat: false}
-            },
+            {field: 'disabled', type: 'toggle', required: false, html: {caption: 'Disabled: '}},
+            {field: 'fallback', type: 'toggle', required: false, html: {caption: 'Fallback: '}},
             {
                 field: 'persistence', type: 'int', required: false, html: {caption: 'Persistence: '},
                 options: {autoFormat: false}

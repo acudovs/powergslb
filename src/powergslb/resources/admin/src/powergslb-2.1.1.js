@@ -170,7 +170,7 @@ var config = {
         columns: [
             {field: 'status', caption: 'Status', size: '55px', resizable: true, sortable: true},
             {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true},
-            {field: 'name', caption: 'Name', size: '150px', resizable: true, sortable: true},
+            {field: 'name', caption: 'Name', size: '100px', resizable: true, sortable: true},
             {field: 'name_type', caption: 'Type', size: '60px', resizable: true, sortable: true},
             {field: 'content', caption: 'Content', size: '510px', resizable: true, sortable: true},
             {field: 'ttl', caption: 'TTL', size: '55px', resizable: true, sortable: true},
@@ -321,7 +321,7 @@ var config = {
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true},
-            {field: 'name', caption: 'Name', size: '150px', resizable: true, sortable: true},
+            {field: 'name', caption: 'Name', size: '100px', resizable: true, sortable: true},
             {field: 'name_type', caption: 'Type', size: '60px', resizable: true, sortable: true},
             {field: 'content', caption: 'Content', size: '510px', resizable: true, sortable: true},
             {field: 'ttl', caption: 'TTL', size: '55px', resizable: true, sortable: true},

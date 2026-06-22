@@ -538,7 +538,7 @@ unit writes `/etc/powergslb/powergslb.pem` only if it is missing) so each deploy
 `cert` with your own PEM for production - `cert` may bundle the private key, or point `key` at a separate key file.
 Both `[server]` and `[admin]` accept `keep_alive_timeout`, the HTTP keep-alive idle timeout in seconds.
 
-The `[geoip]` section `database` is the path to a [MaxMind DB](https://maxminddb.com/). The Docker image bundles the
+The `[geoip]` section `database` is the path to a MaxMind DB (MMDB) file. The Docker image bundles the
 [DB-IP IP-to-Country Lite](https://db-ip.com/db/download/ip-to-country-lite) at
 `/usr/share/powergslb/dbip-country-lite.mmdb`; point `database` at a
 [MaxMind GeoLite2 / GeoIP2](https://www.maxmind.com/) file to swap it.

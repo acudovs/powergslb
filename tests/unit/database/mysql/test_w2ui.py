@@ -92,7 +92,8 @@ def test_check_user_unknown_user_still_verifies(
 # delete_* (via _delete) expand the IN clause to one placeholder per id
 
 @pytest.mark.parametrize('method',
-                         ['delete_domains', 'delete_monitors', 'delete_types', 'delete_users', 'delete_views'])
+                         ['delete_domains', 'delete_monitors', 'delete_routings', 'delete_types', 'delete_users',
+                          'delete_views'])
 def test_delete_expands_in_clause(database: _FakeW2UIDatabase, method: str) -> None:
     database.affected = 2
     result = getattr(database, method)([1, 2])
@@ -124,10 +125,13 @@ def test_get_status_selects(database: _FakeW2UIDatabase) -> None:
     assert database.get_status() == [{'domain': 'example.com'}]
     assert _last_sql(database).startswith('SELECT')
     assert _last_params(database) == ()
-    # the relative record name and ttl/persistence now come from the rrsets level; records.id stays unaliased
+    # the relative record name and ttl now come from the rrsets level; records.id stays unaliased
     assert 'JOIN `rrsets` ON `records`.`rrset_id` = `rrsets`.`id`' in _last_sql(database)
     assert '`rrsets`.`name`' in _last_sql(database)
     assert '`records`.`id` AS `recid`' not in _last_sql(database)
+    # the rrset's routing policy is joined in and exposed by name
+    assert 'JOIN `routings` ON `rrsets`.`routing_id` = `routings`.`id`' in _last_sql(database)
+    assert '`routings`.`policy`' in _last_sql(database)
 
 
 def test_get_records_joins_rrsets_and_exposes_relative_name(database: _FakeW2UIDatabase) -> None:
@@ -136,18 +140,24 @@ def test_get_records_joins_rrsets_and_exposes_relative_name(database: _FakeW2UID
     assert 'JOIN `rrsets` ON `records`.`rrset_id` = `rrsets`.`id`' in sql
     assert '`rrsets`.`name`' in sql and '`domains`.`domain`' in sql
     assert '`records`.`id` AS `recid`' in sql
+    assert 'JOIN `routings` ON `rrsets`.`routing_id` = `routings`.`id`' in sql
+    assert '`routings`.`policy`' in sql
 
 
 # get_* with and without recid
 
-@pytest.mark.parametrize('method', ['get_domains', 'get_monitors', 'get_records', 'get_types', 'get_views'])
+@pytest.mark.parametrize('method',
+                         ['get_domains', 'get_monitors', 'get_records', 'get_routings', 'get_types',
+                          'get_views'])
 def test_get_all_has_no_recid_filter(database: _FakeW2UIDatabase, method: str) -> None:
     getattr(database, method)()
     assert _last_params(database) == ()
     assert 'WHERE' not in _last_sql(database)
 
 
-@pytest.mark.parametrize('method', ['get_domains', 'get_monitors', 'get_records', 'get_types', 'get_views'])
+@pytest.mark.parametrize('method',
+                         ['get_domains', 'get_monitors', 'get_records', 'get_routings', 'get_types',
+                          'get_views'])
 def test_get_one_filters_by_recid(database: _FakeW2UIDatabase, method: str) -> None:
     getattr(database, method)(7)
     assert _last_params(database) == (7,)
@@ -186,6 +196,15 @@ def test_save_monitors_insert_and_update(database: _FakeW2UIDatabase) -> None:
     database.save_monitors(9, 'ping', '{}')
     assert _last_sql(database).startswith('UPDATE')
     assert _last_params(database) == ('ping', '{}', 9)
+
+
+def test_save_routings_insert_and_update(database: _FakeW2UIDatabase) -> None:
+    database.save_routings(0, 'Round robin', '{"type": "round-robin"}')
+    assert _last_sql(database).startswith('INSERT')
+    assert _last_params(database) == ('Round robin', '{"type": "round-robin"}')
+    database.save_routings(9, 'Round robin', '{"type": "round-robin"}')
+    assert _last_sql(database).startswith('UPDATE')
+    assert _last_params(database) == ('Round robin', '{"type": "round-robin"}', 9)
 
 
 def test_save_types_insert_and_update(database: _FakeW2UIDatabase) -> None:
@@ -232,7 +251,7 @@ def test_save_users_update_with_masked_password_keeps_existing(database: _FakeW2
 
 def _record_kwargs() -> dict[str, Any]:
     return {'domain': 'example.com', 'name': 'www', 'name_type': 'A', 'ttl': 60, 'content': '192.0.2.1',
-            'monitor': 'ping', 'view': 'any', 'disabled': 0, 'fallback': 0, 'persistence': 0, 'weight': 0}
+            'monitor': 'ping', 'view': 'any', 'policy': 'Round robin', 'disabled': 0, 'weight': 0}
 
 
 def test_save_records_insert_path(database: _FakeW2UIDatabase) -> None:
@@ -245,12 +264,14 @@ def test_save_records_insert_path(database: _FakeW2UIDatabase) -> None:
     record_sql, record_params = database.calls[1]
     assert rrset_sql.startswith('INSERT INTO `rrsets`')
     assert 'ON DUPLICATE KEY UPDATE `id` = LAST_INSERT_ID(`id`)' in rrset_sql
-    # rrset params: domain, name, type, ttl, persistence (insert), then ttl, persistence (on duplicate update)
-    assert rrset_params == ('example.com', 'www', 'A', 60, 0, 60, 0)
+    # the rrset upsert resolves the routing policy name to routing_id on both the insert and the update
+    assert '`routing_id` = (SELECT `id` FROM `routings` WHERE `policy` = %s)' in rrset_sql
+    # rrset params: domain, name, type, ttl, policy (insert), then ttl, policy (on duplicate update)
+    assert rrset_params == ('example.com', 'www', 'A', 60, 'Round robin', 60, 'Round robin')
     assert record_sql.startswith('INSERT INTO `records`')
     assert 'LAST_INSERT_ID()' in record_sql and '`rrsets`' not in record_sql
-    # record params: content, monitor, view, disabled, fallback, weight
-    assert record_params == ('192.0.2.1', 'ping', 'any', 0, 0, 0)
+    # record params: content, monitor, view, disabled, weight
+    assert record_params == ('192.0.2.1', 'ping', 'any', 0, 0)
 
 
 def test_save_records_update_path(database: _FakeW2UIDatabase) -> None:
@@ -265,7 +286,7 @@ def test_save_records_update_path(database: _FakeW2UIDatabase) -> None:
     # the record UPDATE never references `rrsets` (the GC trigger fires AFTER and would raise error 1442)
     assert '`rrsets`' not in record_sql
     assert 'LAST_INSERT_ID()' in record_sql
-    assert record_params == ('192.0.2.1', 'ping', 'any', 0, 0, 0, 9)
+    assert record_params == ('192.0.2.1', 'ping', 'any', 0, 0, 9)
 
 
 def test_save_records_ttl_only_edit_reports_truthy(database: _FakeW2UIDatabase) -> None:
@@ -285,18 +306,20 @@ def test_save_records_true_noop_reports_falsy(database: _FakeW2UIDatabase) -> No
     assert database.save_records(9, **_record_kwargs()) == 0
 
 
-@pytest.mark.parametrize(('disabled', 'fallback', 'expected'), [
-    ('true', 'false', (1, 0)),  # w2ui toggle posts the JS boolean as 'true' / 'false'
-    ('false', 'true', (0, 1)),
-    ('1', '0', (1, 0)),
-    (1, 0, (1, 0)),
-    (True, False, (1, 0)),
+@pytest.mark.parametrize(('disabled', 'expected'), [
+    ('true', 1),  # w2ui toggle posts the JS boolean as 'true' / 'false'
+    ('false', 0),
+    ('1', 1),
+    ('0', 0),
+    (1, 1),
+    (0, 0),
+    (True, 1),
+    (False, 0),
 ])
-def test_save_records_coerces_toggle_flags(database: _FakeW2UIDatabase, disabled: Any, fallback: Any,
-                                           expected: tuple[int, int]) -> None:
+def test_save_records_coerces_disabled_toggle(database: _FakeW2UIDatabase, disabled: Any, expected: int) -> None:
     database.affected_queue = [1, 1]
-    kwargs = _record_kwargs() | {'disabled': disabled, 'fallback': fallback}
+    kwargs = _record_kwargs() | {'disabled': disabled}
     database.save_records(0, **kwargs)
     _, record_params = database.calls[1]
-    # record params: content, monitor, view, disabled, fallback, weight
-    assert record_params[3:5] == expected
+    # record params: content, monitor, view, disabled, weight
+    assert record_params[3] == expected

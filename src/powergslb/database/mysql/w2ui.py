@@ -41,8 +41,7 @@ class W2UIDatabaseMixIn(abc.ABC):
         """Return [{'valid': 1}] if the user/password pair is valid, an empty list otherwise.
 
         The stored crypt(3) hash carries its own salt, so the password is verified in Python rather than in SQL.
-        An unknown user yields an empty stored hash, which verify_password rejects in constant time, so the timing
-        does not reveal that the user is absent.
+        An unknown user yields an empty stored hash, passed to verify_password.
         """
         operation = """
             SELECT `password` FROM `users`
@@ -83,6 +82,15 @@ class W2UIDatabaseMixIn(abc.ABC):
 
         return self._delete(operation, ids)
 
+    def delete_routings(self, ids: list[Any]) -> int:
+        """Delete routing rows by id and return the count of deleted rows."""
+        operation = """
+            DELETE FROM `routings`
+            WHERE `id` IN (%s)
+        """
+
+        return self._delete(operation, ids)
+
     def delete_types(self, values: list[Any]) -> int:
         """Delete type rows by value and return the count of deleted rows."""
         operation = """
@@ -116,10 +124,9 @@ class W2UIDatabaseMixIn(abc.ABC):
             SELECT `domains`.`domain`,
               `rrsets`.`name`,
               `rrsets`.`ttl`,
-              `rrsets`.`persistence`,
+              `routings`.`policy`,
               `types`.`type` AS `name_type`,
               `records`.`disabled`,
-              `records`.`fallback`,
               `records`.`weight`,
               `records`.`id`,
               `records`.`content`,
@@ -129,6 +136,7 @@ class W2UIDatabaseMixIn(abc.ABC):
               JOIN `rrsets` ON `records`.`rrset_id` = `rrsets`.`id`
               JOIN `domains` ON `rrsets`.`domain_id` = `domains`.`id`
               JOIN `types` ON `rrsets`.`type_value` = `types`.`value`
+              JOIN `routings` ON `rrsets`.`routing_id` = `routings`.`id`
               JOIN `monitors` ON `records`.`monitor_id` = `monitors`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
@@ -176,11 +184,10 @@ class W2UIDatabaseMixIn(abc.ABC):
             SELECT `domains`.`domain`,
               `rrsets`.`name`,
               `rrsets`.`ttl`,
-              `rrsets`.`persistence`,
+              `routings`.`policy`,
               `types`.`type` AS `name_type`,
               `records`.`id` AS `recid`,
               `records`.`disabled`,
-              `records`.`fallback`,
               `records`.`weight`,
               `records`.`content`,
               `monitors`.`monitor`,
@@ -189,6 +196,7 @@ class W2UIDatabaseMixIn(abc.ABC):
               JOIN `rrsets` ON `records`.`rrset_id` = `rrsets`.`id`
               JOIN `domains` ON `rrsets`.`domain_id` = `domains`.`id`
               JOIN `types` ON `rrsets`.`type_value` = `types`.`value`
+              JOIN `routings` ON `rrsets`.`routing_id` = `routings`.`id`
               JOIN `monitors` ON `records`.`monitor_id` = `monitors`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
@@ -197,6 +205,24 @@ class W2UIDatabaseMixIn(abc.ABC):
         if recid:
             operation += """
                 WHERE `records`.`id` = %s
+            """
+            params += (recid,)
+
+        return self._select(operation, params)
+
+    def get_routings(self, recid: int = 0) -> list[dict[str, Any]]:
+        """Return all routings, or a single routing if recid is given."""
+        operation = """
+            SELECT `id` AS `recid`,
+              `policy`,
+              `policy_json`
+            FROM `routings`
+        """
+        params: tuple[Any, ...] = ()
+
+        if recid:
+            operation += """
+                WHERE `id` = %s
             """
             params += (recid,)
 
@@ -296,26 +322,27 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._modify(operation, params)
 
     def save_records(self, save_recid: int, domain: str, name: str, name_type: str, ttl: int, content: str,
-                     monitor: str, view: str, disabled: Any = 0, fallback: Any = 0,
-                     persistence: int = 0, weight: int = 0, **_: Any) -> int:
+                     monitor: str, view: str, policy: str, disabled: Any = 0, weight: int = 0, **_: Any) -> int:
         """Insert or update a record across the rrset and record levels in one transaction.
 
-        Statement one upserts the rrset (zone + relative record name + type carrying ttl/persistence) and pins its
-        id with LAST_INSERT_ID; statement two writes the record, taking the rrset id from LAST_INSERT_ID() rather
-        than a `rrsets` subquery (the record UPDATE can fire the GC trigger, and a subquery on `rrsets` in that
-        same statement would raise error 1442). The summed affected-row count is returned so a ttl-only edit and a
-        content-only edit both report success.
+        Statement one upserts the rrset (zone + relative record name + type carrying ttl and the routing policy)
+        and pins its id with LAST_INSERT_ID; statement two writes the record, taking the rrset id from
+        LAST_INSERT_ID() rather than a `rrsets` subquery (the record UPDATE can fire the GC trigger, and a subquery
+        on `rrsets` in that same statement would raise error 1442). The policy name resolves to routing_id on both
+        the INSERT and the ON DUPLICATE KEY UPDATE, so editing a record updates an existing rrset's policy. The
+        summed affected-row count is returned so a ttl-only edit and a content-only edit both report success.
         """
         # The admin form posts 'toggle' value as string 'true'/'false'; coerce to int.
         disabled = int(str(disabled).lower() in ('1', 'true'))
-        fallback = int(str(fallback).lower() in ('1', 'true'))
 
         rrset_upsert = ("""
-            INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `persistence`)
+            INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `routing_id`)
               SELECT (SELECT `id` FROM `domains` WHERE `domain` = %s), %s,
-                (SELECT `value` FROM `types` WHERE `type` = %s), %s, %s
-            ON DUPLICATE KEY UPDATE `id` = LAST_INSERT_ID(`id`), `ttl` = %s, `persistence` = %s
-        """, (domain, name, name_type, ttl, persistence, ttl, persistence))
+                (SELECT `value` FROM `types` WHERE `type` = %s), %s,
+                (SELECT `id` FROM `routings` WHERE `policy` = %s)
+            ON DUPLICATE KEY UPDATE `id` = LAST_INSERT_ID(`id`), `ttl` = %s,
+              `routing_id` = (SELECT `id` FROM `routings` WHERE `policy` = %s)
+        """, (domain, name, name_type, ttl, policy, ttl, policy))
 
         record_write: tuple[str, tuple[Any, ...]]
         if save_recid:
@@ -326,20 +353,39 @@ class W2UIDatabaseMixIn(abc.ABC):
                   `monitor_id` = (SELECT `id` FROM `monitors` WHERE `monitor` = %s),
                   `view_id` = (SELECT `id` FROM `views` WHERE `view` = %s),
                   `disabled` = %s,
-                  `fallback` = %s,
                   `weight` = %s
                 WHERE `id` = %s
-            """, (content, monitor, view, disabled, fallback, weight, save_recid))
+            """, (content, monitor, view, disabled, weight, save_recid))
         else:
             record_write = ("""
                 INSERT INTO `records`
-                  (`rrset_id`, `content`, `monitor_id`, `view_id`, `disabled`, `fallback`, `weight`)
+                  (`rrset_id`, `content`, `monitor_id`, `view_id`, `disabled`, `weight`)
                   SELECT LAST_INSERT_ID(), %s,
                     (SELECT `id` FROM `monitors` WHERE `monitor` = %s),
-                    (SELECT `id` FROM `views` WHERE `view` = %s), %s, %s, %s
-            """, (content, monitor, view, disabled, fallback, weight))
+                    (SELECT `id` FROM `views` WHERE `view` = %s), %s, %s
+            """, (content, monitor, view, disabled, weight))
 
         return self._execute_transaction([rrset_upsert, record_write])
+
+    def save_routings(self, save_recid: int, policy: str, policy_json: str, **_: Any) -> int:
+        """Insert or update a routing row and return the row count."""
+        if save_recid:
+            operation = """
+                UPDATE `routings`
+                SET `policy` = %s,
+                  `policy_json` = %s
+                WHERE `id` = %s
+
+            """
+            params: tuple[Any, ...] = (policy, policy_json, save_recid)
+        else:
+            operation = """
+                INSERT INTO `routings` (`policy`, `policy_json`)
+                VALUES (%s, %s)
+            """
+            params = (policy, policy_json)
+
+        return self._modify(operation, params)
 
     def save_types(self, save_recid: int, description: str, name_type: str, recid: int, **_: Any) -> int:
         """Insert or update a type row and return the row count."""

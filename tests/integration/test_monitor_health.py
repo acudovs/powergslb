@@ -42,6 +42,10 @@ _IPS = {'exec_fail': '192.0.2.211', 'exec_pass': '192.0.2.212',
         'tcp_fail': '192.0.2.213', 'icmp_fail': '192.0.2.214', 'http_fail': '192.0.2.215',
         'icmp_pass': '192.0.2.216', 'tcp_pass': '192.0.2.217', 'http_pass': '192.0.2.218'}
 
+# An always-up (No check) record co-located with a monitored one. Under "all down = all up" a sole down record is
+# served as a last resort, so a live sibling is needed for the health filter to actually drop the down record.
+_SIBLING = '192.0.2.250'
+
 # Targets for the optional-field checks live inside the container: the DNS backend on :8080 (200 + a JSON body
 # containing 'hostmaster' for the example.com SOA lookup; 404 for any path that is neither /dns nor /admin) and the
 # admin HTTPS interface on :443 (self-signed cert; 401 without credentials).
@@ -90,6 +94,12 @@ def _create_record(w2ui: W2UIClient, base_record: dict[str, Any], key: str) -> i
     return _make_record(w2ui, base_record, _name(key), _IPS[key], _NAMES[key])
 
 
+def _add_up_sibling(w2ui: W2UIClient, base_record: dict[str, Any], name: str,
+                    cleanup: list[tuple[str, int]]) -> None:
+    """Add an always-up (No check) sibling at the same name so a down record is dropped, not all-up served."""
+    cleanup.append(('records', _make_record(w2ui, base_record, name, _SIBLING, 'No check')))
+
+
 # exec monitor: full fall-and-rise lifecycle
 
 def test_exec_fail_marks_down_and_no_check_recovers(
@@ -103,6 +113,7 @@ def test_exec_fail_marks_down_and_no_check_recovers(
     cleanup.append(('monitors', _create_monitor(w2ui, key)))
     rec_recid = _create_record(w2ui, base_record, key)
     cleanup.append(('records', rec_recid))
+    _add_up_sibling(w2ui, base_record, name, cleanup)  # live sibling so the down record is dropped, not all-up served
 
     time.sleep(_FAIL_WAIT)
 
@@ -110,7 +121,8 @@ def test_exec_fail_marks_down_and_no_check_recovers(
     assert st is not None, 'record not found in status'
     assert st['status'] == 'Off', f'expected Off, got {st["status"]}'
     assert st['style'] == 'color: red'
-    assert dns.lookup(_fqdn(key)) == []
+    # the down record is dropped from the live answer; only the healthy sibling is served
+    assert {r['content'] for r in dns.lookup(_fqdn(key))} == {_SIBLING}
 
     w2ui.save('records', recid=rec_recid,
               **{**base_record, 'name': name, 'content': _IPS[key], 'monitor': 'No check'})
@@ -120,8 +132,8 @@ def test_exec_fail_marks_down_and_no_check_recovers(
     assert st is not None
     assert st['status'] == 'On', f'expected On after recovery, got {st["status"]}'
     assert st['style'] == 'color: green'
-    result = dns.lookup(_fqdn(key))
-    assert len(result) == 1 and result[0]['content'] == _IPS[key]
+    # recovered: both the record and its sibling are served
+    assert {r['content'] for r in dns.lookup(_fqdn(key))} == {_IPS[key], _SIBLING}
 
 
 # exec monitor: /bin/true keeps record On
@@ -149,12 +161,15 @@ def test_monitor_type_marks_down(
         cleanup: list[tuple[str, int]], key: str) -> None:
     cleanup.append(('monitors', _create_monitor(w2ui, key)))
     cleanup.append(('records', _create_record(w2ui, base_record, key)))
+    _add_up_sibling(w2ui, base_record, _name(key), cleanup)
 
     time.sleep(_FAIL_WAIT)
 
     st = _status_of(w2ui, _IPS[key])
     assert st is not None and st['status'] == 'Off', f'{key}: {st}'
-    assert dns.lookup(_fqdn(key)) == []
+    # the down record is dropped from the live answer; only the healthy sibling remains
+    contents = {r['content'] for r in dns.lookup(_fqdn(key))}
+    assert _IPS[key] not in contents and contents == {_SIBLING}
 
 
 # icmp/tcp/http monitors against reachable targets keep their records On, confirming raw ICMP
@@ -204,13 +219,16 @@ def test_admin_rejects_bad_configs_and_interpolation_runs(
         json.dumps({**_T, 'type': 'tcp', 'ip': '${content}', 'port': 19999}))))
     cleanup.append(('records', _make_record(w2ui, base_record, 'hc-interp',
                                             good_content, 'HC Interp TCP')))
+    _add_up_sibling(w2ui, base_record, 'hc-interp', cleanup)
 
     time.sleep(_FAIL_WAIT)
 
     # interpolation worked and the thread is alive: this record is Off
     st = _status_of(w2ui, good_content)
     assert st is not None and st['status'] == 'Off', f'interp record: {st}'
-    assert dns.lookup('hc-interp.example.com') == []
+    # the down record is dropped from the live answer; only the healthy sibling remains
+    contents = {r['content'] for r in dns.lookup('hc-interp.example.com')}
+    assert good_content not in contents and contents == {_SIBLING}
 
 
 # literal '%' in monitor_json no longer drops the monitor (was silently skipped under %-formatting)
@@ -228,49 +246,49 @@ def test_monitor_with_literal_percent_runs(
         json.dumps({**_T, 'type': 'exec', 'args': ['/bin/sh', '-c', 'exit 1 # 100%']}))))
     cleanup.append(('records', _make_record(w2ui, base_record, 'hc-literal-pct',
                                             content, 'HC Literal Percent')))
+    _add_up_sibling(w2ui, base_record, 'hc-literal-pct', cleanup)
 
     time.sleep(_FAIL_WAIT)
 
     st = _status_of(w2ui, content)
     assert st is not None and st['status'] == 'Off', f'literal-% monitor should run and mark Off: {st}'
-    assert dns.lookup('hc-literal-pct.example.com') == []
+    # the down record is dropped from the live answer; only the healthy sibling remains
+    contents = {r['content'] for r in dns.lookup('hc-literal-pct.example.com')}
+    assert content not in contents and contents == {_SIBLING}
 
 
-# real health-driven fallback: all records down -> fallback served as last resort
+# real health-driven 'all down = all up': every record down -> the highest-weight tier is served as last resort
 
-def test_real_health_fallback(
+def test_real_health_all_down_keeps_all(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """When every record for a name is down, fallback-flagged records are served as a last resort.
+    """When every record for a name is down, the routing policy keeps them all and picks the highest-weight tier.
 
-    The fallback records are served even though they are themselves down, while non-fallback records are excluded.
-    With more than one fallback record the highest-weight fallback tier wins (max(fallback_records)).
+    The 'all down = all up' rule replaces the old fallback flag: with no live record the down records are
+    reactivated and round-robin answers the highest-weight tier (the primary), so DNS never fails entirely.
     """
-    name = 'hc-fallback'
+    name = 'hc-alldown'
     fqdn = f'{name}.example.com'
-    normal_c, fb_lo_c, fb_hi_c = '192.0.2.240', '192.0.2.241', '192.0.2.242'
+    lo_c, mid_c, hi_c = '192.0.2.240', '192.0.2.241', '192.0.2.242'
 
     cleanup.append(('monitors', _make_monitor(
-        w2ui, 'HC Fallback Fail', json.dumps({**_T, 'type': 'exec', 'args': ['/bin/false']}))))
-    cleanup.append(('records', _make_record(w2ui, base_record, name, normal_c, 'HC Fallback Fail',
-                                            fallback=0, weight=0)))
-    cleanup.append(('records', _make_record(w2ui, base_record, name, fb_lo_c, 'HC Fallback Fail',
-                                            fallback=1, weight=5)))
-    cleanup.append(('records', _make_record(w2ui, base_record, name, fb_hi_c, 'HC Fallback Fail',
-                                            fallback=1, weight=10)))
+        w2ui, 'HC AllDown Fail', json.dumps({**_T, 'type': 'exec', 'args': ['/bin/false']}))))
+    cleanup.append(('records', _make_record(w2ui, base_record, name, lo_c, 'HC AllDown Fail', weight=0)))
+    cleanup.append(('records', _make_record(w2ui, base_record, name, mid_c, 'HC AllDown Fail', weight=5)))
+    cleanup.append(('records', _make_record(w2ui, base_record, name, hi_c, 'HC AllDown Fail', weight=10)))
 
     time.sleep(_FAIL_WAIT)
 
     # all three records are down
-    for content in (normal_c, fb_lo_c, fb_hi_c):
+    for content in (lo_c, mid_c, hi_c):
         st = _status_of(w2ui, content)
         assert st is not None and st['status'] == 'Off', f'{content}: {st}'
 
-    # live set empty -> fallback branch -> only the highest-weight fallback
+    # live set empty -> keep-all -> only the highest-weight tier is answered
     result = dns.lookup(fqdn)
     assert len(result) == 1, result
-    assert result[0]['content'] == fb_hi_c
+    assert result[0]['content'] == hi_c
     contents = {r['content'] for r in result}
-    assert normal_c not in contents and fb_lo_c not in contents
+    assert lo_c not in contents and mid_c not in contents
 
 
 # optional check fields drive the verdict end to end (admin -> DB -> MonitorManager -> Check -> status set).

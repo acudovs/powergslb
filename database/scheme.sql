@@ -34,6 +34,15 @@ CREATE TABLE `monitors` (
   CONSTRAINT `monitors_monitor_json_check` CHECK (JSON_VALID(`monitor_json`))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE `routings` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `policy` varchar(255) NOT NULL,
+  `policy_json` varchar(1024) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `routings_policy_uindex` (`policy`),
+  CONSTRAINT `routings_policy_json_check` CHECK (JSON_VALID(`policy_json`))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE `domains` (
   `id` int NOT NULL AUTO_INCREMENT,
   `domain` varchar(255) NOT NULL,
@@ -41,7 +50,8 @@ CREATE TABLE `domains` (
   UNIQUE KEY `domains_domain_uindex` (`domain`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ttl and persistence are RRset properties and live here, so per-record divergence is unrepresentable.
+-- ttl is an RRset property and lives here, so per-record divergence is unrepresentable.
+-- routing_id names the answer-selection strategy for the whole rrset.
 -- name is relative to the zone: '@' for the apex, else the labels left of the zone.
 CREATE TABLE `rrsets` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -49,15 +59,16 @@ CREATE TABLE `rrsets` (
   `name` varchar(255) NOT NULL,
   `type_value` int NOT NULL,
   `ttl` int unsigned NOT NULL,
-  `persistence` tinyint unsigned NOT NULL DEFAULT 0,
+  `routing_id` int NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `rrsets_domain_id_name_type_value_uindex` (`domain_id`, `name`, `type_value`),
   KEY `rrsets_type_value_index` (`type_value`),
+  KEY `rrsets_routing_id_index` (`routing_id`),
   CONSTRAINT `rrsets_domains_id_fk` FOREIGN KEY (`domain_id`) REFERENCES `domains` (`id`),
   CONSTRAINT `rrsets_types_value_fk` FOREIGN KEY (`type_value`) REFERENCES `types` (`value`),
+  CONSTRAINT `rrsets_routings_id_fk` FOREIGN KEY (`routing_id`) REFERENCES `routings` (`id`),
   CONSTRAINT `rrsets_soa_apex_check` CHECK (`type_value` <> 6 OR `name` = '@'),
-  CONSTRAINT `rrsets_ttl_check` CHECK (`ttl` <= 2147483647),
-  CONSTRAINT `rrsets_persistence_check` CHECK (`persistence` <= 128)
+  CONSTRAINT `rrsets_ttl_check` CHECK (`ttl` <= 2147483647)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- A record is one answer inside a rrset. The rrset FK restricts: a populated rrset cannot be deleted;
@@ -69,7 +80,6 @@ CREATE TABLE `records` (
   `monitor_id` int NOT NULL,
   `view_id` int NOT NULL,
   `disabled` tinyint(1) NOT NULL DEFAULT 0,
-  `fallback` tinyint(1) NOT NULL DEFAULT 0,
   `weight` int unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   UNIQUE KEY `records_rrset_id_view_id_content_uindex` (`rrset_id`, `view_id`, `content`),

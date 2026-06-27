@@ -114,8 +114,7 @@ def test_lookup_any_returns_multiple_qtypes(dns: DNSClient) -> None:
 
 
 def test_lookup_order_is_deterministic(dns: DNSClient) -> None:
-    # gslb_records uses ORDER BY so a multi-record set comes back in a stable
-    # order across queries - the property client IP persistence relies on
+    # a default round-robin tier of <= max_answers is returned whole and in a stable order across queries
     first = dns.lookup('example.com', 'A')
     second = dns.lookup('example.com', 'A')
     assert len(first) == 4

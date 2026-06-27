@@ -2,7 +2,6 @@
 
 import json
 import logging
-import operator
 import time
 from collections import defaultdict
 from typing import Any, ClassVar
@@ -10,7 +9,10 @@ from urllib.parse import parse_qs
 
 import netaddr
 
+from powergslb.client import ClientContext
+from powergslb.routing import RoutingPolicy
 from powergslb.server.http.handler.request import HTTPRequestHandler
+from powergslb.view import ViewRule
 
 __all__ = ['PowerDNSRequestHandler']
 
@@ -18,12 +20,10 @@ __all__ = ['PowerDNSRequestHandler']
 class PowerDNSRequestHandler(HTTPRequestHandler):
     """Answers PowerDNS remote backend queries on the DNS interface: lookup and getAllDomains.
 
-    Lookup answers are filtered by view, health, weight, fallback, and client IP persistence.
+    Lookup answers run a per-qtype pipeline: a view filter, a health filter, then the rrset's routing policy,
+    which chooses the answers.
     """
     route: ClassVar[str] = 'dns'
-
-    # Per-request memo of (client IP, (country, continent)).
-    _geo_cache: tuple[Any, tuple[str | None, str | None]] = (object(), (None, None))
 
     def _handle_route(self) -> None:
         """Answer GET /dns queries; any other method is not part of the remote backend protocol -> 404."""
@@ -33,57 +33,45 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
             self.send_error(404)
 
     def _set_remote_ip(self) -> None:
-        """Set the client IP, preferring a valid X-Remotebackend-Real-Remote header (set by PowerDNS)."""
-        remote_ip = self.client_address[0]
-        if 'X-Remotebackend-Real-Remote' in self.headers:
+        """Set the client IP, preferring a valid X-Remotebackend-Real-Remote header set by PowerDNS.
+
+        An absent header falls back to the TCP peer silently.
+        """
+        header = self.headers.get('X-Remotebackend-Real-Remote')
+        if header is not None:
             try:
-                real_remote_header = self.headers['X-Remotebackend-Real-Remote']
-                remote_ip = netaddr.IPNetwork(real_remote_header).ip.format()
+                self.remote_ip = netaddr.IPNetwork(header).ip
+                return
             except (netaddr.AddrFormatError, ValueError) as e:
                 logging.error("'X-Remotebackend-Real-Remote' header invalid: %s: %s", type(e).__name__, e)
 
-        self.remote_ip = remote_ip
+        self.remote_ip = netaddr.IPAddress(self.client_address[0])
 
     def _filter_records(self, qtype_records: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
         """Select the records to answer with, independently per qtype.
 
-        Within a qtype, only in-view records are considered. A record is live while it is up, and the
-        highest-weight live group wins; the fallback flag is additive, so a healthy fallback record serves in
-        that group like any other. Only when no record is live is the highest-weight group among the
-        fallback-flagged records answered, regardless of their health, so a failed check is ignored as a last
-        resort. Give fallback records a lower weight than the primaries to keep them out of normal responses.
-        Persistence then collapses the chosen group to a single record per client subnet.
+        Per qtype: keep only in-view records, and if none are in view answer nothing for that qtype (the routing
+        policy is never resolved or called for an empty set). Then drop down records, unless that empties a
+        non-empty in-view set, in which case keep them all ('all down = all up', so DNS never fails entirely).
+        Finally the rrset's routing policy chooses the answers. A malformed policy is logged and drops that qtype
+        group.
         """
+        context = ClientContext(self.remote_ip)
         records: list[dict[str, Any]] = []
-        for qtype in qtype_records:
-
-            fallback_records: dict[int, list[dict[str, Any]]] = defaultdict(list)
-            live_records: dict[int, list[dict[str, Any]]] = defaultdict(list)
-
-            for record in qtype_records[qtype]:
-                if not self._is_in_view(record):
-                    continue
-
-                if record['fallback']:
-                    fallback_records[record['weight']].append(record)
-
-                if not self.status_registry.is_down(record['id']):
-                    live_records[record['weight']].append(record)
-
-            if live_records:
-                filtered_records = live_records[max(live_records)]
-            elif fallback_records:
-                filtered_records = fallback_records[max(fallback_records)]
-            else:
-                filtered_records = []
-
-            if not filtered_records:
+        for qtype, group in qtype_records.items():
+            in_view = [record for record in group if self._is_in_view(record, context)]
+            if not in_view:
                 continue
 
-            if filtered_records[0]['persistence']:
-                records.append(self._remote_ip_persistence(filtered_records))
-            else:
-                records.extend(filtered_records)
+            live = [record for record in in_view if not self.status_registry.is_down(record['id'])]
+            candidates = live or in_view  # all down -> all up
+
+            policy_json = group[0]['policy_json']  # one rrset per qtype group, so policy_json is identical
+            try:
+                records.extend(RoutingPolicy.resolve(policy_json).select(candidates, context))
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logging.error('%s %s routing policy invalid: %s: %s',
+                              candidates[0]['qname'], qtype, type(e).__name__, e)
 
         return records
 
@@ -122,55 +110,17 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
         return [{'qname': r['qname'], 'qtype': r['qtype'], 'content': r['content'], 'ttl': r['ttl']}
                 for r in filtered_records]
 
-    def _is_in_view(self, record: dict[str, Any]) -> bool:
-        """Return True when the client IP matches the record's view rule; an invalid rule never matches.
+    @staticmethod
+    def _is_in_view(record: dict[str, Any], context: ClientContext) -> bool:
+        """Return True when the client matches the record's view rule.
 
-        A rule is a space-separated list or CIDR and geo tokens. The client IP matches when it satisfies any one token.
+        A malformed rule is logged and treated as non-matching (returns False).
         """
-        result = False
         try:
-            cidr_tokens: list[str] = []
-            geo_tokens: list[tuple[str, str]] = []
-            for token in record.get('rule').split():  # type: ignore[union-attr]
-                geo = self.geoip_reader.parse_geo_token(token)
-                if geo is None:
-                    cidr_tokens.append(token)
-                else:
-                    geo_tokens.append(geo)
-
-            if cidr_tokens and netaddr.smallest_matching_cidr(self.remote_ip, cidr_tokens):
-                result = True
-            elif geo_tokens:
-                country, continent = self._client_geo()
-                result = any((kind == 'country' and value == country) or
-                             (kind == 'continent' and value == continent) for kind, value in geo_tokens)
-        except (AttributeError, netaddr.AddrFormatError, ValueError) as e:
+            return ViewRule.resolve(record['rule']).matches(context)
+        except ValueError as e:
             logging.error('record id %s view rule invalid: %s: %s', record['id'], type(e).__name__, e)
-
-        return result
-
-    def _client_geo(self) -> tuple[str | None, str | None]:
-        """Resolve the client's country and continent, caching the result by client IP.
-
-        The client geo is constant for a query yet '_is_in_view' runs per record, so the GeoIP lookup is memoized
-        and recomputed only when 'remote_ip' changes (a new query reuses the keep-alive connection's handler).
-        """
-        ip, geo = self._geo_cache
-        if ip != self.remote_ip:
-            geo = self.geoip_reader.lookup(self.remote_ip)
-            self._geo_cache = (self.remote_ip, geo)
-        return geo
-
-    def _remote_ip_persistence(self, records: list[dict[str, Any]]) -> dict[str, Any]:
-        """Pick one record for the client, deterministically.
-
-        The client IP is taken as a whole integer (IPv4 or IPv6) and shifted right by the record's 'persistence' bits,
-        so every address in the same subnet collapses to one value. A 'persistence' value at or above the client address
-        width collapses every client to a single record (maximum stickiness).
-        """
-        records = sorted(records, key=operator.itemgetter('content'))
-        persistence_value = netaddr.IPAddress(self.remote_ip).value >> records[0]['persistence']
-        return records[persistence_value % len(records)]
+            return False
 
     def content(self) -> str:
         """Dispatch /dns/lookup/<qname>/<qtype> and /dns/getAllDomains; anything else yields a false result."""

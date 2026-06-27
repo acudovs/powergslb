@@ -58,8 +58,7 @@ class PowerDNSDatabaseMixIn(abc.ABC):
                    ELSE CONCAT(`rrsets`.`name`, '.', `domains`.`domain`) END AS `qname`,
               `types`.`type` AS `qtype`,
               `rrsets`.`ttl`,
-              `rrsets`.`persistence`,
-              `records`.`fallback`,
+              `routings`.`policy_json`,
               `records`.`weight`,
               `records`.`id`,
               `records`.`content`,
@@ -67,6 +66,7 @@ class PowerDNSDatabaseMixIn(abc.ABC):
             FROM `domains`
               JOIN `rrsets` ON `rrsets`.`domain_id` = `domains`.`id`
               JOIN `types` ON `rrsets`.`type_value` = `types`.`value`
+              JOIN `routings` ON `rrsets`.`routing_id` = `routings`.`id`
               JOIN `records` ON `records`.`rrset_id` = `rrsets`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
             WHERE (

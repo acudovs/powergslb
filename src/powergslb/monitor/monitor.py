@@ -21,7 +21,7 @@ class MonitorManager(AbstractThread):
 
     :param monitor_config: The [monitor] section; update_interval is the poll period, the rest tunes the check types.
     :param database_config: mysql.connector connect kwargs.
-    :param status_registry: Shared registry the check threads write health status to.
+    :param status_registry: Shared health status registry.
     """
 
     def __init__(self,
@@ -44,7 +44,7 @@ class MonitorManager(AbstractThread):
             logging.debug('clean status for records: %s', ', '.join(map(str, stale_ids)))
 
     @classmethod
-    def build_check(cls, check: dict[str, Any]) -> 'Check':
+    def build_check(cls, check: dict[str, Any]) -> Check:
         """Parse one raw check row and build its Check.
 
         :returns: The Check.
@@ -57,8 +57,7 @@ class MonitorManager(AbstractThread):
         """Parse 'monitor_json' as JSON, then substitute the record content into its string values.
 
         Parsing happens before substitution, so a literal '%', '$' or brace anywhere in the template is data, never a
-        format directive, and a content value containing a quote cannot corrupt the JSON. Only the exact token
-        '${content}' is replaced (see _substitute); nothing else is escaped or interpreted.
+        format directive, and a content value containing a quote cannot corrupt the JSON.
 
         :raises ValueError: When 'monitor_json' is not a JSON object (json.JSONDecodeError is a ValueError subclass).
         """
@@ -81,7 +80,7 @@ class MonitorManager(AbstractThread):
             return {key: cls._substitute(item, token, replacement) for key, item in value.items()}
         return value
 
-    def _desired_checks(self) -> 'dict[int, Check] | None':
+    def _desired_checks(self) -> dict[int, Check] | None:
         """Build the desired checks keyed by content id; return None when the database is unavailable."""
         logging.debug('update checks from the database')
         try:

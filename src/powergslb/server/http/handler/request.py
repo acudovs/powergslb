@@ -6,10 +6,11 @@ from http.server import SimpleHTTPRequestHandler
 from typing import Any, ClassVar
 from urllib.parse import urlsplit, unquote
 
+import netaddr
+
 import powergslb.monitor
 from powergslb.database import Database
 from powergslb.monitor.status import StatusRegistry
-from powergslb.system.geoip import GeoIPReader
 from powergslb.version import VERSION
 
 __all__ = ['HTTPRequestHandler']
@@ -23,7 +24,6 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     keep-alive requests and bounded by the idle timeout.
 
     :param database_config: mysql.connector connect kwargs.
-    :param geoip_reader: GeoIP reader for lookup and validation.
     :param status_registry: Shared health status registry.
     :param timeout: Idle keep-alive timeout in seconds; bounds how long the handler holds its database connection.
     """
@@ -37,19 +37,17 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     def __init__(self,
                  *args: Any,
                  database_config: dict[str, Any],
-                 geoip_reader: GeoIPReader,
                  status_registry: StatusRegistry,
                  timeout: float,
                  **kwargs: Any) -> None:
         self.body: bytes | None = None
         self.close_connection: bool = False
-        self.database: Database = None  # type: ignore[assignment]
+        self.database: Database = None  # type: ignore[assignment]  # set per request by handle()
         self.database_config: dict[str, Any] = database_config
         self.dirs: list[str] = []
         self.path: str = ''
-        self.remote_ip: str | None = None
+        self.remote_ip: netaddr.IPAddress = None  # type: ignore[assignment]  # set per request by _set_remote_ip()
         self.query: Any = None
-        self.geoip_reader: GeoIPReader = geoip_reader
         self.status_registry: StatusRegistry = status_registry
         self.timeout: float = timeout  # type: ignore[misc]
         super().__init__(*args, **kwargs)
@@ -93,7 +91,7 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
 
     def _set_remote_ip(self) -> None:
         """Set the client IP to the TCP peer."""
-        self.remote_ip = self.client_address[0]
+        self.remote_ip = netaddr.IPAddress(self.client_address[0])
 
     def _urlsplit(self) -> None:
         # self.path and self.query stay percent-encoded.
@@ -113,8 +111,8 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     def do_POST(self) -> None:  # pylint: disable=invalid-name
         """Read the size-capped request body, then dispatch.
 
-        Draining the body keeps the keep-alive connection in sync even when the admin path answers 401
-        before reaching the body (matches nginx/Apache).
+        Draining the body keeps the keep-alive connection in sync even when a handler responds before
+        consuming it (matches nginx/Apache).
         """
         try:
             self._read_body()

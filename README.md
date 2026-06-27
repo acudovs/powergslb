@@ -1,9 +1,9 @@
-# PowerGSLB - PowerDNS Remote GSLB Backend
+# PowerGSLB - DNS Global Server Load Balancing
 
 PowerGSLB is a DNS-based Global Server Load Balancing (GSLB) solution built as a PowerDNS Authoritative Server
 [Remote Backend](https://doc.powerdns.com/authoritative/backends/remote.html). It continuously health-checks the
-endpoints behind your DNS records and returns only the live ones, honoring weighted priorities, client-IP / subnet
-persistence, DNS views (CIDR and GeoIP), and fallback rules.
+endpoints behind your DNS records and returns only the live ones, honoring weighted priorities, per-rrset routing
+policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and GeoIP).
 
 ## Table of Contents
 
@@ -20,8 +20,7 @@ persistence, DNS views (CIDR and GeoIP), and fallback rules.
 * [Record selection](#record-selection)
     * [Views](#views)
     * [Weight (priority)](#weight-priority)
-    * [Fallback](#fallback)
-    * [Persistence](#persistence)
+    * [Routing policies](#routing-policies)
     * [Disabled records](#disabled-records)
 * [Health checks](#health-checks)
     * [General parameters](#general-parameters)
@@ -54,8 +53,8 @@ persistence, DNS views (CIDR and GeoIP), and fallback rules.
 * Record selection:
     * DNS GSLB views (CIDR and GeoIP)
     * Weighted (priority) records
-    * Fallback if all the checks fail
-    * Per-record client IP / subnet persistence
+    * Per-rrset routing policies: round-robin, weighted-random, sticky-hash
+    * "All down = all up" so DNS never fails entirely during a full outage
 * Extendable health checks:
     * Arbitrary command execution
     * ICMP ping
@@ -73,8 +72,8 @@ PowerGSLB runs a fixed set of cooperating service threads under a systemd-aware 
   monitored record, and maintains the in-memory set of records that are currently down. Rise / fall counters debounce
   flapping endpoints.
 * **DNS interface** (default `127.0.0.1:8080`, plain HTTP) - implements the PowerDNS Remote Backend protocol. PowerDNS
-  forwards each query here; PowerGSLB filters the candidate records by query type, health status, view, weight,
-  persistence, and fallback rules, and returns a JSON DNS response.
+  forwards each query here; PowerGSLB filters the candidate records by query type, view, and health status, then the
+  rrset's routing policy chooses the answers (reading each record's weight), and returns a JSON DNS response.
 * **Admin interface** (default `0.0.0.0:443`, HTTPS) - the web management UI and its CRUD API. Authenticates via HTTP
   Basic Auth against the database (crypt(3) SHA-512 hashes, verified in constant time).
 
@@ -132,13 +131,32 @@ classDiagram
         +hash_password(password)$ str
         +verify_password(password, stored)$ bool
     }
+
+    %% ===== client =====
+    class ClientGeo {
+        +str | None country
+        +str | None continent
+    }
+    class ClientContext {
+        +IPAddress remote_ip
+        +ClientGeo | None geo
+    }
+
+    %% ===== view =====
     class GeoIPReader {
         +frozenset~str~ CONTINENT_CODES$
         +frozenset~str~ COUNTRY_CODES$
         -Reader _reader
         +parse_geo_token(token)$ tuple | None
-        +lookup(ip) tuple
-        +close() None
+        +lookup(ip) ClientGeo
+    }
+    class ViewRule {
+        -GeoIPReader | None _geoip$
+        +tuple~IPNetwork~ cidrs
+        +tuple~tuple~ geos
+        +configure(geoip_config)$ None
+        +resolve(rule)$ ViewRule
+        +matches(context) bool
     }
 
     %% ===== monitor =====
@@ -236,6 +254,32 @@ classDiagram
         +execute() bool
     }
 
+    %% ===== routing =====
+    class RoutingPolicy {
+        <<abstract>>
+        +str name$
+        +create(spec)$ RoutingPolicy
+        +resolve(policy_json)$ RoutingPolicy
+        +select(candidates, context)* list
+    }
+    class RoundRobin {
+        +name = "round-robin"
+        +int max_answers
+        +select(candidates, context) list
+    }
+    class WeightedRandom {
+        +name = "weighted-random"
+        +int max_answers
+        +select(candidates, context) list
+    }
+    class StickyHash {
+        +name = "sticky-hash"
+        +int max_answers
+        +int ipv4_mask
+        +int ipv6_mask
+        +select(candidates, context) list
+    }
+
     %% ===== server/http =====
     class HTTPServerManager {
         +str address
@@ -324,6 +368,9 @@ classDiagram
     Check <|-- TlsCheck
     Check <|-- HttpCheck
     Check <|-- ExecCheck
+    RoutingPolicy <|-- RoundRobin
+    RoutingPolicy <|-- WeightedRandom
+    RoutingPolicy <|-- StickyHash
     Thread <|-- HTTPServerManager
     ThreadingMixIn <|-- _ThreadingHTTPServer
     HTTPServer <|-- _ThreadingHTTPServer
@@ -339,7 +386,7 @@ classDiagram
     %% ===== Associations / composition =====
     PowerGSLB ..> Config : creates
     PowerGSLB ..> StatusRegistry : creates
-    PowerGSLB ..> GeoIPReader : creates
+    PowerGSLB ..> ViewRule : configure
     PowerGSLB ..> MonitorManager : creates
     PowerGSLB ..> HTTPServerManager : creates
     PowerGSLB ..> SystemService : creates
@@ -354,15 +401,22 @@ classDiagram
     StatusWriter --> StatusRegistry
     HTTPServerManager o--> _ThreadingHTTPServer : owns
     HTTPServerManager --> StatusRegistry
-    HTTPServerManager --> GeoIPReader
     HTTPServerManager ..> HTTPRequestHandler : instantiates per request
     HTTPRequestHandler --> MySQLDatabase : per-connection
     HTTPRequestHandler --> StatusRegistry
-    HTTPRequestHandler --> GeoIPReader
     AdminRequestHandler ..> MonitorManager : build_check (validate)
+    AdminRequestHandler ..> RoutingPolicy : resolve (validate)
+    AdminRequestHandler ..> ViewRule : resolve (validate)
     AdminRequestHandler ..> queryparser : parse_query
     queryparser ..> QueryParserError : raises
     W2UIDatabaseMixIn ..> password : hash / verify
+    PowerDNSRequestHandler ..> RoutingPolicy : resolve
+    PowerDNSRequestHandler ..> ViewRule : resolve
+    PowerDNSRequestHandler ..> ClientContext : builds
+    ViewRule o--> GeoIPReader : classvar
+    ViewRule ..> ClientContext : reads / fills
+    GeoIPReader ..> ClientGeo : returns
+    RoutingPolicy ..> ClientContext : reads
 ```
 
 </details>
@@ -379,12 +433,12 @@ removing the container discards everything. That is the right mode for a demo an
 the container, see [Persisting data](#persisting-data) below.
 
 ```shell
-docker pull docker.io/acudovs/powergslb:2.1.2
+docker pull docker.io/acudovs/powergslb:2.2.0
 
 docker run -it --privileged \
     --name powergslb --hostname powergslb \
     --tmpfs /run --tmpfs /tmp \
-    docker.io/acudovs/powergslb:2.1.2
+    docker.io/acudovs/powergslb:2.2.0
 ```
 
 Find the container IP address and use it to reach the services:
@@ -435,7 +489,7 @@ docker run -it --privileged \
     --name powergslb --hostname powergslb \
     --tmpfs /run --tmpfs /tmp \
     -v powergslb-db:/var/lib/mysql \
-    docker.io/acudovs/powergslb:2.1.2
+    docker.io/acudovs/powergslb:2.2.0
 ```
 
 First boot initializes the database inside the volume; later runs detect the existing data and reuse it untouched. A
@@ -574,9 +628,9 @@ UI. See [Health checks](#health-checks) for the per-check parameters.
 ## Database
 
 The DNS GSLB configuration lives in a MySQL 8 / MariaDB 10.5+ database. The schema uses a two-level model: an *rrset*
-is one `(domain, name, type)` and owns its `ttl` and `persistence`; a *record* is one answer inside it (`content` plus
-the `monitor`, `view`, `weight`, `disabled` and `fallback` flags). Record names are stored relative to the zone (`@` for
-the apex, otherwise the labels left of the domain), so in the admin grid the `Domain` column is authoritative and `Name`
+is one `(domain, name, type)` and owns its `ttl` and `routing` policy; a *record* is one answer inside it (`content`
+plus the `monitor`, `view`, `weight` and `disabled` flag). Record names are stored relative to the zone (`@` for the
+apex, otherwise the labels left of the domain), so in the admin grid the `Domain` column is authoritative and `Name`
 is relative.
 
 DNS invariants (CNAME exclusivity, SOA cardinality, rrset garbage collection) are enforced in the database itself via
@@ -615,10 +669,15 @@ in [database/README.md](database/README.md).
 
 ## Record selection
 
-For each query PowerGSLB starts from every enabled record at the requested `(name, type)` and narrows the set with
-record-level controls before answering, applied in order: view, then health, then weight, then persistence, with
-fallback as a safety net. The client IP used for view and persistence is read from the `X-Remotebackend-Real-Remote`
-header PowerDNS sends (the real resolver address), not the PowerDNS host.
+For each query PowerGSLB starts from every enabled record at the requested `(name, type)` and runs a pipeline before
+answering: the **view** filter (client match), then the **health** filter (drop down records), then the rrset's
+**[routing policy](#routing-policies)**, which reads each record's `weight` and chooses the answers. The client IP used
+for the view filter and for sticky routing is read from the `X-Remotebackend-Real-Remote` header PowerDNS sends (the
+real resolver address), not the PowerDNS host.
+
+If the view filter leaves no candidate for a query type, that type is answered with nothing. If the health filter would
+empty a non-empty in-view set (every record is down), the down records are kept instead - "all down = all up" - so a
+name never goes empty during a full outage; the policy then picks among them as a last resort.
 
 ### Views
 
@@ -635,42 +694,54 @@ A rule is a space-separated list or CIDR and geo tokens - the client matches whe
 * `continent:<CODE>` - a two-letter continent code (`AF`, `AN`, `AS`, `EU`, `NA`, `OC`, `SA`), e.g. `continent:EU`.
 
 Geo tokens are case-insensitive and may be mixed freely with CIDRs, e.g. `10.0.0.0/8 country:DE continent:EU`. The
-client's country and continent are resolved from the [`[geoip]`](#configuration) database for each query. When no
-database is loaded the geo tokens never match and CIDR behavior is unchanged.
+client's country and continent are resolved from the [`[geoip]`](#configuration) database at most once per query, and
+only when the CIDR tokens miss (the CIDR check short-circuits first). Each view rule is compiled once into a cached
+object and reused, so repeated lookups do no re-parsing. When no database is loaded the geo tokens never match.
 
 ### Weight (priority)
 
-Among the in-view, live records, only the **highest-weight group** is answered; equal-weight records all serve and
-load-share, while lower-weight records stay on standby. Giving a record a lower weight turns it into a backup that is
-used only once every higher-weight record at that name is down.
+Every routing policy reads the single per-record `weight`, but interprets it per its own rules (see
+[Routing policies](#routing-policies)). Under the default `round-robin` and under `sticky-hash`, `weight` is a
+**tier**: only the **highest-weight group** of live records is answered; equal-weight records all serve and load-share,
+while lower-weight records stay on standby until every higher-weight record at the name is down. Under
+`weighted-random`, `weight` is a **proportion** of the traffic instead.
 
-This enables a **blue-green deployment**: run the new servers alongside the old ones at a lower weight, then raise
-their weight above the current group to cut all traffic over at once. The old servers fall to standby but keep serving,
-so rolling back is just lowering the weight again.
+The tier behavior enables a **blue-green deployment**: run the new servers alongside the old ones at a lower weight,
+then raise their weight above the current group to cut all traffic over at once. The old servers fall to standby but
+keep serving, so rolling back is just lowering the weight again. It also gives **backup-only** records: put the backups
+in a lower weight tier under the same policy and they serve only once the whole primary tier is down.
 
-### Fallback
+### Routing policies
 
-The `fallback` flag is **additive, not backup-only**. A healthy fallback record competes in the normal (highest-weight
-live) group like any other. Only when no record at the name is live are the fallback-flagged records answered
-regardless of their own health, so the name still resolves during a full outage instead of going empty. To use a
-fallback record as a true backup, give it a lower weight than the primaries. Liveness is decided by the
-[health checks](#health-checks) below.
+A routing policy is a named, reusable, JSON-configured object that an rrset references (like a monitor). It decides
+*which* records to answer from the live, in-view candidates - never their order, since PowerDNS and recursors re-sort
+RRsets. The seed data ships one of each type; manage them in the "Routings" sidebar section. Every rrset
+references exactly one policy.
 
-**Best practice:** set the `fallback` flag on the monitored records (or at least some of them). Then, if all checks
-fail at once, PowerGSLB answers with the flagged records rather than an empty response, so the name keeps resolving and
-clients reach a possibly recovering endpoint instead of a guaranteed failure.
+| policy            | weight | returns                                           | parameters (default)                                     |
+|-------------------|--------|---------------------------------------------------|----------------------------------------------------------|
+| `round-robin`     | tier   | up to `max_answers` from the highest tier         | `max_answers` (`8`)                                      |
+| `weighted-random` | weight | up to `max_answers` by weighted random            | `max_answers` (`1`)                                      |
+| `sticky-hash`     | tier   | up to `max_answers` from the highest tier, sticky | `max_answers` (`1`), `ipv4_mask`/`ipv6_mask` (`24`/`64`) |
 
-### Persistence
+* **round-robin** (default) answers the highest-weight live tier. A tier of `max_answers` or fewer is returned whole;
+  a larger tier is randomly subsampled to `max_answers` to bound UDP fragmentation / `TC=1` truncation. Example:
+  `{"type": "round-robin"}` or `{"type": "round-robin", "max_answers": 4}`.
+* **weighted-random** answers up to `max_answers` records (default `1`), sampled weighted-random by `weight` without
+  replacement over all live records. With the default single answer each query picks one record by weight, so the
+  proportional split is exact across queries; `max_answers` above 1 returns several weighted records per answer that
+  resolvers may reorder, so the split then holds only statistically. An all-zero-weight set samples evenly. Example:
+  `{"type": "weighted-random"}` or `{"type": "weighted-random", "max_answers": 3}`.
+* **sticky-hash** answers up to `max_answers` records (default `1`) from the highest live tier, pinned per client
+  network via rendezvous (HRW) hashing: the client is masked to `ipv4_mask` / `ipv6_mask` and records are ranked by a
+  salt-free hash of `(network, content)`, returning the top `max_answers`, so a health flap or record change remaps
+  only ~`max_answers`/N clients (~1/N at the default `max_answers`). Stickiness is stable per client network **given
+  the same live set and masks**. Example:
+  `{"type": "sticky-hash"}` or `{"type": "sticky-hash", "max_answers": 2, "ipv4_mask": 16}`.
 
-Persistence pins a client to a stable answer without server-side state. The rrset's `persistence` value is a number of
-bits: the client IP (as a whole integer) is shifted right by that many bits and taken modulo the records count, so
-every client in the same subnet deterministically gets the same record. `0` returns the answer set unchanged; a value
-at or above the address width collapses all clients onto a single record.
-
-The bit count is the host part to discard, so it pins clients per subnet: the address width minus the prefix you want
-to group by. For IPv4 (32 bits), `8` pins each `/24` and `16` pins each `/16`; for IPv6 (128 bits), `64` pins each
-`/64`. Example: with `persistence = 8`, clients `192.0.2.10` and `192.0.2.200` share the `192.0.2.0/24` subnet and
-always get the same record, while `198.51.100.10` may get a different one.
+Liveness is decided by the [health checks](#health-checks) below. Across all policies, when every record at a name is
+down the set is reactivated ("all down = all up") so the name still resolves; `round-robin` / `sticky-hash` then serve
+the highest-weight tier as a last resort, and `weighted-random` falls back to its split.
 
 ### Disabled records
 
@@ -888,7 +959,7 @@ curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-records -d data=
 # Admin API: fetch one record by id (the id is the recid field from get-records)
 curl -sk -u admin:admin https://powergslb/admin/w2ui -d cmd=get-record -d data=records -d recid=133
 
-# Admin API: create an A record (omitted fields - disabled, fallback, weight, persistence - default to 0)
+# Admin API: create an A record (omitted fields - disabled, weight - default to 0)
 curl -sk -u admin:admin https://powergslb/admin/w2ui \
     -d cmd=save-record -d data=records -d recid=0 \
     -d 'record[domain]=example.com' \
@@ -897,7 +968,8 @@ curl -sk -u admin:admin https://powergslb/admin/w2ui \
     -d 'record[ttl]=60' \
     -d 'record[content]=192.0.2.10' \
     -d 'record[monitor]=No check' \
-    -d 'record[view]=Public'
+    -d 'record[view]=Public' \
+    -d 'record[policy]=Round robin'
 
 # Admin API: change a record's weight (recid=133 updates in place; re-send the row's other fields unchanged)
 curl -sk -u admin:admin https://powergslb/admin/w2ui \
@@ -909,6 +981,7 @@ curl -sk -u admin:admin https://powergslb/admin/w2ui \
     -d 'record[content]=192.0.2.10' \
     -d 'record[monitor]=No check' \
     -d 'record[view]=Public' \
+    -d 'record[policy]=Round robin' \
     -d 'record[weight]=10'
 
 # Admin API: delete a record by id
@@ -971,7 +1044,7 @@ def save(data, recid, fields):
 # Records: list, create, delete
 records = w2ui("get-records", "records")["records"]
 save("records", 0, {"domain": "example.com", "name": "app", "name_type": "A", "ttl": 60,
-                    "content": "192.0.2.10", "monitor": "No check", "view": "Public"})
+                    "content": "192.0.2.10", "monitor": "No check", "view": "Public", "policy": "Round robin"})
 w2ui("delete-records", "records", **{"selected[0]": 133})
 
 # Change a record's weight: read-modify-write (an update re-sends the whole row)

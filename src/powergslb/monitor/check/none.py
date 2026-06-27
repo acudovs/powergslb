@@ -9,9 +9,9 @@ __all__ = ['NoCheck']
 
 @dataclass
 class NoCheck(Check):
-    """The "none" type: a registered check that marks "No check".
+    """The "none" monitor type: a registered check that is never run.
 
-    MonitorManager honors 'skip' and never threads it, so 'execute()' is never called.
+    Sets the 'skip' flag; 'execute()' returns True (always healthy) if ever run.
     """
     name = 'none'
     skip = True

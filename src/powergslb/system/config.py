@@ -41,7 +41,7 @@ class Config:
     :param files: Path or list of paths to TOML files; later files override earlier ones per option.
     """
 
-    def __init__(self, files: 'str | list[str]') -> None:
+    def __init__(self, files: str | list[str]) -> None:
         self._data: dict[str, dict[str, Any]] = {}
         paths = [files] if isinstance(files, str) else list(files)
         for path in paths:

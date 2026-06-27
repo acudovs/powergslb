@@ -69,7 +69,7 @@ class ExecCheck(Check):
 
         return bool(re.search(self.output_match, output.decode('utf-8', errors='replace')))
 
-    def _read_output(self, process: 'subprocess.Popen[bytes]', deadline: float) -> tuple[bytes, bool]:
+    def _read_output(self, process: subprocess.Popen[bytes], deadline: float) -> tuple[bytes, bool]:
         """Drain the process stdout until EOF or the deadline, keeping only the first 'output_chunk' bytes.
 
         Excess output is read and discarded so a chatty command can still exit.

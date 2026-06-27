@@ -24,17 +24,6 @@ class _FakeConfig:
         return {'section': section}
 
 
-class _FakeGeoIP:
-    def __init__(self) -> None:
-        self.closed = False
-
-    def close(self) -> None:
-        self.closed = True
-
-    def __str__(self) -> str:
-        return 'geoip-reader'
-
-
 class _FakeService:
     last: '_FakeService | None' = None
 
@@ -61,24 +50,20 @@ def patched(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(powergslb.main, 'Config', fake_config)
     monkeypatch.setattr(powergslb.main, 'SystemService', _FakeService)
 
-    def fake_geoip(geoip_config: Any) -> _FakeGeoIP:
+    def fake_configure(geoip_config: Any) -> None:
         parsed['geoip'] = geoip_config
-        reader = _FakeGeoIP()
-        parsed['geoip_reader'] = reader
-        return reader
 
     def fake_monitor(_monitor_config: Any, _database_config: Any, _registry: Any, name: str) -> str:
         thread = f'monitor:{name}'
         parsed['threads'].append(thread)
         return thread
 
-    def fake_server(config: Any, _database_config: Any,
-                    geoip_reader: Any, _registry: Any, handler: Any, name: str) -> str:
-        thread = f'server:{name}:{config}:{handler.__name__}:{geoip_reader}'
+    def fake_server(config: Any, _database_config: Any, _registry: Any, handler: Any, name: str) -> str:
+        thread = f'server:{name}:{config}:{handler.__name__}'
         parsed['threads'].append(thread)
         return thread
 
-    monkeypatch.setattr(powergslb.main, 'GeoIPReader', fake_geoip)
+    monkeypatch.setattr(powergslb.main.ViewRule, 'configure', staticmethod(fake_configure))
     monkeypatch.setattr(powergslb.main, 'MonitorManager', fake_monitor)
     monkeypatch.setattr(powergslb.main, 'ServerManager', fake_server)
     _FakeService.last = None
@@ -89,18 +74,16 @@ def test_main_wires_threads_and_starts_service(patched: dict[str, Any]) -> None:
     PowerGSLB.main()
 
     assert patched['config_path'] == '/etc/powergslb/powergslb.toml'
-    assert patched['geoip'] == {'section': 'geoip'}  # the [geoip] config section is passed to the reader
-    # one monitor plus the admin and server HTTP threads, in that order, each wired to its role handler and the
-    # shared geoip reader
+    assert patched['geoip'] == {'section': 'geoip'}  # the [geoip] config section is passed to ViewRule.configure
+    # one monitor plus the admin and server HTTP threads, in that order, each wired to its role handler
     assert patched['threads'] == [
         'monitor:Monitor',
-        "server:Admin:{'section': 'admin'}:AdminRequestHandler:geoip-reader",
-        "server:Server:{'section': 'server'}:PowerDNSRequestHandler:geoip-reader",
+        "server:Admin:{'section': 'admin'}:AdminRequestHandler",
+        "server:Server:{'section': 'server'}:PowerDNSRequestHandler",
     ]
     assert _FakeService.last is not None
     assert _FakeService.last.started is True
     assert _FakeService.last.service_threads == patched['threads']
-    assert patched['geoip_reader'].closed is True  # the reader is closed on the way out
 
 
 def test_main_passes_level_name_to_basic_config(patched: dict[str, Any]) -> None:

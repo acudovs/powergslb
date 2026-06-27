@@ -16,7 +16,7 @@ _TIMEOUT = 15
 # override what they need with {**base_record, 'field': value}.
 _BASE_RECORD = {
     'domain': 'example.com', 'name_type': 'A', 'ttl': 300, 'monitor': 'No check',
-    'view': 'Public', 'disabled': 0, 'fallback': 0, 'weight': 0, 'persistence': 0,
+    'view': 'Public', 'policy': 'Round robin', 'disabled': 0, 'weight': 0,
 }
 
 

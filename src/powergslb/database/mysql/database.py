@@ -16,8 +16,8 @@ __all__ = ['MySQLDatabase']
 class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.MySQLConnection):
     """MySQL/MariaDB connection with the PowerDNS and w2ui query mixins; usable as a context manager.
 
-    Always operates with autocommit on (not user-configurable): the code never calls commit(), so every
-    statement must persist on its own.
+    Runs with autocommit on (not user-configurable), so every single-statement write persists on its own;
+    only _execute_transaction suspends autocommit to group statements and commit() them as a unit.
 
     :param kwargs: mysql.connector connect arguments (database, user, password, host, port, unix_socket, ...).
     """

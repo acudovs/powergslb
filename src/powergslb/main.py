@@ -5,7 +5,8 @@ import logging
 
 from powergslb.monitor import MonitorManager, StatusRegistry
 from powergslb.server import AdminRequestHandler, PowerDNSRequestHandler, ServerManager
-from powergslb.system import Config, GeoIPReader, ServiceThread, SystemService
+from powergslb.system import Config, ServiceThread, SystemService
+from powergslb.view import ViewRule
 
 __all__ = ['PowerGSLB']
 
@@ -28,17 +29,14 @@ class PowerGSLB:
         )
 
         database = config.items('database')
-        geoip = GeoIPReader(config.items('geoip'))
         status = StatusRegistry()
+        ViewRule.configure(config.items('geoip'))
 
         service_threads: list[ServiceThread] = [
             MonitorManager(config.items('monitor'), database, status, name='Monitor'),
-            ServerManager(config.items('admin'), database, geoip, status, AdminRequestHandler, name='Admin'),
-            ServerManager(config.items('server'), database, geoip, status, PowerDNSRequestHandler, name='Server')
+            ServerManager(config.items('admin'), database, status, AdminRequestHandler, name='Admin'),
+            ServerManager(config.items('server'), database, status, PowerDNSRequestHandler, name='Server')
         ]
 
         service = SystemService(service_threads)
-        try:
-            service.start()
-        finally:
-            geoip.close()
+        service.start()

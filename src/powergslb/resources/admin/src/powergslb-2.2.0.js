@@ -32,6 +32,9 @@ var gridPopupForm = (function (event) {
         case 'gridRecords':
             openPopupForm(event, 'record', 400, 525, 'formRecords');
             break;
+        case 'gridRoutings':
+            openPopupForm(event, 'routing', 400, 210, 'formRoutings');
+            break;
         case 'gridTypes':
             openPopupForm(event, 'type', 400, 245, 'formTypes');
             break;
@@ -133,6 +136,7 @@ var config = {
                     {id: 'gridDomains', text: 'Domains', img: 'icon-page'},
                     {id: 'gridMonitors', text: 'Monitors', img: 'icon-page'},
                     {id: 'gridRecords', text: 'Records', img: 'icon-page'},
+                    {id: 'gridRoutings', text: 'Routings', img: 'icon-page'},
                     {id: 'gridTypes', text: 'Types', img: 'icon-page'},
                     {id: 'gridViews', text: 'Views', img: 'icon-page'}
                 ]
@@ -150,6 +154,7 @@ var config = {
                 case 'gridDomains':
                 case 'gridMonitors':
                 case 'gridRecords':
+                case 'gridRoutings':
                 case 'gridTypes':
                 case 'gridUsers':
                 case 'gridViews':
@@ -175,9 +180,8 @@ var config = {
             {field: 'content', caption: 'Content', size: '510px', resizable: true, sortable: true},
             {field: 'ttl', caption: 'TTL', size: '55px', resizable: true, sortable: true},
             {field: 'disabled', caption: 'Disabled', size: '65px', resizable: true, sortable: true},
-            {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
-            {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
+            {field: 'policy', caption: 'Routing', size: '150px', resizable: true, sortable: true},
             {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
@@ -189,9 +193,8 @@ var config = {
             {field: 'content', caption: 'Content', type: 'text'},
             {field: 'ttl', caption: 'TTL', type: 'int'},
             {field: 'disabled', caption: 'Disabled', type: 'int'},
-            {field: 'fallback', caption: 'Fallback', type: 'int'},
-            {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
+            {field: 'policy', caption: 'Routing', type: 'text'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'view', caption: 'View', type: 'text'}
         ],
@@ -326,9 +329,8 @@ var config = {
             {field: 'content', caption: 'Content', size: '510px', resizable: true, sortable: true},
             {field: 'ttl', caption: 'TTL', size: '55px', resizable: true, sortable: true},
             {field: 'disabled', caption: 'Disabled', size: '65px', resizable: true, sortable: true},
-            {field: 'fallback', caption: 'Fallback', size: '60px', resizable: true, sortable: true},
-            {field: 'persistence', caption: 'Persistence', size: '80px', resizable: true, sortable: true},
             {field: 'weight', caption: 'Weight', size: '55px', resizable: true, sortable: true},
+            {field: 'policy', caption: 'Routing', size: '150px', resizable: true, sortable: true},
             {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
@@ -340,9 +342,8 @@ var config = {
             {field: 'content', caption: 'Content', type: 'text'},
             {field: 'ttl', caption: 'TTL', type: 'int'},
             {field: 'disabled', caption: 'Disabled', type: 'int'},
-            {field: 'fallback', caption: 'Fallback', type: 'int'},
-            {field: 'persistence', caption: 'Persistence', type: 'int'},
             {field: 'weight', caption: 'Weight', type: 'int'},
+            {field: 'policy', caption: 'Routing', type: 'text'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'view', caption: 'View', type: 'text'}
         ],
@@ -380,14 +381,16 @@ var config = {
                 options: {autoFormat: false}
             },
             {field: 'disabled', type: 'toggle', required: false, html: {caption: 'Disabled: '}},
-            {field: 'fallback', type: 'toggle', required: false, html: {caption: 'Fallback: '}},
-            {
-                field: 'persistence', type: 'int', required: false, html: {caption: 'Persistence: '},
-                options: {autoFormat: false}
-            },
             {
                 field: 'weight', type: 'int', required: false, html: {caption: 'Weight: '},
                 options: {autoFormat: false}
+            },
+            {
+                field: 'policy', type: 'combo', required: true, html: {caption: 'Routing: '},
+                options: {
+                    postData: {'cmd': 'get-items', data: 'routings', field: 'policy'},
+                    placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
+                }
             },
             {
                 field: 'monitor', type: 'combo', required: true, html: {caption: 'Monitor: '},
@@ -406,6 +409,46 @@ var config = {
         ],
         onSave: function () {
             w2ui.gridRecords.reload();
+        }
+    },
+
+    // ====================================================
+    // Routings
+    // ====================================================
+
+    gridRoutings: {
+        name: 'gridRoutings',
+        postData: {data: 'routings'},
+        show: gridShow,
+        sortData: gridSortData,
+        url: w2uiUrl,
+        columns: [
+            {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+            {field: 'policy', caption: 'Policy', size: '150px', resizable: true, sortable: true},
+            {field: 'policy_json', caption: 'Policy JSON', size: '750px', resizable: true, sortable: true}
+        ],
+        searches: [
+            {field: 'recid', caption: 'ID', type: 'int'},
+            {field: 'policy', caption: 'Policy', type: 'text'},
+            {field: 'policy_json', caption: 'Policy JSON', type: 'text'}
+        ],
+        onAdd: gridPopupForm,
+        onDblClick: gridPopupForm,
+        onEdit: gridPopupForm
+    },
+
+    formRoutings: {
+        name: 'formRoutings',
+        postData: {data: 'routings'},
+        actions: formActions,
+        style: formStyle,
+        url: w2uiUrl,
+        fields: [
+            {field: 'policy', type: 'text', required: true, html: {caption: 'Policy: '}},
+            {field: 'policy_json', type: 'text', required: true, html: {caption: 'Policy JSON: '}}
+        ],
+        onSave: function () {
+            w2ui.gridRoutings.reload();
         }
     },
 
@@ -549,12 +592,14 @@ $(function () {
     $().w2grid(config.gridDomains);
     $().w2grid(config.gridMonitors);
     $().w2grid(config.gridRecords);
+    $().w2grid(config.gridRoutings);
     $().w2grid(config.gridTypes);
     $().w2grid(config.gridUsers);
     $().w2grid(config.gridViews);
     $().w2form(config.formDomains);
     $().w2form(config.formMonitors);
     $().w2form(config.formRecords);
+    $().w2form(config.formRoutings);
     $().w2form(config.formTypes);
     $().w2form(config.formViews);
     $().w2form(config.formUsers);

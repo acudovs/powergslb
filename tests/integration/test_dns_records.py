@@ -125,86 +125,80 @@ def test_weight_based_selection(
     assert result[0]['content'] == content_hi
 
 
-# persistence-based selection
+# sticky-hash routing: a client network maps deterministically to one record
 
-def test_persistence_based_selection(
+def test_sticky_hash_selection(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """Persistence ties a client subnet deterministically to one record.
+    """The sticky-hash policy ties a client network to one record via rendezvous hashing.
 
-    Records with persistence=24: IP >> 24 (top octet) determines which record is returned. Same top octet -> same
-    record on every request. Different top octet -> different record.
+    With the default ipv4_mask=24, clients sharing a /24 collapse to the same single record on every request;
+    across many /24s the hashing spreads clients over both records, so both are reachable.
     """
-    name = 'persist-test'
+    name = 'sticky-test'
     fqdn = f'{name}.example.com'
     content_a, content_b = '192.0.2.93', '192.0.2.94'
 
-    r = w2ui.save('records', name=name, content=content_a, **{**base_record, 'persistence': 24})
-    assert r.json()['status'] == 'success'
-    recid_a = w2ui.find_recid('records', name=name, content=content_a)
-    assert recid_a is not None
-    cleanup.append(('records', recid_a))
+    for content in (content_a, content_b):
+        r = w2ui.save('records', name=name, content=content, **{**base_record, 'policy': 'Sticky hash'})
+        assert r.json()['status'] == 'success'
+        recid = w2ui.find_recid('records', name=name, content=content)
+        assert recid is not None
+        cleanup.append(('records', recid))
 
-    r = w2ui.save('records', name=name, content=content_b, **{**base_record, 'persistence': 24})
-    assert r.json()['status'] == 'success'
-    recid_b = w2ui.find_recid('records', name=name, content=content_b)
-    assert recid_b is not None
-    cleanup.append(('records', recid_b))
-
-    # same top octet → always the same single record
     def lookup_with_ip(ip: str) -> str:
         result = dns.lookup(fqdn, 'A', real_remote=f'{ip}/32')
         assert len(result) == 1
         return result[0]['content']
 
+    # same /24 -> always the same single record
     ip1_result = lookup_with_ip('1.0.0.1')
     assert lookup_with_ip('1.0.0.2') == ip1_result
     assert lookup_with_ip('1.0.0.3') == ip1_result
+    assert ip1_result in (content_a, content_b)
 
-    # different top octet → potentially different record
-    ip2_result = lookup_with_ip('2.0.0.1')
-    assert ip2_result in (content_a, content_b)
-    assert ip1_result != ip2_result
+    # across many distinct /24s both records are reachable (the hash spreads networks)
+    seen = {lookup_with_ip(f'{octet}.0.0.1') for octet in range(1, 60)}
+    assert seen == {content_a, content_b}
 
 
-# fallback records
+# weight-tier backup: the documented replacement for the old fallback flag
 
-def test_fallback_record_returned_when_normal_all_down(
+def test_lower_weight_tier_is_backup_only(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """When the only normal record is disabled, the fallback record is returned instead.
+    """A lower-weight record under round-robin serves only once the higher-weight tier is gone.
 
-    Disabled records are excluded by the DNS layer (disabled != fallback). The health-check-driven fallback path is
-    covered in test_monitor_health.test_real_health_fallback.
+    This reproduces backup-only behavior without a fallback flag: the primary (higher weight) tier wins while any
+    of it is live, and the backup (lower weight) tier takes over once the primary is excluded.
     """
-    name = 'fallback-test'
+    name = 'backup-test'
     fqdn = f'{name}.example.com'
-    content_normal, content_fallback = '192.0.2.95', '192.0.2.96'
+    content_primary, content_backup = '192.0.2.95', '192.0.2.96'
 
-    r = w2ui.save('records', name=name, content=content_normal, **{**base_record, 'fallback': 0})
+    r = w2ui.save('records', name=name, content=content_primary, **{**base_record, 'weight': 20})
     assert r.json()['status'] == 'success'
-    recid_normal = w2ui.find_recid('records', name=name, content=content_normal)
-    assert recid_normal is not None
-    cleanup.append(('records', recid_normal))
+    recid_primary = w2ui.find_recid('records', name=name, content=content_primary)
+    assert recid_primary is not None
+    cleanup.append(('records', recid_primary))
 
-    r = w2ui.save('records', name=name, content=content_fallback, **{**base_record, 'fallback': 1})
+    r = w2ui.save('records', name=name, content=content_backup, **{**base_record, 'weight': 10})
     assert r.json()['status'] == 'success'
-    recid_fallback = w2ui.find_recid('records', name=name, content=content_fallback)
-    assert recid_fallback is not None
-    cleanup.append(('records', recid_fallback))
+    recid_backup = w2ui.find_recid('records', name=name, content=content_backup)
+    assert recid_backup is not None
+    cleanup.append(('records', recid_backup))
 
-    # both records visible in DNS when normal record is up
-    contents = {r['content'] for r in dns.lookup(fqdn, 'A')}
-    assert content_normal in contents
-    # fallback is also returned when normal records exist (both live)
-    assert content_fallback in contents
+    # while the primary tier is up, only the primary is served (the backup stays out of the answer)
+    result = dns.lookup(fqdn, 'A')
+    assert len(result) == 1
+    assert result[0]['content'] == content_primary
 
-    # disable the normal record → only the fallback record remains
-    r = w2ui.save('records', recid=recid_normal, name=name, content=content_normal,
-                  **{**base_record, 'disabled': 1})
+    # disable the primary -> the backup tier becomes the highest live tier and is served
+    r = w2ui.save('records', recid=recid_primary, name=name, content=content_primary,
+                  **{**base_record, 'weight': 20, 'disabled': 1})
     assert r.json()['status'] == 'success'
 
     result = dns.lookup(fqdn, 'A')
     assert len(result) == 1
-    assert result[0]['content'] == content_fallback
+    assert result[0]['content'] == content_backup
 
 
 # IPv6 view matching
@@ -213,8 +207,8 @@ def test_ipv6_view_matching(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
     """A view with an IPv6 CIDR rule matches an IPv6 client and excludes an IPv4 one.
 
-    The rule is 2001:db8::/32 and the client IP is supplied via X-Remotebackend-Real-Remote. Exercises
-    netaddr.smallest_matching_cidr on the IPv6 path end to end.
+    The rule is 2001:db8::/32 and the client IP is supplied via X-Remotebackend-Real-Remote. Exercises the compiled
+    ViewRule CIDR-membership test on the IPv6 path end to end.
     """
     name = 'ipv6-view-test'
     fqdn = f'{name}.example.com'
@@ -301,23 +295,22 @@ def test_mx_record_without_priority_number(
     assert result[0]['content'] == content
 
 
-# persistence: IPv6 client
+# sticky-hash: IPv6 client
 
-def test_persistence_ipv6_client(
+def test_sticky_hash_ipv6_client(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """Persistence works for IPv6 clients, not just IPv4.
+    """The sticky-hash policy works for IPv6 clients, masking to the default ipv6_mask=64.
 
-    persistence shifts the whole client-IP integer right by N bits. With persistence=64, clients sharing the top 64
-    bits collapse to one record; a client in a different /64 lands deterministically on the other record (the two
-    chosen prefixes hash to different buckets, mirroring the IPv4 test).
+    Clients sharing a /64 collapse to one record on every request; across many /64s the hashing spreads clients
+    over both records, so both are reachable.
     """
-    name = 'persist6-test'
+    name = 'sticky6-test'
     fqdn = f'{name}.example.com'
     content_a, content_b = '2001:db8:a::1', '2001:db8:a::2'
 
     for content in (content_a, content_b):
         r = w2ui.save('records', name=name, content=content,
-                      **{**base_record, 'name_type': 'AAAA', 'persistence': 64})
+                      **{**base_record, 'name_type': 'AAAA', 'policy': 'Sticky hash'})
         assert r.json()['status'] == 'success'
         recid = w2ui.find_recid('records', name=name, content=content)
         assert recid is not None
@@ -332,40 +325,85 @@ def test_persistence_ipv6_client(
     same_64 = lookup_with_ip('2001:db8:a::100')
     assert lookup_with_ip('2001:db8:a::200') == same_64
     assert lookup_with_ip('2001:db8:a::ffff') == same_64
+    assert same_64 in (content_a, content_b)
 
-    # different /64 -> the other record (deterministic)
-    other_64 = lookup_with_ip('2001:db8:a:1::1')
-    assert other_64 in (content_a, content_b)
-    assert other_64 != same_64
+    # across many distinct /64s both records are reachable
+    seen = {lookup_with_ip(f'2001:db8:a:{block:x}::1') for block in range(1, 60)}
+    assert seen == {content_a, content_b}
 
 
-# persistence: shift at or beyond the address width collapses to a single record
+# sticky-hash: a zero mask collapses every client to a single record
 
-def test_persistence_at_address_width_collapses_to_one(
+def test_sticky_hash_zero_mask_collapses_to_one(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """A persistence shift at or beyond the address width collapses every client to one record.
+    """A sticky-hash policy with ipv4_mask=0 masks every client to one network, so all clients share one record.
 
-    persistence=32 on an IPv4 client shifts the 32-bit address to 0, so every client maps to index 0 -> the
-    lexicographically smallest content. This verifies that maximum stickiness holds and does not raise for any
-    client.
+    This also exercises routing-policy CRUD: the custom-parameter policy is created via the admin API first.
     """
-    name = 'persist-wide-test'
+    policy_name = 'Sticky single'
+    r = w2ui.save('routings', policy=policy_name, policy_json='{"type": "sticky-hash", "ipv4_mask": 0}')
+    assert r.json()['status'] == 'success'
+    recid_policy = w2ui.find_recid('routings', policy=policy_name)
+    assert recid_policy is not None
+    cleanup.append(('routings', recid_policy))
+
+    name = 'sticky-wide-test'
     fqdn = f'{name}.example.com'
     content_lo, content_hi = '192.0.2.130', '192.0.2.131'
 
     for content in (content_lo, content_hi):
-        r = w2ui.save('records', name=name, content=content,
-                      **{**base_record, 'persistence': 32})
+        r = w2ui.save('records', name=name, content=content, **{**base_record, 'policy': policy_name})
         assert r.json()['status'] == 'success'
         recid = w2ui.find_recid('records', name=name, content=content)
         assert recid is not None
         cleanup.append(('records', recid))
 
-    # wildly different clients all collapse to the same single record (content_lo sorts first)
+    # wildly different clients all collapse to the same single record (the deterministic HRW winner of the zero net)
+    answers = set()
     for client in ('203.0.113.5', '8.8.8.8', '10.0.0.1', '198.51.100.200'):
         result = dns.lookup(fqdn, 'A', real_remote=f'{client}/32')
         assert len(result) == 1, f'{client}: {result}'
-        assert result[0]['content'] == content_lo, f'{client}: expected {content_lo}, got {result[0]["content"]}'
+        answers.add(result[0]['content'])
+    assert len(answers) == 1
+    assert answers <= {content_lo, content_hi}
+
+
+# weighted-random routing: a single proportional answer biased by weight
+
+def test_weighted_random_single_answer(
+        w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    """The weighted-random policy returns one record per query, biased by weight.
+
+    With the default max_answers=1 every query answers exactly one valid record (the wiring regression guard).
+    The heavily-weighted record (weight=100 vs weight=1) dominates the draw across many queries; asserting only
+    that it appears and forms the majority keeps the test non-flaky despite the randomness.
+    """
+    name = 'weighted-test'
+    fqdn = f'{name}.example.com'
+    content_light, content_heavy = '192.0.2.140', '192.0.2.141'
+
+    r = w2ui.save('records', name=name, content=content_light,
+                  **{**base_record, 'policy': 'Weighted random', 'weight': 1})
+    assert r.json()['status'] == 'success'
+    recid_light = w2ui.find_recid('records', name=name, content=content_light)
+    assert recid_light is not None
+    cleanup.append(('records', recid_light))
+
+    r = w2ui.save('records', name=name, content=content_heavy,
+                  **{**base_record, 'policy': 'Weighted random', 'weight': 100})
+    assert r.json()['status'] == 'success'
+    recid_heavy = w2ui.find_recid('records', name=name, content=content_heavy)
+    assert recid_heavy is not None
+    cleanup.append(('records', recid_heavy))
+
+    answers = []
+    for _ in range(100):
+        result = dns.lookup(fqdn, 'A')
+        assert len(result) == 1, result  # max_answers=1: always a single proportional pick
+        answers.append(result[0]['content'])
+
+    assert set(answers) <= {content_light, content_heavy}
+    assert answers.count(content_heavy) > len(answers) // 2  # weight=100 vs 1 dominates the draw
 
 
 # special-character content served verbatim by the DNS backend

@@ -17,7 +17,6 @@ from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http import server as server_module
 from powergslb.server.http.handler import PowerDNSRequestHandler
 from powergslb.server.http.server import HTTPServerManager
-from powergslb.system.geoip import GeoIPReader
 
 
 class _FakeServer:
@@ -88,11 +87,6 @@ def status_registry() -> StatusRegistry:
     return StatusRegistry()
 
 
-@pytest.fixture
-def geoip_reader() -> GeoIPReader:
-    return GeoIPReader({})  # inert stand-in for the shared reader; only identity matters here
-
-
 def _config(**overrides: Any) -> dict[str, Any]:
     config = {'address': '127.0.0.1', 'port': 8080, 'root': '/srv'}
     config.update(overrides)
@@ -109,31 +103,29 @@ def _serve(thread: HTTPServerManager, fake: type[_FakeServer]) -> _FakeServer:
 
 # __init__
 
-def test_init_reads_plain_config(geoip_reader: GeoIPReader, status_registry: StatusRegistry) -> None:
+def test_init_reads_plain_config(status_registry: StatusRegistry) -> None:
     thread = HTTPServerManager(_config(), {'host': 'db'},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Server')
+                               status_registry, PowerDNSRequestHandler, name='Server')
     assert thread.address == '127.0.0.1'
     assert thread.port == 8080
     assert thread.root == '/srv'
     assert thread.ssl is False
     assert thread.cert is None and thread.key is None and thread.ciphers is None
     assert thread.daemon is True
-    assert thread._geoip_reader is geoip_reader  # the shared reader is stored as-is
 
 
-def test_init_reads_ssl_config(geoip_reader: GeoIPReader, status_registry: StatusRegistry) -> None:
+def test_init_reads_ssl_config(status_registry: StatusRegistry) -> None:
     thread = HTTPServerManager(_config(ssl=True, cert='/c.pem', key='/k.pem', ciphers='HIGH'), {},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Admin')
+                               status_registry, PowerDNSRequestHandler, name='Admin')
     assert thread.ssl is True
     assert (thread.cert, thread.key, thread.ciphers) == ('/c.pem', '/k.pem', 'HIGH')
 
 
-def test_init_defaults_root_to_bundled_resources(geoip_reader: GeoIPReader,
-                                                  status_registry: StatusRegistry) -> None:
+def test_init_defaults_root_to_bundled_resources(status_registry: StatusRegistry) -> None:
     config = _config()
     del config['root']
     thread = HTTPServerManager(config, {},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Admin')
+                               status_registry, PowerDNSRequestHandler, name='Admin')
     assert thread.root == server_module._default_root()
     assert os.path.isfile(os.path.join(thread.root, 'admin', 'index.html'))
 
@@ -141,9 +133,9 @@ def test_init_defaults_root_to_bundled_resources(geoip_reader: GeoIPReader,
 # run + shutdown: plain HTTP
 
 def test_run_serves_plain_then_shutdown_stops_it(
-        fake_server: type[_FakeServer], geoip_reader: GeoIPReader, status_registry: StatusRegistry) -> None:
+        fake_server: type[_FakeServer], status_registry: StatusRegistry) -> None:
     thread = HTTPServerManager(_config(), {'host': 'db'},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Server')
+                               status_registry, PowerDNSRequestHandler, name='Server')
     server = _serve(thread, fake_server)
 
     assert server.address == ('127.0.0.1', 8080)
@@ -152,7 +144,6 @@ def test_run_serves_plain_then_shutdown_stops_it(
     assert server.socket == 'plain-socket'  # untouched, no TLS wrap
     assert server.handler.func is PowerDNSRequestHandler  # the configured role handler serves this port
     assert server.handler.keywords['database_config'] == {'host': 'db'}  # threaded into the request handler
-    assert server.handler.keywords['geoip_reader'] is geoip_reader  # the shared reader reaches the request handler
     assert thread._server is server
 
     thread.shutdown(timeout=1)
@@ -164,10 +155,9 @@ def test_run_serves_plain_then_shutdown_stops_it(
 # run: TLS
 
 def test_run_wraps_socket_with_tls_and_ciphers(
-        fake_server: type[_FakeServer], fake_context: _FakeContext, geoip_reader: GeoIPReader,
-        status_registry: StatusRegistry) -> None:
+        fake_server: type[_FakeServer], fake_context: _FakeContext, status_registry: StatusRegistry) -> None:
     thread = HTTPServerManager(_config(ssl=True, cert='/c.pem', key='/k.pem', ciphers='HIGH'), {},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Admin')
+                               status_registry, PowerDNSRequestHandler, name='Admin')
     server = _serve(thread, fake_server)
     try:
         assert fake_context.loaded == ('/c.pem', '/k.pem')
@@ -182,9 +172,9 @@ def test_run_wraps_socket_with_tls_and_ciphers(
 @pytest.mark.usefixtures('fake_context')
 def test_run_tls_without_ciphers_skips_set_ciphers(
         fake_server: type[_FakeServer], fake_context: _FakeContext,
-        geoip_reader: GeoIPReader, status_registry: StatusRegistry) -> None:
+        status_registry: StatusRegistry) -> None:
     thread = HTTPServerManager(_config(ssl=True, cert='/c.pem'), {},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Admin')
+                               status_registry, PowerDNSRequestHandler, name='Admin')
     _serve(thread, fake_server)
     try:
         assert fake_context.ciphers is None  # set_ciphers not called
@@ -193,20 +183,20 @@ def test_run_tls_without_ciphers_skips_set_ciphers(
         thread.shutdown(timeout=1)
 
 
-def test_init_tls_without_cert_raises(geoip_reader: GeoIPReader, status_registry: StatusRegistry) -> None:
+def test_init_tls_without_cert_raises(status_registry: StatusRegistry) -> None:
     # TLS enabled with no certificate is a config error caught at construction, not a stripped-by-O assert in run().
     with pytest.raises(ValueError, match='certificate'):
         HTTPServerManager(_config(ssl=True), {},
-                          geoip_reader, status_registry, PowerDNSRequestHandler, name='Admin')
+                          status_registry, PowerDNSRequestHandler, name='Admin')
 
 
 # shutdown / stopping guard
 
 def test_shutdown_before_serving_takes_stopping_path(
-        fake_server: type[_FakeServer], geoip_reader: GeoIPReader, status_registry: StatusRegistry) -> None:
+        fake_server: type[_FakeServer], status_registry: StatusRegistry) -> None:
     # shutdown() arrived first: run() must close the freshly-bound socket and never serve.
     thread = HTTPServerManager(_config(), {'host': 'db'},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Server')
+                               status_registry, PowerDNSRequestHandler, name='Server')
     thread._stopping = True
     thread.run()  # synchronous: returns at the guard, never reaches serve_forever
 
@@ -217,10 +207,10 @@ def test_shutdown_before_serving_takes_stopping_path(
 
 
 def test_shutdown_when_not_serving_skips_server_shutdown(
-        fake_server: type[_FakeServer], geoip_reader: GeoIPReader, status_registry: StatusRegistry) -> None:
+        fake_server: type[_FakeServer], status_registry: StatusRegistry) -> None:
     # a thread that stopped before serving has no server to stop; shutdown() must not raise or call server.shutdown().
     thread = HTTPServerManager(_config(), {'host': 'db'},
-                               geoip_reader, status_registry, PowerDNSRequestHandler, name='Server')
+                               status_registry, PowerDNSRequestHandler, name='Server')
     thread._stopping = True
     thread.start()
     thread.join(timeout=1)

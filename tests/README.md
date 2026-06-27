@@ -24,20 +24,23 @@ tests/
 │   │                                   require_container (autouse), w2ui, dns, base_record, cleanup
 │   ├── test_admin.py                   admin HTTPS API: CRUD, search, sort, pagination, static files, malformed input
 │   ├── test_dns_backend.py             DNS HTTP backend: record types, routing, headers, getAllDomains
-│   ├── test_dns_records.py             records via admin: disabled, views, geo, weight, persistence, IPv6, fallback
+│   ├── test_dns_records.py             records via admin: disabled, views, geo, weight, routing policies, IPv6
 │   ├── test_health.py                  static health status reporting and DNS consistency
 │   ├── test_lifecycle.py               systemctl stop/restart: no SIGKILL, clean rebind (needs POWERGSLB_CONTAINER)
-│   ├── test_monitor_health.py          active fall/rise lifecycle, interpolation, bad-config resilience, real fallback
+│   ├── test_monitor_health.py          active fall/rise lifecycle, interpolation, bad-config resilience, all-down rule
 │   ├── test_monitor_types.py           all five check types: icmp, tcp, http, tls, exec
 │   ├── test_powerdns.py                DNS responses via PowerDNS, A/AAAA/NS/SOA/CNAME/MX/TXT/SRV (requires dig)
 │   └── test_schema_constraints.py      raw-SQL constraints/triggers, GC, longest-zone-match (needs POWERGSLB_CONTAINER)
 └── unit/                               in-process unit tests (no container required); mirrors src/powergslb/ layout
     ├── test_main.py                    entry point: argument parsing, thread wiring, SystemService startup
     ├── test_version.py                 version constant is a semver string
+    ├── client/
+    │   ├── test_context.py            ClientContext: carries the pre-parsed remote_ip plus a mutable geo
+    │   └── test_geo.py                ClientGeo: defaults to unknown, equality
     ├── database/mysql/
     │   ├── test_database.py            MySQLDatabase: SQL flattener, context manager, autocommit, result shaping
     │   ├── test_powerdns.py            PowerDNSDatabaseMixIn SQL builders: gslb_checks/gslb_domains/gslb_records
-    │   └── test_w2ui.py                W2UIDatabaseMixIn SQL builders: check_user, CRUD, insert/clean helpers
+    │   └── test_w2ui.py                W2UIDatabaseMixIn SQL builders: check_user, CRUD (incl. routings), helpers
     ├── monitor/
     │   ├── check/
     │   │   ├── test_base.py            Check: type registry, create() validation branches, timeout clamp
@@ -51,21 +54,28 @@ tests/
     │   ├── test_monitor.py             MonitorManager: parse/build, status cleanup, thread lifecycle, task()
     │   ├── test_status.py              StatusRegistry/StatusWriter health set: add/remove/is_down/retain/get_writer
     │   └── test_thread.py              AbstractThread: run loop, daemon flag, graceful shutdown
+    ├── routing/
+    │   ├── test_base.py                RoutingPolicy: registry, create() validation, frozen, resolve() lru_cache
+    │   ├── test_round_robin.py         RoundRobin.select(): highest tier, max_answers cap/subsample
+    │   ├── test_sticky_hash.py         StickyHash: masked network, salt-free hash, HRW pick, bounded divergence
+    │   └── test_weighted_random.py     WeightedRandom: _weighted_pick known draws, all-zero equal pick
     ├── server/http/
     │   ├── test_server.py              HTTPServerManager: config unpacking, bundled-resources root, plain/TLS run()
     │   └── handler/
     │       ├── test_admin.py           AdminRequestHandler: auth, route, w2ui parsing/CRUD/search/sort, dispatch
-    │       ├── test_powerdns.py        PowerDNSRequestHandler: header override, route, filter, lookup, dispatch
+    │       ├── test_powerdns.py        PowerDNSRequestHandler: header override, route, view/health/policy pipeline
     │       ├── test_queryparser.py     w2ui query-string parser: flat/nested/indexed/array forms, helpers
     │       ├── test_request.py         HTTPRequestHandler base: handle() errors, body, route skeleton, writers
     │       ├── test_request_head.py    HEAD over a real socket: always 404, never serves static metadata
     │       └── test_request_routes.py  cross-port routing: each role 404s the other surface
-    └── system/
-        ├── test_config.py              TOML config: typed values, items(), env overrides, singleton
-        ├── test_geoip.py               GeoIPReader: parse_geo_token classes, inert without DB, IP->country/continent
-        ├── test_password.py            crypt(3) SHA-512 helpers: $6$ format, random salt, verify accept/reject
-        ├── test_service.py             SystemService thread supervision: exit non-zero when a thread dies
-        └── test_thread.py              ServiceThread Protocol: structural conformance, isinstance checks
+    ├── system/
+    │   ├── test_config.py              TOML config: typed values, items(), env overrides, singleton
+    │   ├── test_password.py            crypt(3) SHA-512 helpers: $6$ format, random salt, verify accept/reject
+    │   ├── test_service.py             SystemService thread supervision: exit non-zero when a thread dies
+    │   └── test_thread.py              ServiceThread Protocol: structural conformance, isinstance checks
+    └── view/
+        ├── test_geoip.py               GeoIPReader: parse_geo_token classes, inert without DB, IP->ClientGeo
+        └── test_rule.py                ViewRule: compile/cache, CIDR + geo match, geo resolved at most once
 ```
 
 ---

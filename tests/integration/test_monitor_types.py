@@ -59,5 +59,4 @@ def test_all_monitor_types_crud(w2ui: W2UIClient, cleanup: list[tuple[str, int]]
         assert set(stored.keys()) == set(spec.keys()), f'{check_type}: JSON keys mismatch'
 
         w2ui.delete('monitors', recid)
-        assert w2ui.find_recid('monitors', monitor=name) is None, \
-            f'{check_type}: still present after delete'
+        assert w2ui.find_recid('monitors', monitor=name) is None, f'{check_type}: still present after delete'

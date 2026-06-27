@@ -14,12 +14,12 @@ import io
 import json
 from typing import Any
 
+import netaddr
 import pytest
 
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http.handler import admin as admin_module
 from powergslb.server.http.handler.admin import AdminRequestHandler
-from powergslb.system.geoip import GeoIPReader
 
 from .conftest import Recorder, build_recorder
 
@@ -64,14 +64,8 @@ class _FakeDatabase:
         return self.delete_count
 
 
-class _FakeGeoIP:
-    """Stub GeoIP reader exposing the real token grammar the admin validator consults."""
-
-    parse_geo_token = staticmethod(GeoIPReader.parse_geo_token)
-
-
 def _handler(query: Any = None, body: bytes | None = None,
-             geoip_reader: Any = None, status_registry: Any = None) -> AdminRequestHandler:
+             status_registry: Any = None) -> AdminRequestHandler:
     """Build a handler without running __init__ (which would open a socket and call handle())."""
     handler = AdminRequestHandler.__new__(AdminRequestHandler)
     handler.body = body
@@ -79,9 +73,8 @@ def _handler(query: Any = None, body: bytes | None = None,
     handler.dirs = ['admin', 'w2ui']
     handler.headers = {}  # type: ignore[assignment]
     handler.path = '/admin/w2ui'
-    handler.remote_ip = '203.0.113.1'
+    handler.remote_ip = netaddr.IPAddress('203.0.113.1')
     handler.query = query
-    handler.geoip_reader = geoip_reader or _FakeGeoIP()  # type: ignore[assignment]
     handler.status_registry = status_registry or StatusRegistry()
     return handler
 
@@ -485,6 +478,25 @@ def test_validate_record_monitor_invalid_raises() -> None:
 def test_validate_record_non_monitors_noop() -> None:
     handler = _handler()
     handler._validate_record('domains', {'domain': 'example.com'})  # no monitor_json needed, no raise
+
+
+def test_validate_record_routing_valid_noop() -> None:
+    handler = _handler()
+    handler._validate_record('routings', {'policy_json': '{"type": "round-robin"}'})  # no raise
+
+
+def test_validate_record_routing_invalid_raises() -> None:
+    handler = _handler()
+    with pytest.raises(ValueError):
+        handler._validate_record('routings', {'policy_json': '{"type": "nope"}'})  # unknown policy type
+
+
+@pytest.mark.parametrize('policy_json', ['[]', '"round-robin"', 'not json'])
+def test_validate_record_routing_non_object_raises(policy_json: str) -> None:
+    # resolve rejects malformed or non-object JSON with a clean ValueError, not an AttributeError.
+    handler = _handler()
+    with pytest.raises(ValueError):
+        handler._validate_record('routings', {'policy_json': policy_json})
 
 
 @pytest.mark.parametrize('rule', ['10.0.0.0/8 192.0.2.0/24', '2001:db8::/32'])

@@ -118,7 +118,7 @@ class HttpCheck(Check):
 
         Uses read1() so each iteration performs at most one socket read (bounded by the connection's
         socket timeout) before the deadline is re-checked, which caps the total read time even when a
-        server trickles the body. Larger bodies are not drained; the connection is closed by the caller.
+        server trickles the body. Bytes past 'body_chunk' are left unread.
 
         :param response: The response object to read the body from.
         :param deadline: Absolute time.monotonic() value the read must finish by.

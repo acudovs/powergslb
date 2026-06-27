@@ -67,8 +67,9 @@ def scratch() -> Iterator[int]:
 
 
 def _new_rrset(domain_id: int, name: str, type_value: int, ttl: int = 300) -> int:
-    _ok(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`) "
-        f"VALUES ({domain_id}, '{name}', {type_value}, {ttl})")
+    # routing_id 1 = the seeded round-robin policy (rrsets.routing_id is NOT NULL with no default)
+    _ok(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `routing_id`) "
+        f"VALUES ({domain_id}, '{name}', {type_value}, {ttl}, 1)")
     return int(_ok(f"SELECT `id` FROM `rrsets` "
                    f"WHERE `domain_id` = {domain_id} AND `name` = '{name}' AND `type_value` = {type_value}"))
 
@@ -84,16 +85,16 @@ def _new_record(rrset_id: int, content: str, view_id: int = 1) -> int:
 
 def test_soa_rrset_off_apex_rejected(scratch: int) -> None:
     # rrsets_soa_apex_check: an SOA rrset whose name is not '@' fails the CHECK constraint
-    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`) "
-               f"VALUES ({scratch}, 'notapex', 6, 86400)")
+    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `routing_id`) "
+               f"VALUES ({scratch}, 'notapex', 6, 86400, 1)")
     assert 'ERROR 4025' in err
 
 
 def test_second_soa_rrset_in_zone_rejected(scratch: int) -> None:
     # the (domain_id, name, type_value) unique key permits exactly one apex SOA rrset per zone
     _new_rrset(scratch, '@', 6, 86400)
-    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`) "
-               f"VALUES ({scratch}, '@', 6, 86400)")
+    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `routing_id`) "
+               f"VALUES ({scratch}, '@', 6, 86400, 1)")
     assert 'ERROR 1062' in err
 
 
@@ -113,15 +114,15 @@ def test_soa_rrset_allows_one_record(scratch: int) -> None:
 
 def test_cname_rrset_excludes_other_type_at_name(scratch: int) -> None:
     _new_rrset(scratch, 'www', 5)  # CNAME
-    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`) "
-               f"VALUES ({scratch}, 'www', 1, 300)")  # A at the same name
+    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `routing_id`) "
+               f"VALUES ({scratch}, 'www', 1, 300, 1)")  # A at the same name
     assert 'ERROR 1644' in err
 
 
 def test_other_type_at_name_excludes_cname(scratch: int) -> None:
     _new_rrset(scratch, 'mail', 1)  # A
-    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`) "
-               f"VALUES ({scratch}, 'mail', 5, 300)")  # CNAME at the same name
+    err = _err(f"INSERT INTO `rrsets` (`domain_id`, `name`, `type_value`, `ttl`, `routing_id`) "
+               f"VALUES ({scratch}, 'mail', 5, 300, 1)")  # CNAME at the same name
     assert 'ERROR 1644' in err
 
 

@@ -7,6 +7,9 @@ import logging
 from typing import Any, ClassVar
 
 import maxminddb
+import netaddr
+
+from powergslb.client import ClientGeo
 
 __all__ = ['GeoIPReader']
 
@@ -15,7 +18,7 @@ class GeoIPReader:
     """Resolves a client IP to its country and continent from the GeoIP database.
 
     The GeoIP database is opened once at startup and is thread-safe for concurrent lookups.
-    With no database configured every lookup yields (None, None).
+    With no database configured every lookup yields ClientGeo().
 
     :param geoip_config: The [geoip] config section; its 'database' option is the GeoIP database path.
     """
@@ -79,29 +82,21 @@ class GeoIPReader:
 
         return None
 
-    def lookup(self, ip: str | None) -> tuple[str | None, str | None]:
+    def lookup(self, ip: netaddr.IPAddress | None) -> ClientGeo:
         """Resolve a client IP to its ISO country code and continent code.
 
         :param ip: The client IP address.
-        :returns: (country_iso, continent_code), or (None, None) when there is no database or lookup failed.
+        :returns: The resolved ClientGeo, or ClientGeo() when there is no database or lookup failed.
         """
         if self._reader is None or ip is None:
-            return None, None
+            return ClientGeo()
 
         try:
-            record = self._reader.get(ip)
+            record = self._reader.get(ip.format())
         except ValueError:
-            return None, None
+            return ClientGeo()
         if not isinstance(record, dict):
-            return None, None
+            return ClientGeo()
 
-        country = record.get('country', {}).get('iso_code')
-        continent = record.get('continent', {}).get('code')
-
-        return country, continent
-
-    def close(self) -> None:
-        """Close the underlying reader."""
-        if self._reader is not None:
-            self._reader.close()
-            self._reader = None
+        return ClientGeo(record.get('country', {}).get('iso_code'),
+                         record.get('continent', {}).get('code'))

@@ -3,8 +3,8 @@
 This directory holds the database definition for PowerGSLB:
 
 - `scheme.sql` - tables, constraints, the `rrset_guard` procedure, and the triggers that enforce DNS invariants.
-- `data.sql` - seed data: the default `admin` user, three views, the DNS type catalogue, seven example monitors, and
-  three fully populated example zones.
+- `data.sql` - seed data: the default `admin` user, three views, the DNS type catalogue, seven example monitors, the
+  three routing policies, and three fully populated example zones.
 
 The schema targets MySQL 8 / MariaDB 10.5+ (CHECK constraints and `SIGNAL` in triggers are required). In the
 all-in-one Docker image both files are copied to the image and loaded into MariaDB on first boot.
@@ -27,10 +27,11 @@ all-in-one Docker image both files are copied to the image and loaded into Maria
 ## Why a relational schema
 
 PowerGSLB is a PowerDNS Remote Backend: PowerDNS asks it for the records at a name, and PowerGSLB answers from this
-database after filtering by view, health, weight, and client-IP persistence. The data is naturally relational - many
-records share a view, a monitor, or a type - so the schema is normalised: `views`, `types`, `monitors`, and `domains`
-are lookup tables, and `rrsets` / `records` reference them by id. This keeps a monitor definition or a view rule in one
-place and lets the read path JOIN the pieces back together per query.
+database after filtering by view and health and then applying the rrset's routing policy. The data is naturally
+relational - many records share a view, a monitor, or a type, and many rrsets share a routing policy - so the schema is
+normalised: `views`, `types`, `monitors`, `routings`, and `domains` are lookup tables, and `rrsets` / `records`
+reference them by id. This keeps a monitor definition, a routing policy, or a view rule in one place and lets the read
+path JOIN the pieces back together per query.
 
 ---
 
@@ -42,6 +43,7 @@ Crow's-foot notation: `||` is "exactly one", `o{` is "zero or more". `users` has
 erDiagram
     domains  ||--o{ rrsets   : "owns"
     types    ||--o{ rrsets   : "typed as"
+    routings ||--o{ rrsets   : "routed by"
     rrsets   ||--o{ records  : "contains"
     monitors ||--o{ records  : "checked by"
     views    ||--o{ records  : "scoped to"
@@ -67,6 +69,11 @@ erDiagram
         varchar monitor       UK
         varchar monitor_json     "CHECK JSON_VALID"
     }
+    routings {
+        int     id           PK
+        varchar policy       UK
+        varchar policy_json     "CHECK JSON_VALID"
+    }
     domains {
         int     id      PK
         varchar domain  UK
@@ -77,7 +84,7 @@ erDiagram
         varchar name            "relative: '@' = apex"
         int     type_value   FK "-> types.value"
         int     ttl
-        tinyint persistence     "bit shift, <= 128"
+        int     routing_id   FK "-> routings.id"
     }
     records {
         int     id          PK
@@ -86,7 +93,6 @@ erDiagram
         int     monitor_id  FK "-> monitors.id"
         int     view_id     FK "-> views.id"
         tinyint disabled
-        tinyint fallback
         int     weight
     }
 ```
@@ -97,7 +103,7 @@ Unique keys not shown as columns: `rrsets (domain_id, name, type_value)` and `re
 
 ## Table reference
 
-Seven tables.
+Eight tables.
 
 | Table      | Purpose                                                                                                |
 |------------|--------------------------------------------------------------------------------------------------------|
@@ -105,9 +111,10 @@ Seven tables.
 | `views`    | Named client groups. `rule` is a space-separated list of CIDR and geo tokens matched per query.        |
 | `types`    | DNS record-type catalogue keyed by the numeric type value (`A=1`, `CNAME=5`, `SOA=6`, ...).            |
 | `monitors` | Health-check definitions as `monitor_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed.      |
+| `routings` | Routing-policy definitions as `policy_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed.     |
 | `domains`  | Authoritative zones, one row per zone apex (`example.com`).                                            |
-| `rrsets`   | One `(domain_id, name, type_value)`; owns `ttl` and `persistence`.                                     |
-| `records`  | One answer inside an rrset: `content`, plus `monitor_id`, `view_id`, `disabled`, `fallback`, `weight`. |
+| `rrsets`   | One `(domain_id, name, type_value)`; owns `ttl` and `routing_id`.                                      |
+| `records`  | One answer inside an rrset: `content`, plus `monitor_id`, `view_id`, `disabled`, `weight`.             |
 
 Key relationships and constraints:
 
@@ -115,20 +122,20 @@ Key relationships and constraints:
   `mail1`, `_sip._tcp`). The FQDN is never stored; the read path rebuilds it.
 - `rrsets` unique key `(domain_id, name, type_value)` - one rrset per record name and type within a zone.
 - `records` unique key `(rrset_id, view_id, content)` - the same content cannot appear twice for one view in an rrset.
-- Foreign keys point `rrsets -> domains, types` and `records -> rrsets, monitors, views`. A populated rrset cannot be
-  deleted because its records reference it; you delete the records and the rrset is garbage-collected (see below).
-- CHECK constraints: SOA only at the apex (`type_value <> 6 OR name = '@'`), `ttl <= 2147483647`, `persistence <= 128`
-  (a bit count for the persistence shift).
+- Foreign keys point `rrsets -> domains, types, routings` and `records -> rrsets, monitors, views`. A populated rrset
+  cannot be deleted because its records reference it; you delete the records and the rrset is garbage-collected (below).
+- CHECK constraints: SOA only at the apex (`type_value <> 6 OR name = '@'`), `ttl <= 2147483647`,
+  `JSON_VALID(monitor_json)` on `monitors`, and `JSON_VALID(policy_json)` on `routings`.
 
 ---
 
 ## The two-level rrset / record model
 
-A DNS RRset (RFC 2181) is the set of records sharing a record name and type; `ttl` and `persistence` are properties of
-that set, not of an individual answer. Splitting the data into `rrsets` (the set: name, type, ttl, persistence) and
-`records` (the members: content + GSLB flags) makes per-record TTL divergence unrepresentable rather than something
-the application has to validate away. Adding a fourth A record to `www` is one `records` row referencing the existing
-rrset; it automatically inherits the rrset's TTL and persistence.
+A DNS RRset (RFC 2181) is the set of records sharing a record name and type; `ttl` and the routing policy are
+properties of that set, not of an individual answer. Splitting the data into `rrsets` (the set: name, type, ttl,
+routing_id) and `records` (the members: content + GSLB fields) makes per-record TTL divergence unrepresentable rather
+than something the application has to validate away. Adding a fourth A record to `www` is one `records` row referencing
+the existing rrset; it automatically inherits the rrset's TTL and routing policy.
 
 Because the record name is relative, a record's full name is its `domains.domain` joined with a non-apex `rrsets.name`.
 The admin grid shows `Domain` and a relative `Name` for this reason; there is no stored FQDN column to keep in sync.
@@ -182,7 +189,7 @@ The cost of this choice is real and worth stating:
 
 The dividing line used here: invariants that must hold for the data to be valid DNS live in the database
 (constraints + triggers); policy and presentation live in the application (health filtering, weighting, view
-matching, persistence selection, password hashing, w2ui grid shaping). The runtime GSLB decisions are deliberately
+matching, routing-policy selection, password hashing, w2ui grid shaping). The runtime GSLB decisions are deliberately
 *not* in the database - they change per query and depend on live monitor state, so they belong in the read path.
 
 ---
@@ -196,7 +203,8 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 - `gslb_records(qname, qtype)` resolves the owning zone in SQL by longest-suffix match against `domains` (using
   `RIGHT()`/`SUBSTRING`, never `LIKE`, because `_` is a legal DNS label character), then rebuilds the answer FQDN with
   `CASE`/`CONCAT`. A `NOT EXISTS` guard makes the most-specific zone win when a parent and a delegated child both
-  suffix-match. Disabled records are excluded; view/health/weight/persistence filtering happens in Python.
+  suffix-match. Disabled records are excluded; view/health filtering and the routing policy run in Python. The query
+  joins `routings` so each row carries the rrset's `policy_json` for the read path.
 - `gslb_checks()` returns every record's id, content, and `monitor_json` for the monitor threads.
 - `gslb_domains()` returns each zone's apex SOA content for the PowerDNS zone cache.
 
@@ -225,6 +233,9 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
   `icmp`, `http`, `tcp`, `tls` - with two `http` examples, one plain HTTP and one HTTPS.
   `${content}` in a monitor's JSON is replaced with the record content at check time, and the shared timing fields
   (`interval`/`timeout`/`fall`/`rise`) may be omitted to take their defaults (`3`/`1`/`3`/`5`).
+- **Routings**: `Round robin` (id 1, the default every rrset uses; `{"type": "round-robin"}`), `Weighted random`
+  (`{"type": "weighted-random"}`), and `Sticky hash` (`{"type": "sticky-hash"}`). Every seed rrset uses round-robin;
+  weighted-random and sticky-hash ship as ready-to-use policies you can point an rrset at.
 - **Zones**: `example.com`, `example.net`, `example.org`, each with SOA, NS, A, AAAA, CNAME, MX, SPF, TXT, and SRV.
   All addresses are from the documentation ranges (`192.0.2.0/24`, `2001:db8::/32`) so the seed is safe to publish.
 

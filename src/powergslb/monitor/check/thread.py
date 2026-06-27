@@ -27,7 +27,7 @@ class CheckThread(AbstractThread):
 
     @property
     def content_id(self) -> int:
-        """The monitored content id, owned by the status writer."""
+        """The monitored content id."""
         return self.status_writer.content_id
 
     def _check_fall(self) -> None:

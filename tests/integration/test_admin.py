@@ -63,6 +63,14 @@ def test_list_monitors(w2ui: W2UIClient) -> None:
     assert 'No check' in {r['monitor'] for r in data['records']}
 
 
+def test_list_routings(w2ui: W2UIClient) -> None:
+    data = w2ui.request('get-records', 'routings').json()
+    assert data['status'] == 'success'
+    assert data['total'] == 3
+    assert all({'recid', 'policy', 'policy_json'}.issubset(r.keys()) for r in data['records'])
+    assert {'Round robin', 'Weighted random', 'Sticky hash'} == {r['policy'] for r in data['records']}
+
+
 def test_list_views(w2ui: W2UIClient) -> None:
     data = w2ui.request('get-records', 'views').json()
     assert data['status'] == 'success'
@@ -89,7 +97,7 @@ def test_list_records(w2ui: W2UIClient) -> None:
     assert data['status'] == 'success'
     assert data['total'] > 0
     assert all({'recid', 'domain', 'name', 'name_type', 'content', 'monitor', 'view',
-                'ttl', 'disabled', 'fallback', 'weight'}.issubset(r.keys())
+                'ttl', 'disabled', 'policy', 'weight'}.issubset(r.keys())
                for r in data['records'])
 
 

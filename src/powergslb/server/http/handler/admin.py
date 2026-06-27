@@ -7,11 +7,11 @@ import operator
 from http.server import SimpleHTTPRequestHandler
 from typing import Any, Callable, ClassVar
 
-import netaddr
-
 from powergslb.monitor import MonitorManager
+from powergslb.routing import RoutingPolicy
 from powergslb.server.http.handler.queryparser import QueryParserError, parse_query
 from powergslb.server.http.handler.request import HTTPRequestHandler
+from powergslb.view import ViewRule
 
 __all__ = ['AdminRequestHandler']
 
@@ -31,7 +31,9 @@ class AdminRequestHandler(HTTPRequestHandler):
         'save-record': '_save_record'
     }
 
-    _data_tables: ClassVar[set[str]] = {'domains', 'monitors', 'records', 'status', 'types', 'users', 'views'}
+    _data_tables: ClassVar[set[str]] = {
+        'domains', 'monitors', 'records', 'routings', 'status', 'types', 'users', 'views'
+    }
 
     _search_functions: ClassVar[dict[str, dict[str, Callable[[Any, Any], bool]]]] = {
         'int': {
@@ -99,7 +101,7 @@ class AdminRequestHandler(HTTPRequestHandler):
     def _database_method(self, prefix: str, data: Any) -> 'Callable[..., Any]':
         """Resolve the database CRUD method for a whitelisted table token.
 
-        :raises ValueError: When data is not a whitelisted table; content() turns it into an error reply.
+        :raises ValueError: When data is not a whitelisted table.
         """
         method = getattr(self.database, prefix + data, None) if data in self._data_tables else None
         if method is None:
@@ -181,7 +183,8 @@ class AdminRequestHandler(HTTPRequestHandler):
             return {'status': 'error', 'message': 'record not changed'}
         return {'status': 'success'}
 
-    def _validate_record(self, data: Any, record: dict[str, Any]) -> None:
+    @staticmethod
+    def _validate_record(data: Any, record: dict[str, Any]) -> None:
         """Reject an invalid record before the database write.
 
         :raises ValueError: When validation failed.
@@ -190,19 +193,11 @@ class AdminRequestHandler(HTTPRequestHandler):
             # The record content is unknown at monitor-definition time; validate a placeholder IP.
             MonitorManager.build_check({'content': '127.0.0.1', 'monitor_json': record['monitor_json']})
 
-        elif data == 'views':
-            # The rule is a space-separated list or CIDR and geo tokens; reject anything unparsable.
-            tokens = record['rule'].split()
-            if not tokens:
-                raise ValueError('view rule must hold at least one token')
+        elif data == 'routings':
+            RoutingPolicy.resolve(record['policy_json'])
 
-            for token in tokens:
-                if self.geoip_reader.parse_geo_token(token) is not None:
-                    continue
-                try:
-                    netaddr.IPNetwork(token)
-                except netaddr.AddrFormatError as e:
-                    raise ValueError(f'view rule CIDR invalid: {token}') from e
+        elif data == 'views':
+            ViewRule.resolve(record['rule'])
 
     def _search_match(self, record: dict[str, Any], search: dict[str, Any]) -> 'bool | None':
         """Apply one search to one record.

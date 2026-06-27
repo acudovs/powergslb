@@ -3,8 +3,8 @@
 """Tests for the GeoIP reader and the view-rule geo-token syntax.
 
 GeoIPReader.parse_geo_token classifies a single view-rule token (country / continent / malformed / non-geo CIDR
-pass-through). GeoIPReader stays inert when no database is configured or the file is missing, and resolves a
-client IP to its country and continent against a mocked maxminddb reader otherwise. No real MMDB is opened.
+pass-through). GeoIPReader stays inert (yielding ClientGeo()) when no database is configured or the file is missing,
+and resolves a client IP to its ClientGeo against a mocked maxminddb reader otherwise. No real MMDB is opened.
 """
 
 from typing import Any
@@ -12,9 +12,11 @@ from typing import Any
 import pytest
 
 import maxminddb
+import netaddr
 
-from powergslb.system import geoip as geoip_module
-from powergslb.system.geoip import GeoIPReader
+from powergslb.client import ClientGeo
+from powergslb.view import geoip as geoip_module
+from powergslb.view.geoip import GeoIPReader
 
 
 # parse_geo_token
@@ -62,12 +64,11 @@ def test_parse_geo_token_ipv6_cidr_is_not_a_geo_token() -> None:
 
 def test_reader_absent_database_is_inert() -> None:
     reader = GeoIPReader({})  # no 'database' option in the section
-    assert reader.lookup('8.8.8.8') == (None, None)
-    reader.close()  # close on an inert reader is a no-op
+    assert reader.lookup(netaddr.IPAddress('8.8.8.8')) == ClientGeo()
 
 
 def test_reader_empty_database_is_inert() -> None:
-    assert GeoIPReader({'database': ''}).lookup('8.8.8.8') == (None, None)
+    assert GeoIPReader({'database': ''}).lookup(netaddr.IPAddress('8.8.8.8')) == ClientGeo()
 
 
 def test_reader_missing_file_is_inert(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
@@ -77,7 +78,7 @@ def test_reader_missing_file_is_inert(monkeypatch: pytest.MonkeyPatch, caplog: p
     monkeypatch.setattr(geoip_module.maxminddb, 'open_database', raise_missing)
     with caplog.at_level('WARNING'):
         reader = GeoIPReader({'database': '/nope.mmdb'})
-    assert reader.lookup('8.8.8.8') == (None, None)
+    assert reader.lookup(netaddr.IPAddress('8.8.8.8')) == ClientGeo()
     assert any('geoip database /nope.mmdb unavailable:' in r.getMessage() for r in caplog.records)
 
 
@@ -86,7 +87,7 @@ def test_reader_invalid_database_is_inert(monkeypatch: pytest.MonkeyPatch) -> No
         raise maxminddb.InvalidDatabaseError('corrupt')
 
     monkeypatch.setattr(geoip_module.maxminddb, 'open_database', raise_invalid)
-    assert GeoIPReader({'database': '/bad.mmdb'}).lookup('8.8.8.8') == (None, None)
+    assert GeoIPReader({'database': '/bad.mmdb'}).lookup(netaddr.IPAddress('8.8.8.8')) == ClientGeo()
 
 
 # GeoIPReader: loaded lookups
@@ -95,16 +96,12 @@ class _FakeReader:
     def __init__(self, record: Any) -> None:
         self.record = record
         self.queried: str | None = None
-        self.closed = False
 
     def get(self, ip: str) -> Any:
         self.queried = ip
         if isinstance(self.record, Exception):
             raise self.record
         return self.record
-
-    def close(self) -> None:
-        self.closed = True
 
 
 def _loaded_reader(monkeypatch: pytest.MonkeyPatch, record: Any) -> tuple[GeoIPReader, _FakeReader]:
@@ -115,40 +112,32 @@ def _loaded_reader(monkeypatch: pytest.MonkeyPatch, record: Any) -> tuple[GeoIPR
 
 def test_reader_lookup_resolves_country_and_continent(monkeypatch: pytest.MonkeyPatch) -> None:
     reader, fake = _loaded_reader(monkeypatch, {'country': {'iso_code': 'US'}, 'continent': {'code': 'NA'}})
-    assert reader.lookup('8.8.8.8') == ('US', 'NA')
-    assert fake.queried == '8.8.8.8'
+    assert reader.lookup(netaddr.IPAddress('8.8.8.8')) == ClientGeo('US', 'NA')
+    assert fake.queried == '8.8.8.8'  # the pre-parsed address is formatted back to a string for the reader
 
 
 def test_reader_lookup_partial_record(monkeypatch: pytest.MonkeyPatch) -> None:
     # A record with only a continent yields a country of None, not a KeyError.
     reader, _ = _loaded_reader(monkeypatch, {'continent': {'code': 'EU'}})
-    assert reader.lookup('2.2.2.2') == (None, 'EU')
+    assert reader.lookup(netaddr.IPAddress('2.2.2.2')) == ClientGeo(None, 'EU')
 
 
 def test_reader_lookup_no_record(monkeypatch: pytest.MonkeyPatch) -> None:
     reader, _ = _loaded_reader(monkeypatch, None)
-    assert reader.lookup('192.0.2.1') == (None, None)
+    assert reader.lookup(netaddr.IPAddress('192.0.2.1')) == ClientGeo()
 
 
 def test_reader_lookup_non_dict_record(monkeypatch: pytest.MonkeyPatch) -> None:
     reader, _ = _loaded_reader(monkeypatch, 'unexpected')
-    assert reader.lookup('192.0.2.1') == (None, None)
+    assert reader.lookup(netaddr.IPAddress('192.0.2.1')) == ClientGeo()
 
 
 def test_reader_lookup_malformed_address(monkeypatch: pytest.MonkeyPatch) -> None:
     reader, _ = _loaded_reader(monkeypatch, ValueError('bad address'))
-    assert reader.lookup('not-an-ip') == (None, None)
+    assert reader.lookup(netaddr.IPAddress('192.0.2.1')) == ClientGeo()
 
 
 def test_reader_lookup_none_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     reader, fake = _loaded_reader(monkeypatch, {'country': {'iso_code': 'US'}})
-    assert reader.lookup(None) == (None, None)
+    assert reader.lookup(None) == ClientGeo()
     assert fake.queried is None  # the reader is never queried for a None address
-
-
-def test_reader_close_closes_underlying_and_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
-    reader, fake = _loaded_reader(monkeypatch, {})
-    reader.close()
-    assert fake.closed is True
-    assert reader.lookup('8.8.8.8') == (None, None)  # closed reader is inert
-    reader.close()  # second close is a no-op, no AttributeError

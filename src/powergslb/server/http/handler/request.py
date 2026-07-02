@@ -34,6 +34,11 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     max_body_size = 1048576
     route: ClassVar[str]
 
+    # Header names (lowercased) whose values carry credentials and are masked in the debug header dump.
+    sensitive_headers: ClassVar[frozenset[str]] = frozenset({
+        'authorization', 'proxy-authorization', 'cookie', 'set-cookie',
+    })
+
     def __init__(self,
                  *args: Any,
                  database_config: dict[str, Any],
@@ -91,7 +96,7 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
 
     def _set_remote_ip(self) -> None:
         """Set the client IP to the TCP peer."""
-        self.remote_ip = netaddr.IPAddress(self.client_address[0])
+        self.remote_ip = netaddr.IPAddress(self.address_string())
 
     def _urlsplit(self) -> None:
         # self.path and self.query stay percent-encoded.
@@ -121,6 +126,44 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
             self.send_error(400)
             return
         self._handle_request()
+
+    def _client_ip(self) -> str:
+        """Client address: remote_ip when set, else the TCP peer."""
+        return str(self.remote_ip) if self.remote_ip is not None else self.address_string()
+
+    def _log(self, level: int, format: str, *args: Any) -> None:  # pylint: disable=redefined-builtin
+        """Route the stdlib log to logging at the given level instead of a raw stderr write.
+
+        Keeps a client address and the control-character escaping (guards against log injection via the request line).
+
+        :param level: logging level for the log line (e.g. INFO or ERROR).
+        :param format: printf-style format string passed by the stdlib.
+        :param args: Format arguments.
+        """
+        control_chars = self._control_char_table  # type: ignore[attr-defined]
+        logging.log(level, '%s %s', self._client_ip(), (format % args).translate(control_chars))
+
+    def log_message(self, format: str, *args: Any) -> None:  # pylint: disable=redefined-builtin
+        """Route the stdlib access log to logging at INFO.
+
+        When the request headers are available, dumps them at DEBUG with sensitive values masked.
+
+        :param format: printf-style format string passed by the stdlib.
+        :param args: Format arguments.
+        """
+        self._log(logging.INFO, format, *args)
+        if logging.getLogger().isEnabledFor(logging.DEBUG) and getattr(self, 'headers', None):
+            headers = {name: '***' if name.lower() in self.sensitive_headers else value
+                       for name, value in self.headers.items()}
+            logging.debug('request headers from %s: %s', self._client_ip(), headers)
+
+    def log_error(self, format: str, *args: Any) -> None:  # pylint: disable=redefined-builtin
+        """Route the stdlib error log to logging at ERROR.
+
+        :param format: printf-style format string passed by the stdlib.
+        :param args: Format arguments.
+        """
+        self._log(logging.ERROR, format, *args)
 
     def handle(self) -> None:
         """Serve requests on the connection, holding one database connection open for its lifetime.

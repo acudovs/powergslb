@@ -14,6 +14,7 @@ response primitives and I/O streams stubbed.
 import io
 from typing import Any
 
+import netaddr
 import pytest
 
 import powergslb.database
@@ -198,6 +199,85 @@ def test_send_content_custom_code_and_debug_off() -> None:
     handler = _recorder()
     handler._send_content('x', code=503, debug=False)
     assert handler.responses_sent == [503]
+
+
+# log_message / log_error (thin wrappers over _log; stdlib access/error log routed through logging)
+
+def test_log_message_logs_at_info_with_remote_ip(caplog: pytest.LogCaptureFixture) -> None:
+    # The access log prefix is the resolved remote_ip (the recursor on the DNS interface), not the TCP peer.
+    handler = _recorder()
+    handler.client_address = ('127.0.0.1', 1234)
+    handler.remote_ip = netaddr.IPAddress('203.0.113.7')
+    with caplog.at_level('INFO', logger=request_module.logging.getLogger().name):
+        handler.log_message('"%s" %s %s', 'GET /dns HTTP/1.1', '200', '-')
+    record = next(r for r in caplog.records if 'GET /dns' in r.getMessage())
+    assert record.levelname == 'INFO'
+    assert record.getMessage() == '203.0.113.7 "GET /dns HTTP/1.1" 200 -'
+
+
+def test_log_message_keeps_zero_remote_ip(caplog: pytest.LogCaptureFixture) -> None:
+    # netaddr.IPAddress('0.0.0.0') is falsy; only a None remote_ip falls back to the TCP peer.
+    handler = _recorder()
+    handler.client_address = ('127.0.0.1', 1234)
+    handler.remote_ip = netaddr.IPAddress('0.0.0.0')
+    with caplog.at_level('INFO'):
+        handler.log_message('"%s" %s %s', 'GET /dns HTTP/1.1', '200', '-')
+    record = next(r for r in caplog.records if 'GET /dns' in r.getMessage())
+    assert record.getMessage() == '0.0.0.0 "GET /dns HTTP/1.1" 200 -'
+
+
+def test_log_error_falls_back_to_peer_before_routing(caplog: pytest.LogCaptureFixture) -> None:
+    # remote_ip is unset for an error logged before routing, so the prefix falls back to the TCP peer.
+    handler = _recorder()
+    handler.client_address = ('203.0.113.7', 1234)
+    with caplog.at_level('ERROR'):
+        handler.log_error('code %d, message %s', 400, 'Bad request')
+    record = next(r for r in caplog.records if 'Bad request' in r.getMessage())
+    assert record.levelname == 'ERROR'
+    assert record.getMessage() == '203.0.113.7 code 400, message Bad request'
+
+
+def test_log_message_escapes_control_chars(caplog: pytest.LogCaptureFixture) -> None:
+    # The stdlib guards against log injection via the request line; the override keeps that escaping.
+    handler = _recorder()
+    handler.client_address = ('203.0.113.7', 1234)
+    with caplog.at_level('INFO'):
+        handler.log_message('"%s"', 'GET /a\r\nINJECTED HTTP/1.1')
+    record = next(r for r in caplog.records if 'INJECTED' in r.getMessage())
+    assert '\n' not in record.getMessage()
+    assert r'\x0d\x0a' in record.getMessage()  # stdlib escapes CR/LF to \xNN
+
+
+def test_log_message_dumps_masked_headers_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    handler = _recorder({'Host': 'gslb.example', 'Authorization': 'Basic c2VjcmV0', 'Cookie': 'sid=abc'})
+    handler.client_address = ('203.0.113.7', 1234)
+    with caplog.at_level('DEBUG'):
+        handler.log_message('"%s" %s %s', 'GET /admin HTTP/1.1', '200', '-')
+    record = next(r for r in caplog.records if 'request headers' in r.getMessage())
+    assert record.levelname == 'DEBUG'
+    message = record.getMessage()
+    assert "'Host': 'gslb.example'" in message
+    assert "'Authorization': '***'" in message and 'c2VjcmV0' not in message  # masked, not leaked
+    assert "'Cookie': '***'" in message and 'sid=abc' not in message
+
+
+def test_log_error_skips_header_dump(caplog: pytest.LogCaptureFixture) -> None:
+    # The dump belongs to log_message only, so an errored request dumps the headers once, not per log line.
+    handler = _recorder({'Host': 'gslb.example'})
+    handler.client_address = ('203.0.113.7', 1234)
+    with caplog.at_level('DEBUG'):
+        handler.log_error('code %d, message %s', 400, 'Bad request')
+    assert not any('request headers' in r.getMessage() for r in caplog.records)
+
+
+def test_log_message_without_headers_skips_dump(caplog: pytest.LogCaptureFixture) -> None:
+    # 'if defined': no headers attribute set means no header dump, just the access line.
+    handler = _recorder()
+    del handler.headers
+    handler.client_address = ('203.0.113.7', 1234)
+    with caplog.at_level('DEBUG'):
+        handler.log_message('"%s" %s %s', 'GET /dns HTTP/1.1', '200', '-')
+    assert not any('request headers' in r.getMessage() for r in caplog.records)
 
 
 # _set_remote_ip (base: peer address only, the PowerDNS header is ignored here)

@@ -39,6 +39,8 @@ RecorderT = TypeVar('RecorderT', bound=Recorder)
 def build_recorder(handler_class: type[RecorderT], headers: dict[str, str] | None = None) -> RecorderT:
     """Build handler_class via __new__, stubbing the response primitives and streams for inspection."""
     handler = handler_class.__new__(handler_class)
+    handler.client_address = ('127.0.0.1', 0)
+    handler.remote_ip = None  # type: ignore[assignment]
     handler.headers = headers or {}  # type: ignore[assignment]
     handler.wfile = io.BytesIO()
     handler.responses_sent = []

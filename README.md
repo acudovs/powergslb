@@ -580,17 +580,25 @@ is a boolean, and the rest are strings.
 | `[database]` | MySQL / MariaDB connection      | `database`, `user`, `password`, `host`, `port`, `unix_socket` |
 | `[logging]`  | Python logging                  | `format`, `level`                                             |
 | `[monitor]`  | health-check engine             | `update_interval` (seconds), `icmp_privileged` (bool)         |
-| `[server]`   | DNS interface (Remote Backend)  | `address`, `port`, `keep_alive_timeout`                       |
-| `[admin]`    | admin interface (web UI + API)  | `address`, `port`, `ssl`, `cert`, `key`, `ciphers`, `root`    |
+| `[server]`   | DNS interface (Remote Backend)  | `address`, `port`, TLS options, `keep_alive_timeout`          |
+| `[admin]`    | admin interface (web UI + API)  | `address`, `port`, TLS options, `keep_alive_timeout`, `root`  |
 | `[geoip]`    | geo routing for [views](#views) | `database` (path to a GeoIP database)                         |
 
 The `[database]` is passed straight to `mysql.connector` as connect kwargs. When `unix_socket` is set it takes
 precedence over `host` / `port`.
 
+`[server]` and `[admin]` are served by the same HTTP engine, so they accept the same options. Both take
+`keep_alive_timeout` (the HTTP keep-alive idle timeout in seconds) and the same TLS set: `ssl` (bool) to enable HTTPS,
+`cert` (a PEM that may also bundle the private key), `key` (a separate key file when `cert` holds only the
+certificate), and `ciphers` (an OpenSSL cipher string).
+
 The `[admin]` certificate is self-signed, generated once on first container start (the `powergslb-certgen` oneshot
 unit writes `/etc/powergslb/powergslb.pem` only if it is missing) so each deployment gets its own unique cert. Replace
-`cert` with your own PEM for production - `cert` may bundle the private key, or point `key` at a separate key file.
-Both `[server]` and `[admin]` accept `keep_alive_timeout`, the HTTP keep-alive idle timeout in seconds.
+`cert` with your own PEM for production.
+
+The bundled PowerDNS reaches the `[server]` DNS interface over loopback, so it ships as plain HTTP. To secure that hop
+for an external PowerDNS instance, enable TLS on `[server]` the same way as on `[admin]` - just set `ssl = true` and
+point `cert` (and `key`) at a certificate - then switch the Remote Backend URL to `https://`.
 
 The `[geoip]` section `database` is the path to a MaxMind DB (MMDB) file. The Docker image bundles the
 [DB-IP IP-to-Country Lite](https://db-ip.com/db/download/ip-to-country-lite) at

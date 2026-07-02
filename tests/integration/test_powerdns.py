@@ -11,13 +11,13 @@ suite fails loudly if it is not installed on the host running pytest.
 import shutil
 import subprocess
 
-_DIG = str(shutil.which('dig'))
+_DIG = shutil.which('dig')
 
 
 def _dig(dns_addr: str, name: str, qtype: str, *extra: str) -> list[str]:
     """Run dig +short for name/qtype against dns_addr and return its lines."""
     result = subprocess.run(
-        [_DIG, f'@{dns_addr}', name, qtype, '+short', '+time=2', '+tries=1', *extra],
+        [str(_DIG), f'@{dns_addr}', name, qtype, '+short', '+time=2', '+tries=1', *extra],
         capture_output=True, text=True, timeout=10, check=True)
     return result.stdout.strip().splitlines()
 

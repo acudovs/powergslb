@@ -3,7 +3,7 @@
 """DNS record behaviour tests.
 
 Each test creates records via the admin API and exercises the DNS backend. Owner names are stored relative to the
-zone (the label left of the domain), so each test saves the relative ``name`` and looks the answer up by its FQDN.
+zone (the label left of the domain), so each test saves the relative `name` and looks the answer up by its FQDN.
 Created rows are registered with the cleanup fixture so the container database is left clean regardless of outcome.
 """
 
@@ -242,7 +242,7 @@ def test_geo_view_matching(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
     """A view with a country/continent rule matches a client by geolocation, resolved from the bundled MMDB.
 
-    The image ships the DB-IP IP-to-Country Lite database, so geo tokens are live. Rule ``country:US continent:NA``
+    The image ships the DB-IP IP-to-Country Lite database, so geo tokens are live. Rule `country:US continent:NA`
     matches a stable US client (8.8.8.8) and excludes a stable European one (193.0.6.139, RIPE NCC, NL).
     """
     name = 'geo-view-test'

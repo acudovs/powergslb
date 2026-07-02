@@ -3,7 +3,7 @@
 This directory holds the database definition for PowerGSLB:
 
 - `scheme.sql` - tables, constraints, the `rrset_guard` procedure, and the triggers that enforce DNS invariants.
-- `data.sql` - seed data: the default `admin` user, three views, the DNS type catalogue, seven example monitors, the
+- `data.sql` - seed data: the default `admin` user, three views, the DNS type catalog, seven example monitors,
   three routing policies, and three fully populated example zones.
 
 The schema targets MySQL 8 / MariaDB 10.5+ (CHECK constraints and `SIGNAL` in triggers are required). In the
@@ -203,8 +203,7 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 - `gslb_records(qname, qtype)` resolves the owning zone in SQL by longest-suffix match against `domains` (using
   `RIGHT()`/`SUBSTRING`, never `LIKE`, because `_` is a legal DNS label character), then rebuilds the answer FQDN with
   `CASE`/`CONCAT`. A `NOT EXISTS` guard makes the most-specific zone win when a parent and a delegated child both
-  suffix-match. Disabled records are excluded; view/health filtering and the routing policy run in Python. The query
-  joins `routings` so each row carries the rrset's `policy_json` for the read path.
+  suffix-match. Disabled records are excluded; view/health filtering and the routing policy run in Python.
 - `gslb_checks()` returns every record's id, content, and `monitor_json` for the monitor threads.
 - `gslb_domains()` returns each zone's apex SOA content for the PowerDNS zone cache.
 

@@ -80,7 +80,7 @@ echo "Container IP: ${CONTAINER_IP}"
 export POWERGSLB_URL="http://${CONTAINER_IP}:8080"
 export POWERGSLB_ADMIN_URL="https://${CONTAINER_IP}:443"
 export POWERGSLB_DIG_ADDR="${CONTAINER_IP}"
-export POWERGSLB_CONTAINER="${CONTAINER}"  # lets the lifecycle; other tests ignore it
+export POWERGSLB_CONTAINER="${CONTAINER}"  # enables the container-control tests
 
 # wait for ready
 echo -n "Waiting for service..."

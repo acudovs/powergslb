@@ -6,7 +6,7 @@ set -e
 # That is safe because MariaDB binds 127.0.0.1 only and the account is '@localhost' (Unix socket-only).
 
 mariadb -u root <<'EOF'
-CREATE DATABASE powergslb;
+CREATE DATABASE powergslb CHARACTER SET utf8mb4;
 CREATE USER 'powergslb'@'localhost' IDENTIFIED BY '';
 GRANT ALL ON powergslb.* TO 'powergslb'@'localhost';
 USE powergslb;

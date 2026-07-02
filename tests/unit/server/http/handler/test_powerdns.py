@@ -73,6 +73,7 @@ def _handler(dirs: list[str], remote_ip: str = '203.0.113.5', query: Any = None,
     handler.headers = {}  # type: ignore[assignment]
     handler.path = '/' + '/'.join(dirs)
     handler.remote_ip = netaddr.IPAddress(remote_ip)
+    handler.context = ClientContext(netaddr.IPNetwork(remote_ip))
     handler.query = query
     handler.status_registry = status_registry or StatusRegistry()
     return handler
@@ -91,28 +92,42 @@ def _record(**overrides: Any) -> dict[str, Any]:
 
 
 def _in_view(handler: PowerDNSRequestHandler, record: dict[str, Any]) -> bool:
-    """Run the handler's view test with a fresh context carrying its remote_ip."""
-    return handler._is_in_view(record, ClientContext(handler.remote_ip))
+    """Run the handler's view test with a fresh context carrying the handler's client network."""
+    return handler._is_in_view(record, ClientContext(handler.context.remote))
 
 
-# _set_remote_ip (the DNS interface honors the PowerDNS header)
+# _set_remote_ip (the DNS interface honors the PowerDNS headers)
 
 def test_set_remote_ip_from_real_remote_header() -> None:
     handler = _handler(['dns'])
     handler.client_address = ('127.0.0.1', 1)  # type: ignore[assignment]
-    handler.headers = {'X-Remotebackend-Real-Remote': '198.51.100.4/32'}  # type: ignore[assignment]
+    handler.headers = {  # type: ignore[assignment]
+        'X-Remotebackend-Remote': '172.22.0.1', 'X-Remotebackend-Real-Remote': '198.51.100.0/24'}
     handler._set_remote_ip()
-    assert handler.remote_ip.format() == '198.51.100.4'
+    assert handler.remote_ip.format() == '172.22.0.1'  # remote_ip is the recursor, not the ECS subnet
+    assert handler.context.remote.ip.format() == '198.51.100.0'
+    assert handler.context.remote.prefixlen == 24  # the header prefix is the ECS source prefix
 
 
-def test_set_remote_ip_invalid_header_falls_back_to_peer(caplog: pytest.LogCaptureFixture) -> None:
+def test_set_remote_ip_invalid_real_remote_falls_back_to_peer(caplog: pytest.LogCaptureFixture) -> None:
     handler = _handler(['dns'])
     handler.client_address = ('127.0.0.1', 1)  # type: ignore[assignment]
     handler.headers = {'X-Remotebackend-Real-Remote': 'not-an-ip'}  # type: ignore[assignment]
     with caplog.at_level(logging.ERROR):
         handler._set_remote_ip()
-    assert handler.remote_ip.format() == '127.0.0.1'
+    assert handler.context.remote.ip.format() == '127.0.0.1'
+    assert handler.context.remote.prefixlen == 32  # the peer is taken as a host network
     assert 'header invalid' in caplog.text  # a present but malformed header is logged
+
+
+def test_set_remote_ip_invalid_remote_falls_back_to_peer(caplog: pytest.LogCaptureFixture) -> None:
+    handler = _handler(['dns'])
+    handler.client_address = ('127.0.0.1', 1)  # type: ignore[assignment]
+    handler.headers = {'X-Remotebackend-Remote': 'not-an-ip'}  # type: ignore[assignment]
+    with caplog.at_level(logging.ERROR):
+        handler._set_remote_ip()
+    assert handler.remote_ip.format() == '127.0.0.1'  # a malformed recursor header falls back to the peer
+    assert 'header invalid' in caplog.text
 
 
 def test_set_remote_ip_without_header_uses_peer(caplog: pytest.LogCaptureFixture) -> None:
@@ -122,6 +137,8 @@ def test_set_remote_ip_without_header_uses_peer(caplog: pytest.LogCaptureFixture
     with caplog.at_level(logging.ERROR):
         handler._set_remote_ip()
     assert handler.remote_ip.format() == '203.0.113.9'
+    assert handler.context.remote.ip.format() == '203.0.113.9'
+    assert handler.context.remote.prefixlen == 32  # no header means the peer as a host network
     assert caplog.text == ''  # an absent header falls back silently
 
 
@@ -224,12 +241,12 @@ def test_is_in_view_malformed_geo_token_is_false(caplog: pytest.LogCaptureFixtur
     assert any('view rule invalid' in r.getMessage() for r in caplog.records)
 
 
-# _filter_records: view filter
+# _select_records: view filter
 
 def test_filter_skips_records_out_of_view() -> None:
     handler = _handler(['dns'], remote_ip='203.0.113.5')
     records = {'A': [_record(id=1, rule='10.0.0.0/8', content='hidden')]}
-    assert not handler._filter_records(records)
+    assert not handler._select_records(records)
 
 
 def test_filter_empty_in_view_never_resolves_policy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -238,25 +255,25 @@ def test_filter_empty_in_view_never_resolves_policy(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(RoutingPolicy, 'resolve', calls.append)
     handler = _handler(['dns'], remote_ip='203.0.113.5')
     records = {'A': [_record(id=1, rule='10.0.0.0/8', content='hidden')]}
-    assert not handler._filter_records(records)
+    assert not handler._select_records(records)
     assert not calls  # the policy was never resolved
 
 
-# _filter_records: routing policy delegation (round-robin default)
+# _select_records: routing policy delegation (round-robin default)
 
 def test_filter_picks_highest_weight_live_group() -> None:
     handler = _handler(['dns'])
     records = {'A': [_record(id=1, weight=10, content='low'), _record(id=2, weight=20, content='high')]}
-    result = handler._filter_records(records)
-    assert [r['content'] for r in result] == ['high']
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['high']
 
 
 def test_filter_drops_down_records(status_registry: StatusRegistry) -> None:
     status_registry.add(1)  # the down record is dropped; the live one at the same tier remains
     handler = _handler(['dns'], status_registry=status_registry)
     records = {'A': [_record(id=1, weight=0, content='down'), _record(id=2, weight=0, content='up')]}
-    result = handler._filter_records(records)
-    assert [r['content'] for r in result] == ['up']
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['up']
 
 
 def test_filter_all_down_keeps_all_in_view(status_registry: StatusRegistry) -> None:
@@ -266,8 +283,8 @@ def test_filter_all_down_keeps_all_in_view(status_registry: StatusRegistry) -> N
     status_registry.add(2)
     handler = _handler(['dns'], status_registry=status_registry)
     records = {'A': [_record(id=1, weight=10, content='backup'), _record(id=2, weight=20, content='primary')]}
-    result = handler._filter_records(records)
-    assert [r['content'] for r in result] == ['primary']
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['primary']
 
 
 def test_filter_keep_all_does_not_resurrect_out_of_view(status_registry: StatusRegistry) -> None:
@@ -275,7 +292,7 @@ def test_filter_keep_all_does_not_resurrect_out_of_view(status_registry: StatusR
     status_registry.add(1)
     handler = _handler(['dns'], remote_ip='203.0.113.5', status_registry=status_registry)
     records = {'A': [_record(id=1, rule='10.0.0.0/8', content='hidden')]}
-    assert not handler._filter_records(records)
+    assert not handler._select_records(records)
 
 
 def test_filter_delegates_candidates_and_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,18 +308,18 @@ def test_filter_delegates_candidates_and_context(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(RoutingPolicy, 'resolve', lambda policy_json: _SpyPolicy())
     handler = _handler(['dns'], remote_ip='198.51.100.9')
     records = {'A': [_record(id=1, content='a'), _record(id=2, content='b')]}
-    result = handler._filter_records(records)
-    assert [r['content'] for r in result] == ['a']
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['a']
     assert {r['content'] for r in seen['candidates']} == {'a', 'b'}
     # the view rule is CIDR-only, so context.geo stays None and the contexts compare equal
-    assert seen['context'] == ClientContext(netaddr.IPAddress('198.51.100.9'))
+    assert seen['context'] == ClientContext(netaddr.IPNetwork('198.51.100.9'))
 
 
 def test_filter_malformed_policy_drops_qtype(caplog: pytest.LogCaptureFixture) -> None:
     handler = _handler(['dns'])
     records = {'A': [_record(id=1, content='a', policy_json='{not json}')]}
     with caplog.at_level('ERROR'):
-        assert not handler._filter_records(records)
+        assert not handler._select_records(records)
     assert any('routing policy invalid' in r.getMessage() for r in caplog.records)
 
 
@@ -311,8 +328,85 @@ def test_filter_processes_qtypes_independently() -> None:
     records = {'A': [_record(id=1, qtype='A', weight=20, content='a-high'),
                      _record(id=2, qtype='A', weight=10, content='a-low')],
                'AAAA': [_record(id=3, qtype='AAAA', weight=0, content='aaaa')]}
-    result = handler._filter_records(records)
-    assert sorted(r['content'] for r in result) == ['a-high', 'aaaa']
+    result = handler._select_records(records)
+    assert sorted(r['content'] for group in result.values() for r in group) == ['a-high', 'aaaa']
+
+
+# _scope_prefix (the ECS scope returned to PowerDNS)
+
+def test_scope_prefix_match_all_view_is_zero() -> None:
+    # Every record's view matches all clients -> globally cacheable.
+    handler = _handler(['dns'])
+    handler.context.remote.prefixlen = 24
+    assert handler._scope_prefix([_record(rule='0.0.0.0/0 ::/0')]) == 0
+
+
+def test_scope_prefix_specific_view_is_source_prefix() -> None:
+    # A narrower view shaped the answer -> scope the client's source prefix.
+    handler = _handler(['dns'])
+    handler.context.remote.prefixlen = 24
+    assert handler._scope_prefix([_record(rule='10.0.0.0/8')]) == 24
+
+
+def test_scope_prefix_mixed_view_is_source_prefix() -> None:
+    # If any record's view is not match-all, the rrset as a whole is subnet specific.
+    handler = _handler(['dns'], remote_ip='2001:db8::1')
+    handler.context.remote.prefixlen = 56
+    records = [_record(rule='0.0.0.0/0 ::/0'), _record(rule='2001:db8::/32')]
+    assert handler._scope_prefix(records) == 56
+
+
+def test_scope_prefix_single_family_rule_is_source_prefix() -> None:
+    # A single-family match-all rule is not globally cacheable (other-family clients are out of view).
+    handler = _handler(['dns'])
+    handler.context.remote.prefixlen = 24
+    assert handler._scope_prefix([_record(rule='0.0.0.0/0')]) == 24
+
+
+def test_scope_prefix_malformed_rule_is_source_prefix() -> None:
+    # A malformed view rule is treated as not match-all, so the rrset scopes to the source prefix.
+    handler = _handler(['dns'])
+    handler.context.remote.prefixlen = 24
+    assert handler._scope_prefix([_record(rule='not-a-cidr')]) == 24
+
+
+def test_scope_prefix_opt_out_source_prefix_is_zero() -> None:
+    # A narrower view but an ECS opt-out (source prefix 0) resolves to scope 0.
+    handler = _handler(['dns'])
+    handler.context.remote.prefixlen = 0
+    assert handler._scope_prefix([_record(rule='10.0.0.0/8')]) == 0
+
+
+def test_scope_prefix_empty_answer_is_zero() -> None:
+    handler = _handler(['dns'])
+    handler.context.remote.prefixlen = 24
+    assert handler._scope_prefix([]) == 0
+
+
+def test_scope_prefix_infra_qtypes_always_zero() -> None:
+    # SOA/NS/DS use global /0 scope regardless of view, even a narrower one (Google: consistent delegation).
+    handler = _handler(['dns'])
+    handler.context.remote.prefixlen = 24
+    for qtype in ('SOA', 'NS', 'DS'):
+        assert handler._scope_prefix([_record(qtype=qtype, rule='10.0.0.0/8')]) == 0, qtype
+
+
+def test_scope_prefix_sticky_hash_match_all_is_min_prefix_source() -> None:
+    # A match-all rrset under sticky-hash still varies by client network: scope = min(prefix, source).
+    handler = _handler(['dns'], remote_ip='198.51.100.5')  # IPv4 client -> ipv4_prefix
+    handler.context.remote.prefixlen = 24
+    coarse = '{"type": "sticky-hash", "ipv4_prefix": 16}'
+    assert handler._scope_prefix([_record(rule='0.0.0.0/0 ::/0', policy_json=coarse)]) == 16  # prefix < source
+    fine = '{"type": "sticky-hash", "ipv4_prefix": 28}'
+    assert handler._scope_prefix([_record(rule='0.0.0.0/0 ::/0', policy_json=fine)]) == 24  # capped at source
+
+
+def test_scope_prefix_sticky_hash_opt_out_is_zero() -> None:
+    # ECS opt-out (source prefix 0): the policy varies by network but there is no source prefix to scope to.
+    handler = _handler(['dns'], remote_ip='198.51.100.5')
+    handler.context.remote.prefixlen = 0
+    sticky = '{"type": "sticky-hash"}'
+    assert handler._scope_prefix([_record(rule='0.0.0.0/0 ::/0', policy_json=sticky)]) == 0
 
 
 # _get_lookup
@@ -322,7 +416,46 @@ def test_get_lookup_strips_trailing_dot_and_projects() -> None:
     handler.database.records = [_record(content='192.0.2.1', ttl=30)]  # type: ignore[attr-defined]
     result = handler._get_lookup()
     assert handler.database.gslb_records_args == ('example.com', 'A')  # type: ignore[attr-defined]
-    assert result == [{'qname': 'example.com', 'qtype': 'A', 'content': '192.0.2.1', 'ttl': 30}]
+    assert result == [{'qname': 'example.com', 'qtype': 'A', 'content': '192.0.2.1', 'ttl': 30, 'scopeMask': 0}]
+
+
+def test_get_lookup_specific_view_carries_source_prefix_scope() -> None:
+    handler = _handler(['dns', 'lookup', 'example.com.', 'A'], remote_ip='10.1.2.3')
+    handler.context.remote.prefixlen = 24
+    handler.database.records = [_record(content='10.9.9.9', rule='10.0.0.0/8')]  # type: ignore[attr-defined]
+    result = handler._get_lookup()
+    assert result == [{'qname': 'example.com', 'qtype': 'A', 'content': '10.9.9.9', 'ttl': 60, 'scopeMask': 24}]
+
+
+def test_get_lookup_scopes_each_qtype_independently() -> None:
+    # PowerDNS sends every lookup as ANY, so one lookup returns the whole rrset bundle at the name. A
+    # subnet-specific A rrset must not push its scope onto the NS rrset in the same response.
+    handler = _handler(['dns', 'lookup', 'example.com.', 'ANY'], remote_ip='10.1.2.3')
+    handler.context.remote.prefixlen = 24
+    handler.database.records = [  # type: ignore[attr-defined]
+        _record(id=1, qtype='NS', content='ns1.example.com'),
+        _record(id=2, qtype='NS', content='ns2.example.com'),
+        _record(id=3, qtype='A', content='192.0.2.1'),
+        _record(id=4, qtype='A', content='10.9.9.9', rule='10.0.0.0/8')]
+    scope = {(r['qtype'], r['content']): r['scopeMask'] for r in handler._get_lookup()}
+    assert scope[('NS', 'ns1.example.com')] == 0  # NS is always scope 0 (infra/delegation)
+    assert scope[('NS', 'ns2.example.com')] == 0
+    assert scope[('A', '192.0.2.1')] == 24  # the A rrset as a whole is subnet specific
+    assert scope[('A', '10.9.9.9')] == 24
+
+
+def test_get_lookup_public_client_mixed_rrset_scopes_source() -> None:
+    # A public client matches only the match-all record, but the rrset has a narrower-view sibling, so the answer
+    # is subnet specific: scope is the source prefix, not 0, or a resolver would cache it globally and withhold
+    # the Private record from private clients.
+    handler = _handler(['dns', 'lookup', 'example.com.', 'A'], remote_ip='198.51.100.5')
+    handler.context.remote.prefixlen = 24
+    handler.database.records = [  # type: ignore[attr-defined]
+        _record(id=1, content='192.0.2.1', rule='0.0.0.0/0 ::/0'),
+        _record(id=2, content='10.9.9.9', rule='10.0.0.0/8')]
+    result = handler._get_lookup()
+    assert [r['content'] for r in result] == ['192.0.2.1']  # public client gets only the match-all record
+    assert result[0]['scopeMask'] == 24  # but scoped to the source prefix: the rrset is view-differentiated
 
 
 # _get_all_domains

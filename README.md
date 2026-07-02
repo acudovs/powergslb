@@ -19,6 +19,7 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
 * [Web administration interface](#web-administration-interface)
 * [Record selection](#record-selection)
     * [Views](#views)
+    * [EDNS Client Subnet (ECS)](#edns-client-subnet-ecs)
     * [Weight (priority)](#weight-priority)
     * [Routing policies](#routing-policies)
     * [Disabled records](#disabled-records)
@@ -52,6 +53,7 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
 * HTTPS support for the web server
 * Record selection:
     * DNS GSLB views (CIDR and GeoIP)
+    * EDNS Client Subnet (ECS) support
     * Weighted (priority) records
     * Per-rrset routing policies: round-robin, weighted-random, sticky-hash
     * "All down = all up" so DNS never fails entirely during a full outage
@@ -138,7 +140,7 @@ classDiagram
         +str | None continent
     }
     class ClientContext {
-        +IPAddress remote_ip
+        +IPNetwork remote
         +ClientGeo | None geo
     }
 
@@ -681,7 +683,7 @@ For each query PowerGSLB starts from every enabled record at the requested `(nam
 answering: the **view** filter (client match), then the **health** filter (drop down records), then the rrset's
 **[routing policy](#routing-policies)**, which reads each record's `weight` and chooses the answers. The client IP used
 for the view filter and for sticky routing is read from the `X-Remotebackend-Real-Remote` header PowerDNS sends (the
-real resolver address), not the PowerDNS host.
+real resolver address, or the client subnet when [ECS](#edns-client-subnet-ecs) is in play), not the PowerDNS host.
 
 If the view filter leaves no candidate for a query type, that type is answered with nothing. If the health filter would
 empty a non-empty in-view set (every record is down), the down records are kept instead - "all down = all up" - so a
@@ -705,6 +707,30 @@ Geo tokens are case-insensitive and may be mixed freely with CIDRs, e.g. `10.0.0
 client's country and continent are resolved from the [`[geoip]`](#configuration) database at most once per query, and
 only when the CIDR tokens miss (the CIDR check short-circuits first). Each view rule is compiled once into a cached
 object and reused, so repeated lookups do no re-parsing. When no database is loaded the geo tokens never match.
+
+### EDNS Client Subnet (ECS)
+
+[ECS (RFC 7871)](https://datatracker.ietf.org/doc/html/rfc7871) changes *which client* record selection sees and
+returns the matching **scope** so DNS caches keep per-subnet answers apart. Public resolvers (8.8.8.8, 1.1.1.1, ...)
+often sit far from the end user; with ECS the resolver passes a truncated client subnet, so the view and routing policy
+stages track the user instead of the resolver. The shipped `pdns.conf` enables `edns-subnet-processing`, which
+forwards the client subnet to PowerGSLB as `X-Remotebackend-Real-Remote` - no extra configuration.
+
+The scope returned per name and query type:
+
+* Every record in a view that matches all clients (the seed `Public` view, `0.0.0.0/0 ::/0`) under a
+  client-independent policy: scope `0`, globally cacheable.
+* Any record in a narrower CIDR or geo view: scope = the resolver's source prefix - even for a public client that
+  matched only the `Public` record, so one subnet's answer is never cached for another.
+* [`sticky-hash`](#routing-policies) routing policy keys on the client network: scope = the policy's prefix, capped
+  at the source prefix.
+* `SOA`, `NS` and `DS`: always scope `0`, for a consistent view of delegation.
+* No ECS option in the query: no ECS option in the response. An opt-out (source prefix `0`): scope `0`, answered
+  from the match-all views.
+
+If every record at a name for a query type sits in a narrower (non-`Public`) view, an out-of-view client gets an
+empty (NODATA) answer that an ECS-aware resolver may cache globally at scope `0`, hiding the records from in-view
+clients. Give such a name a `Public` fallback record so it never goes empty by subnet.
 
 ### Weight (priority)
 

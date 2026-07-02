@@ -141,11 +141,19 @@ class RoutingPolicy(abc.ABC):
             tiers[candidate['weight']].append(candidate)
         return tiers[max(tiers)]
 
+    def network_prefix(self, context: ClientContext) -> int | None:  # pylint: disable=unused-argument
+        """Return the client-network prefix length this policy's answer varies by, or None if client-independent.
+
+        :param context: Per-request client data the policy may read.
+        :returns: The prefix length the answer varies by, or None when the answer is client-independent.
+        """
+        return None
+
     @abc.abstractmethod
     def select(self, candidates: list[dict[str, Any]], context: ClientContext) -> list[dict[str, Any]]:
         """Choose the records to answer with from the candidate records.
 
         :param candidates: The candidate records to choose among.
-        :param context: Per-request client data the policy may read (e.g. the client IP for stickiness).
+        :param context: Per-request client data the policy may read.
         :returns: The selected records; an empty input yields an empty result.
         """

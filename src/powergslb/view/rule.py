@@ -67,21 +67,26 @@ class ViewRule:
         return ViewRule(tuple(cidrs), tuple(geos))
 
     def matches(self, context: ClientContext) -> bool:
-        """Return whether the client matches this rule, resolving the context geo on demand.
+        """Return whether this rule matches the client, resolving the context geo on demand.
 
         Tests the pre-built CIDRs first by direct membership (so the cached IPNetwork objects are reused, not
         rebuilt); only when they miss and the rule has geo selectors does it resolve the client geo (once per
         request, and only when a reader is configured) and store it on the context.
 
-        :param context: The per-request client context; its pre-parsed remote_ip is read and its geo is filled here.
+        :param context: Per-request client data the policy may read.
         :returns: True when the client IP or its geo satisfies any token.
         """
-        if any(context.remote_ip in cidr for cidr in self.cidrs):
+        if any(context.remote.ip in cidr for cidr in self.cidrs):
             return True
         if self.geos:
             if context.geo is None and self._geoip:
-                context.geo = self._geoip.lookup(context.remote_ip)
+                context.geo = self._geoip.lookup(context.remote.ip)
             if context.geo is not None:
                 return any((kind == 'country' and value == context.geo.country) or
                            (kind == 'continent' and value == context.geo.continent) for kind, value in self.geos)
         return False
+
+    @property
+    def matches_all(self) -> bool:
+        """Return whether this rule matches every client: a CIDR with prefix 0 in both the IPv4 and IPv6 families."""
+        return {cidr.version for cidr in self.cidrs if cidr.prefixlen == 0} >= {4, 6}

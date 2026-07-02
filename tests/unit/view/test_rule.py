@@ -38,7 +38,7 @@ def _reset_geoip() -> object:
 
 
 def _context(ip: str) -> ClientContext:
-    return ClientContext(netaddr.IPAddress(ip))
+    return ClientContext(netaddr.IPNetwork(ip))
 
 
 # configure
@@ -140,3 +140,27 @@ def test_matches_geo_unconfigured_never_matches() -> None:
     context = _context('203.0.113.7')
     assert ViewRule.resolve('country:DE').matches(context) is False
     assert context.geo is None
+
+
+# matches_all (a rule that admits every client: a prefixlen-0 CIDR in both families)
+
+def test_matches_all_both_families_true() -> None:
+    assert ViewRule.resolve('0.0.0.0/0 ::/0').matches_all is True
+
+
+def test_matches_all_ignores_token_order_and_extra_tokens() -> None:
+    # Reordering and redundant narrower/geo tokens do not change that both families are fully covered.
+    assert ViewRule.resolve('::/0 0.0.0.0/0').matches_all is True
+    assert ViewRule.resolve('0.0.0.0/0 ::/0 10.0.0.0/8 country:DE').matches_all is True
+
+
+def test_matches_all_single_family_false() -> None:
+    # One family alone is not match-all: a client of the other family is out of view.
+    assert ViewRule.resolve('0.0.0.0/0').matches_all is False
+    assert ViewRule.resolve('::/0').matches_all is False
+
+
+def test_matches_all_narrower_or_geo_only_false() -> None:
+    assert ViewRule.resolve('10.0.0.0/8').matches_all is False
+    assert ViewRule.resolve('0.0.0.0/0 country:DE').matches_all is False  # IPv6 clients only match if in DE
+    assert ViewRule.resolve('country:DE continent:EU').matches_all is False

@@ -13,7 +13,7 @@ import netaddr
 from powergslb.client import ClientContext
 from powergslb.routing.round_robin import RoundRobin
 
-CONTEXT = ClientContext(netaddr.IPAddress('192.0.2.7'))
+CONTEXT = ClientContext(netaddr.IPNetwork('192.0.2.7'))
 
 
 def _record(content: str, weight: int) -> dict[str, Any]:
@@ -53,3 +53,8 @@ def test_caps_oversized_tier_to_max_answers() -> None:
 def test_cap_of_one_returns_single_record() -> None:
     records = [_record(f'a{i}', 7) for i in range(5)]
     assert len(RoundRobin(max_answers=1).select(records, CONTEXT)) == 1
+
+
+def test_network_prefix_is_none() -> None:
+    # round-robin is client-independent, so it contributes no ECS scope (the view stage decides).
+    assert RoundRobin().network_prefix(CONTEXT) is None

@@ -29,7 +29,7 @@ def test_lookup_soa(dns: DNSClient) -> None:
     assert r['qtype'] == 'SOA'
     assert r['qname'] == 'example.com'
     assert r['ttl'] == 86400
-    assert set(r.keys()) == {'qname', 'qtype', 'content', 'ttl'}
+    assert set(r.keys()) == {'qname', 'qtype', 'content', 'ttl', 'scopeMask'}
     fields = r['content'].split()
     assert len(fields) == 7
     assert fields[0] == 'ns1.example.com.'
@@ -53,7 +53,7 @@ def test_lookup_a(dns: DNSClient) -> None:
     assert all(r['qtype'] == 'A' for r in result)
     assert all(r['qname'] == 'example.com' for r in result)
     assert all(r['ttl'] == 300 for r in result)
-    assert all(set(r.keys()) == {'qname', 'qtype', 'content', 'ttl'} for r in result)
+    assert all(set(r.keys()) == {'qname', 'qtype', 'content', 'ttl', 'scopeMask'} for r in result)
     assert all(r['content'].startswith('192.0.2.') for r in result)
 
 

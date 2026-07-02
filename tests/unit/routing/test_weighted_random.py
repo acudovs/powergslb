@@ -16,7 +16,7 @@ import pytest
 from powergslb.client import ClientContext
 from powergslb.routing.weighted_random import WeightedRandom, _weighted_pick
 
-CONTEXT = ClientContext(netaddr.IPAddress('192.0.2.7'))
+CONTEXT = ClientContext(netaddr.IPNetwork('192.0.2.7'))
 
 
 def _record(content: str, weight: int) -> dict[str, Any]:
@@ -127,3 +127,8 @@ def test_weighted_pick_draw_at_or_above_total_returns_last() -> None:
     # The caller guarantees draw < total; a draw past the end falls through to the defensive last candidate.
     records = [_record('a', 1), _record('b', 2)]  # content-sorted; total 3
     assert _weighted_pick(records, 3)['content'] == 'b'
+
+
+def test_network_prefix_is_none() -> None:
+    # weighted-random varies per query, not per client network, so it contributes no ECS scope.
+    assert WeightedRandom().network_prefix(CONTEXT) is None

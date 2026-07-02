@@ -11,10 +11,10 @@ __all__ = ['ClientContext']
 
 @dataclass
 class ClientContext:
-    """Mutable per-request client data: the client IP and its geolocation.
+    """Mutable per-request client data: the client network and its geolocation.
 
-    :param remote_ip: The client IP (IPv4 or IPv6).
+    :param remote: The client network (IPv4 or IPv6).
     :param geo: The client's geolocation, or None until it is resolved.
     """
-    remote_ip: netaddr.IPAddress
+    remote: netaddr.IPNetwork
     geo: ClientGeo | None = None

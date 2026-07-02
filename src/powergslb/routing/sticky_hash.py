@@ -84,10 +84,13 @@ class StickyHash(RoutingPolicy):
     ipv4_prefix: IPv4Prefix = 24
     ipv6_prefix: IPv6Prefix = 64
 
+    def network_prefix(self, context: ClientContext) -> int | None:
+        return self.ipv6_prefix if context.remote.ip.version == 6 else self.ipv4_prefix
+
     def select(self, candidates: list[dict[str, Any]], context: ClientContext) -> list[dict[str, Any]]:
         tier = self.highest_tier(candidates)
         if not tier:
             return []
 
-        network = _masked_network(context.remote_ip, self.ipv4_prefix, self.ipv6_prefix)
+        network = _masked_network(context.remote.ip, self.ipv4_prefix, self.ipv6_prefix)
         return _sticky_pick(tier, network, self.max_answers)

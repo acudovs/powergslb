@@ -35,7 +35,7 @@ tests/
     ├── test_main.py                    entry point: argument parsing, thread wiring, SystemService startup
     ├── test_version.py                 version constant is a semver string
     ├── client/
-    │   ├── test_context.py            ClientContext: carries the pre-parsed remote_ip plus a mutable geo
+    │   ├── test_context.py            ClientContext: carries the pre-parsed client network plus a mutable geo
     │   └── test_geo.py                ClientGeo: defaults to unknown, equality
     ├── database/mysql/
     │   ├── test_database.py            MySQLDatabase: SQL flattener, context manager, autocommit, result shaping

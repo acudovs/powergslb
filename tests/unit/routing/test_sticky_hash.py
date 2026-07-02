@@ -139,30 +139,30 @@ def test_default_max_answers_is_one() -> None:
 
 def test_select_returns_one_record_by_default() -> None:
     records = [_record('a'), _record('b'), _record('c')]
-    result = StickyHash().select(records, ClientContext(_ip('192.0.2.7')))
+    result = StickyHash().select(records, ClientContext(netaddr.IPNetwork('192.0.2.7')))
     assert len(result) == 1 and result[0] in records
 
 
 def test_select_empty_returns_empty() -> None:
-    assert not StickyHash().select([], ClientContext(_ip('192.0.2.7')))
+    assert not StickyHash().select([], ClientContext(netaddr.IPNetwork('192.0.2.7')))
 
 
 def test_select_same_client_network_is_sticky() -> None:
     records = [_record('a'), _record('b'), _record('c')]
     policy = StickyHash()
     # two clients in the same /24 collapse to the same answer
-    first = policy.select(records, ClientContext(_ip('192.0.2.7')))[0]['content']
-    second = policy.select(records, ClientContext(_ip('192.0.2.200')))[0]['content']
+    first = policy.select(records, ClientContext(netaddr.IPNetwork('192.0.2.7')))[0]['content']
+    second = policy.select(records, ClientContext(netaddr.IPNetwork('192.0.2.200')))[0]['content']
     assert first == second
 
 
 def test_select_max_answers_returns_top_n_sticky() -> None:
     records = [_record(c) for c in 'abcde']
     policy = StickyHash(max_answers=3)
-    result = policy.select(records, ClientContext(_ip('192.0.2.7')))
+    result = policy.select(records, ClientContext(netaddr.IPNetwork('192.0.2.7')))
     assert len(result) == 3
     # same client network returns the identical set in the identical order
-    again = policy.select(records, ClientContext(_ip('192.0.2.200')))
+    again = policy.select(records, ClientContext(netaddr.IPNetwork('192.0.2.200')))
     assert [r['content'] for r in result] == [r['content'] for r in again]
 
 
@@ -171,5 +171,19 @@ def test_select_answers_only_highest_weight_tier() -> None:
     policy = StickyHash()
     # vary the /24 so the winner spans the tier; the lower tier must never be chosen
     for octet in range(256):
-        chosen = policy.select(records, ClientContext(_ip(f'10.0.{octet}.1')))[0]['content']
+        chosen = policy.select(records, ClientContext(netaddr.IPNetwork(f'10.0.{octet}.1')))[0]['content']
         assert chosen in ('primary-a', 'primary-b')
+
+
+# network_prefix (the ECS scope granularity: the family prefix the answer is sticky within)
+
+def test_network_prefix_returns_family_prefix() -> None:
+    policy = StickyHash(ipv4_prefix=16, ipv6_prefix=48)
+    assert policy.network_prefix(ClientContext(netaddr.IPNetwork('192.0.2.7'))) == 16
+    assert policy.network_prefix(ClientContext(netaddr.IPNetwork('2001:db8::1'))) == 48
+
+
+def test_network_prefix_defaults() -> None:
+    policy = StickyHash()
+    assert policy.network_prefix(ClientContext(netaddr.IPNetwork('192.0.2.7'))) == 24
+    assert policy.network_prefix(ClientContext(netaddr.IPNetwork('2001:db8::1'))) == 64

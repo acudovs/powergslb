@@ -7,24 +7,24 @@ from typing import Any
 import netaddr
 
 from powergslb.client import ClientContext
-from powergslb.routing.base import IPv4Mask, IPv6Mask, Positive, RoutingPolicy
+from powergslb.routing.base import IPv4Prefix, IPv6Prefix, Positive, RoutingPolicy
 
 __all__ = ['StickyHash']
 
 
-def _masked_network(remote_ip: netaddr.IPAddress, ipv4_mask: int, ipv6_mask: int) -> bytes:
+def _masked_network(remote_ip: netaddr.IPAddress, ipv4_prefix: int, ipv6_prefix: int) -> bytes:
     """Mask the client IP to its network prefix, zeroing the host bits, as fixed-width big-endian bytes.
 
-    The mask is chosen by address family (ipv4_mask for IPv4, ipv6_mask for IPv6). The fixed width (4 bytes for
+    The prefix is chosen by address family (ipv4_prefix for IPv4, ipv6_prefix for IPv6). The fixed width (4 bytes for
     IPv4, 16 for IPv6) is itself family-distinguishing and a byte-identical, node-independent serialization.
 
     :param remote_ip: The client IP address (IPv4 or IPv6).
-    :param ipv4_mask: IPv4 prefix length.
-    :param ipv6_mask: IPv6 prefix length.
+    :param ipv4_prefix: IPv4 prefix length.
+    :param ipv6_prefix: IPv6 prefix length.
     :returns: The network address as big-endian bytes.
     """
-    width, mask = (32, ipv4_mask) if remote_ip.version == 4 else (128, ipv6_mask)
-    host_bits = width - mask
+    width, prefix = (32, ipv4_prefix) if remote_ip.version == 4 else (128, ipv6_prefix)
+    host_bits = width - prefix
     network = (int(remote_ip.value) >> host_bits) << host_bits  # zero the host bits
     return network.to_bytes(width // 8, 'big')
 
@@ -69,25 +69,25 @@ class StickyHash(RoutingPolicy):
     hashing.
 
     'weight' is read as a tier: only the highest-weight group of candidates is eligible. Within it, the client IP is
-    masked to its network prefix (ipv4_mask / ipv6_mask, family-chosen) and records are ranked by the stable hash of
+    masked to its network prefix (ipv4_prefix / ipv6_prefix, family-chosen) and records are ranked by the stable hash of
     (network, content); the top 'max_answers' win. A change to the eligible set remaps only ~max_answers/N clients
     (~1/N at the default max_answers=1), not nearly all as a modulo scheme would. Stickiness is stable per client
-    network given the same eligible set and masks.
+    network given the same eligible set and prefixes.
 
     :param max_answers: Maximum records returned from the winning tier (default 1).
-    :param ipv4_mask: IPv4 prefix length the client is masked to.
-    :param ipv6_mask: IPv6 prefix length the client is masked to.
+    :param ipv4_prefix: IPv4 prefix length the client is masked to.
+    :param ipv6_prefix: IPv6 prefix length the client is masked to.
     """
     name = 'sticky-hash'
 
     max_answers: Positive = 1
-    ipv4_mask: IPv4Mask = 24
-    ipv6_mask: IPv6Mask = 64
+    ipv4_prefix: IPv4Prefix = 24
+    ipv6_prefix: IPv6Prefix = 64
 
     def select(self, candidates: list[dict[str, Any]], context: ClientContext) -> list[dict[str, Any]]:
         tier = self.highest_tier(candidates)
         if not tier:
             return []
 
-        network = _masked_network(context.remote_ip, self.ipv4_mask, self.ipv6_mask)
+        network = _masked_network(context.remote_ip, self.ipv4_prefix, self.ipv6_prefix)
         return _sticky_pick(tier, network, self.max_answers)

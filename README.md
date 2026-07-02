@@ -275,8 +275,8 @@ classDiagram
     class StickyHash {
         +name = "sticky-hash"
         +int max_answers
-        +int ipv4_mask
-        +int ipv6_mask
+        +int ipv4_prefix
+        +int ipv6_prefix
         +select(candidates, context) list
     }
 
@@ -718,11 +718,11 @@ A routing policy is a named, reusable, JSON-configured object that an rrset refe
 RRsets. The seed data ships one of each type; manage them in the "Routings" sidebar section. Every rrset
 references exactly one policy.
 
-| policy            | weight | returns                                           | parameters (default)                                     |
-|-------------------|--------|---------------------------------------------------|----------------------------------------------------------|
-| `round-robin`     | tier   | up to `max_answers` from the highest tier         | `max_answers` (`8`)                                      |
-| `weighted-random` | weight | up to `max_answers` by weighted random            | `max_answers` (`1`)                                      |
-| `sticky-hash`     | tier   | up to `max_answers` from the highest tier, sticky | `max_answers` (`1`), `ipv4_mask`/`ipv6_mask` (`24`/`64`) |
+| policy            | weight | returns                                           | parameters (default)                                         |
+|-------------------|--------|---------------------------------------------------|--------------------------------------------------------------|
+| `round-robin`     | tier   | up to `max_answers` from the highest tier         | `max_answers` (`8`)                                          |
+| `weighted-random` | weight | up to `max_answers` by weighted random            | `max_answers` (`1`)                                          |
+| `sticky-hash`     | tier   | up to `max_answers` from the highest tier, sticky | `max_answers` (`1`), `ipv4_prefix`/`ipv6_prefix` (`24`/`64`) |
 
 * **round-robin** (default) answers the highest-weight live tier. A tier of `max_answers` or fewer is returned whole;
   a larger tier is randomly subsampled to `max_answers` to bound UDP fragmentation / `TC=1` truncation. Example:
@@ -733,11 +733,11 @@ references exactly one policy.
   resolvers may reorder, so the split then holds only statistically. An all-zero-weight set samples evenly. Example:
   `{"type": "weighted-random"}` or `{"type": "weighted-random", "max_answers": 3}`.
 * **sticky-hash** answers up to `max_answers` records (default `1`) from the highest live tier, pinned per client
-  network via rendezvous (HRW) hashing: the client is masked to `ipv4_mask` / `ipv6_mask` and records are ranked by a
-  salt-free hash of `(network, content)`, returning the top `max_answers`, so a health flap or record change remaps
+  network via rendezvous (HRW) hashing: the client is masked to `ipv4_prefix` / `ipv6_prefix` and records are ranked by
+  a salt-free hash of `(network, content)`, returning the top `max_answers`, so a health flap or record change remaps
   only ~`max_answers`/N clients (~1/N at the default `max_answers`). Stickiness is stable per client network **given
-  the same live set and masks**. Example:
-  `{"type": "sticky-hash"}` or `{"type": "sticky-hash", "max_answers": 2, "ipv4_mask": 16}`.
+  the same live set and prefixes**. Example:
+  `{"type": "sticky-hash"}` or `{"type": "sticky-hash", "max_answers": 2, "ipv4_prefix": 16}`.
 
 Liveness is decided by the [health checks](#health-checks) below. Across all policies, when every record at a name is
 down the set is reactivated ("all down = all up") so the name still resolves; `round-robin` / `sticky-hash` then serve

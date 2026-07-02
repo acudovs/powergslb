@@ -131,7 +131,7 @@ def test_sticky_hash_selection(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
     """The sticky-hash policy ties a client network to one record via rendezvous hashing.
 
-    With the default ipv4_mask=24, clients sharing a /24 collapse to the same single record on every request;
+    With the default ipv4_prefix=24, clients sharing a /24 collapse to the same single record on every request;
     across many /24s the hashing spreads clients over both records, so both are reachable.
     """
     name = 'sticky-test'
@@ -299,7 +299,7 @@ def test_mx_record_without_priority_number(
 
 def test_sticky_hash_ipv6_client(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """The sticky-hash policy works for IPv6 clients, masking to the default ipv6_mask=64.
+    """The sticky-hash policy works for IPv6 clients, masking to the default ipv6_prefix=64.
 
     Clients sharing a /64 collapse to one record on every request; across many /64s the hashing spreads clients
     over both records, so both are reachable.
@@ -332,16 +332,16 @@ def test_sticky_hash_ipv6_client(
     assert seen == {content_a, content_b}
 
 
-# sticky-hash: a zero mask collapses every client to a single record
+# sticky-hash: a zero prefix collapses every client to a single record
 
-def test_sticky_hash_zero_mask_collapses_to_one(
+def test_sticky_hash_zero_prefix_collapses_to_one(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """A sticky-hash policy with ipv4_mask=0 masks every client to one network, so all clients share one record.
+    """A sticky-hash policy with ipv4_prefix=0 masks every client to one network, so all clients share one record.
 
     This also exercises routing-policy CRUD: the custom-parameter policy is created via the admin API first.
     """
     policy_name = 'Sticky single'
-    r = w2ui.save('routings', policy=policy_name, policy_json='{"type": "sticky-hash", "ipv4_mask": 0}')
+    r = w2ui.save('routings', policy=policy_name, policy_json='{"type": "sticky-hash", "ipv4_prefix": 0}')
     assert r.json()['status'] == 'success'
     recid_policy = w2ui.find_recid('routings', policy=policy_name)
     assert recid_policy is not None

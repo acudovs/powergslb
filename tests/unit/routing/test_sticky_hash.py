@@ -43,7 +43,7 @@ def test_masked_network_ipv6_zeroes_host_bits() -> None:
     assert _masked_network(_ip('2001:db8::dead:beef'), 24, 64) == bytes.fromhex('20010db8' + '0' * 24)
 
 
-def test_masked_network_family_chosen_mask() -> None:
+def test_masked_network_family_chosen_prefix() -> None:
     # An IPv4 /32 and an IPv6 /128 keep the full address; the widths (4 vs 16 bytes) are family-distinguishing.
     assert _masked_network(_ip('192.0.2.7'), 32, 64) == bytes.fromhex('c0000207')
     assert len(_masked_network(_ip('2001:db8::1'), 24, 128)) == 16

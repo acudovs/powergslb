@@ -10,16 +10,16 @@ from typing import Annotated, Any, ClassVar, get_args, get_origin, get_type_hint
 
 from powergslb.client import ClientContext
 
-__all__ = ['IPv4Mask', 'IPv6Mask', 'Positive', 'RoutingPolicy']
+__all__ = ['IPv4Prefix', 'IPv6Prefix', 'Positive', 'RoutingPolicy']
 
 
-def _validate_ipv4_mask(value: int) -> None:
+def _validate_ipv4_prefix(value: int) -> None:
     """Reject an IPv4 prefix length outside the 0..32 range."""
     if not 0 <= value <= 32:
         raise ValueError('out of range')
 
 
-def _validate_ipv6_mask(value: int) -> None:
+def _validate_ipv6_prefix(value: int) -> None:
     """Reject an IPv6 prefix length outside the 0..128 range."""
     if not 0 <= value <= 128:
         raise ValueError('out of range')
@@ -32,8 +32,8 @@ def _validate_positive(value: int) -> None:
 
 
 # Reusable field types: the policy validates any field annotated with one by running its callable metadata.
-IPv4Mask = Annotated[int, _validate_ipv4_mask]
-IPv6Mask = Annotated[int, _validate_ipv6_mask]
+IPv4Prefix = Annotated[int, _validate_ipv4_prefix]
+IPv6Prefix = Annotated[int, _validate_ipv6_prefix]
 Positive = Annotated[int, _validate_positive]
 
 

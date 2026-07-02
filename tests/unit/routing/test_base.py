@@ -54,7 +54,8 @@ def test_create_omits_params_uses_defaults() -> None:
     weighted = RoutingPolicy.create({'type': 'weighted-random'})
     assert isinstance(weighted, WeightedRandom) and weighted.max_answers == 1
     sticky = RoutingPolicy.create({'type': 'sticky-hash'})
-    assert isinstance(sticky, StickyHash) and (sticky.max_answers, sticky.ipv4_mask, sticky.ipv6_mask) == (1, 24, 64)
+    assert (isinstance(sticky, StickyHash)
+            and (sticky.max_answers, sticky.ipv4_prefix, sticky.ipv6_prefix) == (1, 24, 64))
 
 
 def test_create_param_overrides_default() -> None:
@@ -107,22 +108,22 @@ def test_create_non_positive_max_answers_raises(max_answers: int) -> None:
         RoutingPolicy.create({'type': 'round-robin', 'max_answers': max_answers})
 
 
-@pytest.mark.parametrize('mask', [-1, 33])
-def test_create_ipv4_mask_out_of_range_raises(mask: int) -> None:
-    with pytest.raises(ValueError, match="routing policy parameter 'ipv4_mask' invalid"):
-        RoutingPolicy.create({'type': 'sticky-hash', 'ipv4_mask': mask})
+@pytest.mark.parametrize('prefix', [-1, 33])
+def test_create_ipv4_prefix_out_of_range_raises(prefix: int) -> None:
+    with pytest.raises(ValueError, match="routing policy parameter 'ipv4_prefix' invalid"):
+        RoutingPolicy.create({'type': 'sticky-hash', 'ipv4_prefix': prefix})
 
 
-@pytest.mark.parametrize('mask', [-1, 129])
-def test_create_ipv6_mask_out_of_range_raises(mask: int) -> None:
-    with pytest.raises(ValueError, match="routing policy parameter 'ipv6_mask' invalid"):
-        RoutingPolicy.create({'type': 'sticky-hash', 'ipv6_mask': mask})
+@pytest.mark.parametrize('prefix', [-1, 129])
+def test_create_ipv6_prefix_out_of_range_raises(prefix: int) -> None:
+    with pytest.raises(ValueError, match="routing policy parameter 'ipv6_prefix' invalid"):
+        RoutingPolicy.create({'type': 'sticky-hash', 'ipv6_prefix': prefix})
 
 
-@pytest.mark.parametrize('mask', [0, 32])
-def test_create_ipv4_mask_boundaries_accepted(mask: int) -> None:
-    policy = RoutingPolicy.create({'type': 'sticky-hash', 'ipv4_mask': mask})
-    assert isinstance(policy, StickyHash) and policy.ipv4_mask == mask
+@pytest.mark.parametrize('prefix', [0, 32])
+def test_create_ipv4_prefix_boundaries_accepted(prefix: int) -> None:
+    policy = RoutingPolicy.create({'type': 'sticky-hash', 'ipv4_prefix': prefix})
+    assert isinstance(policy, StickyHash) and policy.ipv4_prefix == prefix
 
 
 def test_create_missing_required_param_raises() -> None:

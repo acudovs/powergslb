@@ -281,7 +281,7 @@ def test_save_view_invalid_rule_rejected(w2ui: W2UIClient) -> None:
     # token before writing and rejects a malformed one, so no row is created.
     for rule in ('not-a-cidr',  # not a CIDR at all
                  '10.0.0.0/8 garbage',  # second token invalid
-                 '10.0.0.0/99',  # mask out of range
+                 '10.0.0.0/99',  # prefix out of range
                  ''):  # empty rule matches nothing
         r = w2ui.save('views', view='Invalid View', rule=rule)
         assert r.json()['status'] == 'error'

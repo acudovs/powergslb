@@ -26,6 +26,10 @@ class TlsCheck(Check):
     host: str = ''
 
     def execute(self) -> bool:
+        """Open one TCP connection to the target and complete a TLS handshake.
+
+        :returns: True when the handshake completes within the timeout.
+        """
         context = ssl.create_default_context()
         if not self.tls_verify:
             context.check_hostname = False

@@ -14,7 +14,13 @@ class ServiceThread(Protocol):
         """Start the thread."""
 
     def is_alive(self) -> bool:
-        """Return True while the thread is running."""
+        """Return True while the thread is running.
+
+        :returns: True while the thread is running.
+        """
 
     def shutdown(self, timeout: float = 0) -> None:
-        """Signal the thread to stop and wait up to timeout seconds for it to actually stop."""
+        """Signal the thread to stop and wait up to timeout seconds for it to actually stop.
+
+        :param timeout: Seconds to wait for the thread to stop; 0 waits indefinitely.
+        """

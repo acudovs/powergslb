@@ -25,6 +25,12 @@ class RoundRobin(RoutingPolicy):
     max_answers: Positive = 8
 
     def select(self, candidates: list[dict[str, Any]], context: ClientContext) -> list[dict[str, Any]]:
+        """Answer the highest-weight tier, randomly subsampled to 'max_answers' when larger.
+
+        :param candidates: The candidate records to choose among.
+        :param context: Per-request client data; unused, the choice is client-independent.
+        :returns: The selected records; an empty input yields an empty result.
+        """
         tier = self.highest_tier(candidates)
         if len(tier) <= self.max_answers:
             return tier

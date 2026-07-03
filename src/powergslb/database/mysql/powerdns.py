@@ -14,7 +14,10 @@ class PowerDNSDatabaseMixIn(abc.ABC):
         pass
 
     def gslb_checks(self) -> list[dict[str, Any]]:
-        """Return every record's id, content and monitor for health checking."""
+        """Return every record's id, content and monitor for health checking.
+
+        :returns: One row per record with its id, content and monitor_json.
+        """
         operation = """
             SELECT `records`.`id`,
               `records`.`content`,
@@ -26,7 +29,11 @@ class PowerDNSDatabaseMixIn(abc.ABC):
         return self._select(operation)
 
     def gslb_domains(self, include_disabled: bool = False) -> list[dict[str, Any]]:
-        """Return domains with an apex SOA and its content for the zone cache."""
+        """Return domains with an apex SOA and its content for the zone cache.
+
+        :param include_disabled: When true, count a disabled SOA record as present.
+        :returns: One row per domain with its id, name and SOA content.
+        """
         operation = """
             SELECT `domains`.`id`,
               `domains`.`domain`,
@@ -51,6 +58,10 @@ class PowerDNSDatabaseMixIn(abc.ABC):
         is a legal DNS label char); the relative record name is recovered with SUBSTRING, and the answer's FQDN is
         rebuilt with CASE/CONCAT. The NOT EXISTS guard makes the most-specific zone win when a parent and a
         delegated child both suffix-match.
+
+        :param qname: The queried FQDN.
+        :param qtype: The queried record type; 'ANY' matches every type.
+        :returns: The enabled records at qname with their rrset, routing and view attributes.
         """
         operation = """
             SELECT

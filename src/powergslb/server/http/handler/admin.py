@@ -67,7 +67,10 @@ class AdminRequestHandler(HTTPRequestHandler):
             self.send_error(404)
 
     def _is_authorized(self) -> bool:
-        """Validate Basic Auth credentials against the database; any parse failure counts as unauthorized."""
+        """Validate Basic Auth credentials against the database; any parse failure counts as unauthorized.
+
+        :returns: True when the request carries valid credentials.
+        """
         authorized = False
         authorization_header = self.headers.get('Authorization')
 
@@ -87,6 +90,10 @@ class AdminRequestHandler(HTTPRequestHandler):
         return authorized
 
     def _send_authenticate(self, code: int = 401) -> None:
+        """Send the Basic Auth challenge with an HTML error body; a HEAD challenge carries no body.
+
+        :param code: HTTP status code of the challenge.
+        """
         message, explain = self.responses[code]
         content = self.error_message_format % {'code': code, 'message': message, 'explain': explain}
         content_bytes = content.encode('utf-8')
@@ -101,6 +108,9 @@ class AdminRequestHandler(HTTPRequestHandler):
     def _database_method(self, prefix: str, data: Any) -> 'Callable[..., Any]':
         """Resolve the database CRUD method for a whitelisted table token.
 
+        :param prefix: The method name prefix ('get_', 'save_' or 'delete_').
+        :param data: The table token from the query.
+        :returns: The bound database method.
         :raises ValueError: When data is not a whitelisted table.
         """
         method = getattr(self.database, prefix + data, None) if data in self._data_tables else None
@@ -109,6 +119,10 @@ class AdminRequestHandler(HTTPRequestHandler):
         return method
 
     def _delete_records(self) -> dict[str, Any]:
+        """Handle the delete-records command: delete the selected rows from the query's table.
+
+        :returns: The w2ui status reply.
+        """
         data = self.query.get('data')
         selected = self.query.get('selected')
         if not isinstance(selected, list):
@@ -119,6 +133,10 @@ class AdminRequestHandler(HTTPRequestHandler):
         return {'status': 'success'}
 
     def _get_items(self) -> dict[str, Any]:
+        """Handle the get-items command: collect one field's values from the query's table for a form dropdown.
+
+        :returns: The w2ui reply with the collected items.
+        """
         data = self.query.get('data')
         field = self.query.get('field')
 
@@ -127,6 +145,10 @@ class AdminRequestHandler(HTTPRequestHandler):
         return {'status': 'success', 'items': items}
 
     def _get_record(self) -> dict[str, Any]:
+        """Handle the get-record command: fetch one row from the query's table by recid.
+
+        :returns: The w2ui reply with the record, or an error when the recid does not exist.
+        """
         data = self.query.get('data')
         recid = int(self.query.get('recid'))
 
@@ -136,6 +158,10 @@ class AdminRequestHandler(HTTPRequestHandler):
         return {'status': 'success', 'record': records[0]}
 
     def _get_records(self) -> dict[str, Any]:
+        """Handle the get-records command: fetch the query's table, then search, sort and page it.
+
+        :returns: The w2ui reply with the total match count and the requested page.
+        """
         data = self.query.get('data')
 
         records = self._database_method('get_', data)()
@@ -146,7 +172,11 @@ class AdminRequestHandler(HTTPRequestHandler):
         return {'status': 'success', 'total': len(records), 'records': self._limit_records(records)}
 
     def _limit_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Apply limit/offset or max paging from the query."""
+        """Apply limit/offset or max paging from the query.
+
+        :param records: The full result set.
+        :returns: The requested page, or all records when the query sets no paging.
+        """
         if 'limit' in self.query and 'offset' in self.query:
             limit = int(self.query['limit'])
             offset = int(self.query['offset'])
@@ -173,6 +203,10 @@ class AdminRequestHandler(HTTPRequestHandler):
         logging.debug('query: %s', self.query)
 
     def _save_record(self) -> dict[str, Any]:
+        """Handle the save-record command: validate the posted record, then insert or update it.
+
+        :returns: The w2ui status reply.
+        """
         data = self.query.get('data')
         recid = int(self.query.get('recid'))
         record = self.query.get('record')
@@ -187,6 +221,8 @@ class AdminRequestHandler(HTTPRequestHandler):
     def _validate_record(data: Any, record: dict[str, Any]) -> None:
         """Reject an invalid record before the database write.
 
+        :param data: The table token from the query.
+        :param record: The record fields posted by the admin form.
         :raises ValueError: When validation failed.
         """
         if data == 'monitors':
@@ -202,6 +238,8 @@ class AdminRequestHandler(HTTPRequestHandler):
     def _search_match(self, record: dict[str, Any], search: dict[str, Any]) -> 'bool | None':
         """Apply one search to one record.
 
+        :param record: The record to test.
+        :param search: The w2ui search clause (field, type, operator, value).
         :returns: None when the search type/operator is unknown (skip it); otherwise the match result,
             with a missing field or unconvertible value counting as no match.
         """
@@ -214,7 +252,11 @@ class AdminRequestHandler(HTTPRequestHandler):
             return False
 
     def _search_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Filter records by the query searches, combined with AND unless searchLogic is OR."""
+        """Filter records by the query searches, combined with AND unless searchLogic is OR.
+
+        :param records: The records to filter.
+        :returns: The records matching the query searches; all of them when the query has none.
+        """
         searches = self.query.get('search')
         if not searches:
             return records
@@ -230,7 +272,10 @@ class AdminRequestHandler(HTTPRequestHandler):
         return matched
 
     def _sort_records(self, records: list[dict[str, Any]]) -> None:
-        """Sort records in place by the query's sort keys; unknown fields are ignored."""
+        """Sort records in place by the query's sort keys; unknown fields are ignored.
+
+        :param records: The records to sort in place.
+        """
         if 'sort' in self.query:
             # w2ui sends sort keys primary-first; apply them least-significant-first so the primary key dominant.
             for sort in reversed(self.query['sort']):
@@ -240,7 +285,10 @@ class AdminRequestHandler(HTTPRequestHandler):
                 records.sort(key=operator.itemgetter(sort['field']), reverse=reverse)
 
     def _update_status(self, records: list[dict[str, Any]]) -> None:
-        """Annotate each record with its On/Off status and display style; drop the internal id."""
+        """Annotate each record with its On/Off status and display style; drop the internal id.
+
+        :param records: The status rows to annotate in place.
+        """
         for record in records:
             if record['disabled'] or self.status_registry.is_down(record['id']):
                 record['status'] = 'Off'
@@ -256,6 +304,8 @@ class AdminRequestHandler(HTTPRequestHandler):
 
         A deliberate validation error (ValueError) is surfaced to the UI; any other exception is logged and
         answered with a generic message, so an internal failure (database, type) is not disclosed to the client.
+
+        :returns: The JSON-encoded w2ui reply.
         """
         self._parse_query()
         command = self.query.get('cmd')

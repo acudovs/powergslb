@@ -43,6 +43,12 @@ class WeightedRandom(RoutingPolicy):
     max_answers: Positive = 1
 
     def select(self, candidates: list[dict[str, Any]], context: ClientContext) -> list[dict[str, Any]]:
+        """Answer up to 'max_answers' records sampled weighted-random without replacement.
+
+        :param candidates: The candidate records to choose among.
+        :param context: Per-request client data; unused, the choice is client-independent.
+        :returns: The selected records; an empty input yields an empty result.
+        """
         count = min(self.max_answers, len(candidates))
         remaining = sorted(candidates, key=lambda record: record['content'])
         selected: list[dict[str, Any]] = []

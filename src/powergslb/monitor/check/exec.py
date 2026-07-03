@@ -37,6 +37,10 @@ class ExecCheck(Check):
     redirect_error: bool = True
 
     def __post_init__(self) -> None:
+        """Validate the command line and exit code on top of the base field validation.
+
+        :raises ValueError: When 'args' is empty or holds a non-string, or 'expected_code' is outside 0..255.
+        """
         super().__post_init__()
         if not self.args or not all(isinstance(arg, str) for arg in self.args):
             raise ValueError("check parameter 'args' invalid")
@@ -44,6 +48,10 @@ class ExecCheck(Check):
             raise ValueError("check parameter 'expected_code' invalid")
 
     def execute(self) -> bool:
+        """Run the command once and evaluate its exit code and output.
+
+        :returns: True when the command exits in time with 'expected_code' and its output matches 'output_match'.
+        """
         deadline = time.monotonic() + self.timeout
         stderr = subprocess.STDOUT if self.redirect_error else subprocess.DEVNULL
 
@@ -74,6 +82,7 @@ class ExecCheck(Check):
 
         Excess output is read and discarded so a chatty command can still exit.
 
+        :param process: The running command whose stdout is drained.
         :param deadline: Absolute time.monotonic() value the read must finish by.
         :returns: The kept bytes and a flag that is True when the deadline fired before EOF.
         """

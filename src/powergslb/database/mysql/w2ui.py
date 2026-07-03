@@ -16,7 +16,12 @@ class W2UIDatabaseMixIn(abc.ABC):
     password_mask: ClassVar[str] = '********'
 
     def _delete(self, operation: str, ids: list[Any]) -> int:
-        """Expand the operation's IN (%s) placeholder to the ids and delete; an empty list deletes nothing."""
+        """Expand the operation's IN (%s) placeholder to the ids and delete; an empty list deletes nothing.
+
+        :param operation: A DELETE statement with a single IN (%s) placeholder.
+        :param ids: The key values to delete.
+        :returns: The number of rows deleted.
+        """
         if not ids:
             return 0  # an empty IN () is a syntax error; nothing to delete
         params = tuple(ids)
@@ -42,6 +47,10 @@ class W2UIDatabaseMixIn(abc.ABC):
 
         The stored crypt(3) hash carries its own salt, so the password is verified in Python rather than in SQL.
         An unknown user yields an empty stored hash, passed to verify_password.
+
+        :param user: The login name.
+        :param password: The plaintext password to verify.
+        :returns: [{'valid': 1}] on a valid pair, an empty list otherwise.
         """
         operation = """
             SELECT `password` FROM `users`
@@ -56,7 +65,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return []
 
     def delete_domains(self, ids: list[Any]) -> int:
-        """Delete domain rows by id and return the count of deleted rows."""
+        """Delete domain rows by id and return the count of deleted rows.
+
+        :param ids: The domain ids to delete.
+        :returns: The number of rows deleted.
+        """
         operation = """
             DELETE FROM `domains`
             WHERE `id` IN (%s)
@@ -65,7 +78,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._delete(operation, ids)
 
     def delete_monitors(self, ids: list[Any]) -> int:
-        """Delete monitor rows by id and return the count of deleted rows."""
+        """Delete monitor rows by id and return the count of deleted rows.
+
+        :param ids: The monitor ids to delete.
+        :returns: The number of rows deleted.
+        """
         operation = """
             DELETE FROM `monitors`
             WHERE `id` IN (%s)
@@ -74,7 +91,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._delete(operation, ids)
 
     def delete_records(self, ids: list[Any]) -> int:
-        """Delete record rows by id and return the count of deleted rows."""
+        """Delete record rows by id and return the count of deleted rows.
+
+        :param ids: The record ids to delete.
+        :returns: The number of rows deleted.
+        """
         operation = """
             DELETE FROM `records`
             WHERE `id` IN (%s)
@@ -83,7 +104,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._delete(operation, ids)
 
     def delete_routings(self, ids: list[Any]) -> int:
-        """Delete routing rows by id and return the count of deleted rows."""
+        """Delete routing rows by id and return the count of deleted rows.
+
+        :param ids: The routing ids to delete.
+        :returns: The number of rows deleted.
+        """
         operation = """
             DELETE FROM `routings`
             WHERE `id` IN (%s)
@@ -92,7 +117,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._delete(operation, ids)
 
     def delete_types(self, values: list[Any]) -> int:
-        """Delete type rows by value and return the count of deleted rows."""
+        """Delete type rows by value and return the count of deleted rows.
+
+        :param values: The type values to delete.
+        :returns: The number of rows deleted.
+        """
         operation = """
             DELETE FROM `types`
             WHERE `value` IN (%s)
@@ -101,7 +130,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._delete(operation, values)
 
     def delete_users(self, ids: list[Any]) -> int:
-        """Delete user rows by id and return the count of deleted rows."""
+        """Delete user rows by id and return the count of deleted rows.
+
+        :param ids: The user ids to delete.
+        :returns: The number of rows deleted.
+        """
         operation = """
             DELETE FROM `users`
             WHERE `id` IN (%s)
@@ -110,7 +143,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._delete(operation, ids)
 
     def delete_views(self, ids: list[Any]) -> int:
-        """Delete view rows by id and return the count of deleted rows."""
+        """Delete view rows by id and return the count of deleted rows.
+
+        :param ids: The view ids to delete.
+        :returns: The number of rows deleted.
+        """
         operation = """
             DELETE FROM `views`
             WHERE `id` IN (%s)
@@ -119,7 +156,10 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._delete(operation, ids)
 
     def get_status(self) -> list[dict[str, Any]]:
-        """Return all records with health and disabled status for the admin panel."""
+        """Return all records with health and disabled status for the admin panel.
+
+        :returns: One row per record with its rrset, routing, monitor and view attributes.
+        """
         operation = """
             SELECT `domains`.`domain`,
               `rrsets`.`name`,
@@ -144,7 +184,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation)
 
     def get_domains(self, recid: int = 0) -> list[dict[str, Any]]:
-        """Return all domains, or a single domain if recid is given."""
+        """Return all domains, or a single domain if recid is given.
+
+        :param recid: The domain id to fetch; 0 fetches every domain.
+        :returns: The matching domain rows.
+        """
         operation = """
             SELECT `id` AS `recid`,
               `domain`
@@ -161,7 +205,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation, params)
 
     def get_monitors(self, recid: int = 0) -> list[dict[str, Any]]:
-        """Return all monitors, or a single monitor if recid is given."""
+        """Return all monitors, or a single monitor if recid is given.
+
+        :param recid: The monitor id to fetch; 0 fetches every monitor.
+        :returns: The matching monitor rows.
+        """
         operation = """
             SELECT `id` AS `recid`,
               `monitor`,
@@ -179,7 +227,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation, params)
 
     def get_records(self, recid: int = 0) -> list[dict[str, Any]]:
-        """Return all records, or a single record if recid is given."""
+        """Return all records, or a single record if recid is given.
+
+        :param recid: The record id to fetch; 0 fetches every record.
+        :returns: The matching record rows with their rrset, routing, monitor and view attributes.
+        """
         operation = """
             SELECT `domains`.`domain`,
               `rrsets`.`name`,
@@ -211,7 +263,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation, params)
 
     def get_routings(self, recid: int = 0) -> list[dict[str, Any]]:
-        """Return all routings, or a single routing if recid is given."""
+        """Return all routings, or a single routing if recid is given.
+
+        :param recid: The routing id to fetch; 0 fetches every routing.
+        :returns: The matching routing rows.
+        """
         operation = """
             SELECT `id` AS `recid`,
               `policy`,
@@ -229,7 +285,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation, params)
 
     def get_types(self, recid: int = 0) -> list[dict[str, Any]]:
-        """Return all types, or a single type if recid is given."""
+        """Return all types, or a single type if recid is given.
+
+        :param recid: The type value to fetch; 0 fetches every type.
+        :returns: The matching type rows.
+        """
         operation = """
             SELECT `value` AS `recid`,
               `type` AS `name_type`,
@@ -247,7 +307,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation, params)
 
     def get_users(self, recid: int = 0) -> list[dict[str, Any]]:
-        """Return all users (password masked), or a single user if recid is given."""
+        """Return all users (password masked), or a single user if recid is given.
+
+        :param recid: The user id to fetch; 0 fetches every user.
+        :returns: The matching user rows with the password replaced by the mask.
+        """
         operation = """
             SELECT `id` AS `recid`,
               `user`,
@@ -266,7 +330,11 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation, params)
 
     def get_views(self, recid: int = 0) -> list[dict[str, Any]]:
-        """Return all views, or a single view if recid is given."""
+        """Return all views, or a single view if recid is given.
+
+        :param recid: The view id to fetch; 0 fetches every view.
+        :returns: The matching view rows.
+        """
         operation = """
             SELECT `id` AS `recid`,
               `view`,
@@ -284,7 +352,12 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._select(operation, params)
 
     def save_domains(self, save_recid: int, domain: str, **_: Any) -> int:
-        """Insert or update a domain row and return the row count."""
+        """Insert or update a domain row and return the row count.
+
+        :param save_recid: The domain id to update; 0 inserts a new row.
+        :param domain: The zone name.
+        :returns: The number of rows affected.
+        """
         if save_recid:
             operation = """
                 UPDATE `domains`
@@ -302,7 +375,13 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._modify(operation, params)
 
     def save_monitors(self, save_recid: int, monitor: str, monitor_json: str, **_: Any) -> int:
-        """Insert or update a monitor row and return the row count."""
+        """Insert or update a monitor row and return the row count.
+
+        :param save_recid: The monitor id to update; 0 inserts a new row.
+        :param monitor: The monitor name.
+        :param monitor_json: The JSON check configuration.
+        :returns: The number of rows affected.
+        """
         if save_recid:
             operation = """
                 UPDATE `monitors`
@@ -331,6 +410,19 @@ class W2UIDatabaseMixIn(abc.ABC):
         on `rrsets` in that same statement would raise error 1442). The policy name resolves to routing_id on both
         the INSERT and the ON DUPLICATE KEY UPDATE, so editing a record updates an existing rrset's policy. The
         summed affected-row count is returned so a ttl-only edit and a content-only edit both report success.
+
+        :param save_recid: The record id to update; 0 inserts a new record.
+        :param domain: The owning zone name.
+        :param name: The record name relative to the zone ('@' at the apex).
+        :param name_type: The DNS record type name.
+        :param ttl: The rrset TTL.
+        :param content: The answer content.
+        :param monitor: The monitor name the record references.
+        :param view: The view name the record references.
+        :param policy: The routing policy name the rrset references.
+        :param disabled: Whether the record is disabled; the admin form's 'true'/'false' strings are coerced.
+        :param weight: The record weight the routing policy reads.
+        :returns: The summed affected-row count across both statements.
         """
         # The admin form posts 'toggle' value as string 'true'/'false'; coerce to int.
         disabled = int(str(disabled).lower() in ('1', 'true'))
@@ -368,7 +460,13 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._execute_transaction([rrset_upsert, record_write])
 
     def save_routings(self, save_recid: int, policy: str, policy_json: str, **_: Any) -> int:
-        """Insert or update a routing row and return the row count."""
+        """Insert or update a routing row and return the row count.
+
+        :param save_recid: The routing id to update; 0 inserts a new row.
+        :param policy: The routing policy name.
+        :param policy_json: The JSON policy configuration.
+        :returns: The number of rows affected.
+        """
         if save_recid:
             operation = """
                 UPDATE `routings`
@@ -388,7 +486,14 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._modify(operation, params)
 
     def save_types(self, save_recid: int, description: str, name_type: str, recid: int, **_: Any) -> int:
-        """Insert or update a type row and return the row count."""
+        """Insert or update a type row and return the row count.
+
+        :param save_recid: The type value to update; 0 inserts a new row.
+        :param description: The type description.
+        :param name_type: The DNS record type name.
+        :param recid: The numeric type value to store.
+        :returns: The number of rows affected.
+        """
         if save_recid:
             operation = """
                 UPDATE `types`
@@ -409,7 +514,14 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._modify(operation, params)
 
     def save_users(self, save_recid: int, user: str, name: str, password: str, **_: Any) -> int:
-        """Insert or update a user row and return the row count."""
+        """Insert or update a user row and return the row count.
+
+        :param save_recid: The user id to update; 0 inserts a new row.
+        :param user: The login name.
+        :param name: The display name.
+        :param password: The plaintext password to hash and store; the mask value keeps the existing hash.
+        :returns: The number of rows affected.
+        """
         if save_recid:
             if password == self.password_mask:
                 operation = """
@@ -438,7 +550,13 @@ class W2UIDatabaseMixIn(abc.ABC):
         return self._modify(operation, params)
 
     def save_views(self, save_recid: int, view: str, rule: str, **_: Any) -> int:
-        """Insert or update a view row and return the row count."""
+        """Insert or update a view row and return the row count.
+
+        :param save_recid: The view id to update; 0 inserts a new row.
+        :param view: The view name.
+        :param rule: The view rule string (CIDR / geo tokens).
+        :returns: The number of rows affected.
+        """
         if save_recid:
             operation = """
                 UPDATE `views`

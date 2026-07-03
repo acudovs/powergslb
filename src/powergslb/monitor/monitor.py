@@ -22,6 +22,7 @@ class MonitorManager(AbstractThread):
     :param monitor_config: The [monitor] section; update_interval is the poll period, the rest tunes the check types.
     :param database_config: mysql.connector connect kwargs.
     :param status_registry: Shared health status registry.
+    :raises ValueError: When update_interval is below 1.
     """
 
     def __init__(self,
@@ -39,6 +40,10 @@ class MonitorManager(AbstractThread):
         Check.configure(monitor_config)
 
     def _clean_status(self, valid_ids: set[int]) -> None:
+        """Drop status entries whose content id is no longer monitored.
+
+        :param valid_ids: The content ids that still have a check.
+        """
         stale_ids = self._status_registry.retain(valid_ids)
         if stale_ids:
             logging.debug('clean status for records: %s', ', '.join(map(str, stale_ids)))
@@ -47,6 +52,7 @@ class MonitorManager(AbstractThread):
     def build_check(cls, check: dict[str, Any]) -> Check:
         """Parse one raw check row and build its Check.
 
+        :param check: The raw row with 'monitor_json' and 'content'.
         :returns: The Check.
         :raises ValueError: When a check is malformed or invalid.
         """
@@ -59,6 +65,8 @@ class MonitorManager(AbstractThread):
         Parsing happens before substitution, so a literal '%', '$' or brace anywhere in the template is data, never a
         format directive, and a content value containing a quote cannot corrupt the JSON.
 
+        :param check: The raw row with 'monitor_json' and 'content'.
+        :returns: The parsed check spec with the record content substituted.
         :raises ValueError: When 'monitor_json' is not a JSON object (json.JSONDecodeError is a ValueError subclass).
         """
         template = json.loads(check['monitor_json'])
@@ -71,6 +79,11 @@ class MonitorManager(AbstractThread):
         """Replace every occurrence of token with replacement in every string value, recursing into lists and dicts.
 
         Non-string values pass through unchanged.
+
+        :param value: The parsed JSON value to substitute in.
+        :param token: The literal token to replace.
+        :param replacement: The text that replaces the token.
+        :returns: The value with every token in its string values replaced.
         """
         if isinstance(value, str):
             return value.replace(token, replacement)
@@ -81,7 +94,10 @@ class MonitorManager(AbstractThread):
         return value
 
     def _desired_checks(self) -> dict[int, Check] | None:
-        """Build the desired checks keyed by content id; return None when the database is unavailable."""
+        """Build the desired checks keyed by content id; return None when the database is unavailable.
+
+        :returns: The non-skipped checks keyed by content id, or None on a database error.
+        """
         logging.debug('update checks from the database')
         try:
             with powergslb.database.Database(**self._database_config) as database:
@@ -103,7 +119,10 @@ class MonitorManager(AbstractThread):
 
     @staticmethod
     def _stop_threads(threads: list[CheckThread]) -> None:
-        """Signal every thread in the list, then wait briefly for a clean exit; stragglers are abandoned."""
+        """Signal every thread in the list, then wait briefly for a clean exit; stragglers are abandoned.
+
+        :param threads: The check threads to stop.
+        """
         if not threads:
             return
 
@@ -128,6 +147,12 @@ class MonitorManager(AbstractThread):
             logging.warning('abandoning straggling check threads: %s', alive_threads)
 
     def _start_thread(self, content_id: int, check: Check) -> CheckThread:
+        """Create and start the CheckThread for one content id.
+
+        :param content_id: The content id the check monitors.
+        :param check: The check to run.
+        :returns: The started thread.
+        """
         status_writer = self._status_registry.get_writer(content_id)
         thread = CheckThread(check, status_writer, name=f'Check-{content_id}')
         thread.start()
@@ -138,6 +163,8 @@ class MonitorManager(AbstractThread):
 
         Stops removed, changed, or dead threads, starts new or replacement ones (with fresh rise/fall counters),
         and drops stale status entries.
+
+        :param desired: The desired checks keyed by content id.
         """
         to_stop: list[CheckThread] = []
         to_start: dict[int, Check] = {}
@@ -170,7 +197,10 @@ class MonitorManager(AbstractThread):
         self._clean_status(set(desired))
 
     def shutdown(self, timeout: float = 0) -> None:
-        """Signal the check threads without joining them, then stop the monitor itself within timeout."""
+        """Signal the check threads without joining them, then stop the monitor itself within timeout.
+
+        :param timeout: Seconds to wait for the monitor thread to exit; 0 waits indefinitely.
+        """
         for thread in list(self._threads.values()):  # snapshot: _reconcile mutates _threads
             thread.shutdown()  # signal only (no wait)
         super().shutdown(timeout)

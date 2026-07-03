@@ -14,19 +14,31 @@ __all__ = ['IPv4Prefix', 'IPv6Prefix', 'Positive', 'RoutingPolicy']
 
 
 def _validate_ipv4_prefix(value: int) -> None:
-    """Reject an IPv4 prefix length outside the 0..32 range."""
+    """Reject an IPv4 prefix length outside the 0..32 range.
+
+    :param value: The prefix length to validate.
+    :raises ValueError: When the value is out of range.
+    """
     if not 0 <= value <= 32:
         raise ValueError('out of range')
 
 
 def _validate_ipv6_prefix(value: int) -> None:
-    """Reject an IPv6 prefix length outside the 0..128 range."""
+    """Reject an IPv6 prefix length outside the 0..128 range.
+
+    :param value: The prefix length to validate.
+    :raises ValueError: When the value is out of range.
+    """
     if not 0 <= value <= 128:
         raise ValueError('out of range')
 
 
 def _validate_positive(value: int) -> None:
-    """Reject a non-positive count (max_answers must be >= 1)."""
+    """Reject a non-positive count (max_answers must be >= 1).
+
+    :param value: The count to validate.
+    :raises ValueError: When the value is not positive.
+    """
     if value < 1:
         raise ValueError('not positive')
 
@@ -50,7 +62,10 @@ class RoutingPolicy(abc.ABC):
     name: ClassVar[str]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Register the subclass in the type registry under its name token; reject duplicate names."""
+        """Register the subclass in the type registry under its name token; reject duplicate names.
+
+        :raises ValueError: When another subclass already registered the name.
+        """
         super().__init_subclass__(**kwargs)
         if cls.name in RoutingPolicy._registry:
             raise ValueError(f"duplicate routing policy type '{cls.name}'")

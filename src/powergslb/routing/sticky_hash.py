@@ -85,9 +85,20 @@ class StickyHash(RoutingPolicy):
     ipv6_prefix: IPv6Prefix = 64
 
     def network_prefix(self, context: ClientContext) -> int | None:
+        """Return the per-family prefix length the answer is sticky by.
+
+        :param context: Per-request client data; its address family picks the prefix.
+        :returns: 'ipv6_prefix' for an IPv6 client, else 'ipv4_prefix'.
+        """
         return self.ipv6_prefix if context.remote.ip.version == 6 else self.ipv4_prefix
 
     def select(self, candidates: list[dict[str, Any]], context: ClientContext) -> list[dict[str, Any]]:
+        """Answer up to 'max_answers' records from the highest-weight tier, sticky per masked client network.
+
+        :param candidates: The candidate records to choose among.
+        :param context: Per-request client data; the client address is masked to the per-family prefix.
+        :returns: The selected records; an empty input yields an empty result.
+        """
         tier = self.highest_tier(candidates)
         if not tier:
             return []

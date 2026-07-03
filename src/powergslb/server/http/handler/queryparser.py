@@ -11,7 +11,11 @@ class QueryParserError(Exception):
 
 
 def _get_key(s: str) -> str | None:
-    """Return the text between the first [ and ], stripping surrounding quotes; None when brackets are missing."""
+    """Return the text between the first [ and ], stripping surrounding quotes; None when brackets are missing.
+
+    :param s: The key text to scan.
+    :returns: The bracketed key without quotes, or None when there is no complete bracket pair.
+    """
     start = s.find('[')
     end = s.find(']')
     if start == -1 or end == -1:
@@ -24,19 +28,32 @@ def _get_key(s: str) -> str | None:
 
 
 def _has_variable_name(s: str) -> bool:
-    """Return True when a variable name precedes the first [."""
+    """Return True when a variable name precedes the first [.
+
+    :param s: The key text to scan.
+    :returns: True when the key starts with a variable name.
+    """
     return s.find('[') > 0
 
 
 def _is_number(s: str) -> bool:
-    """Return True when s is an optionally signed integer literal (a list index)."""
+    """Return True when s is an optionally signed integer literal (a list index).
+
+    :param s: The text to test.
+    :returns: True when the text is an integer literal.
+    """
     if len(s) > 0 and s[0] in ('-', '+'):
         return s[1:].isdigit()
     return s.isdigit()
 
 
 def _more_than_one_index(s: str, brackets: int = 2) -> bool:
-    """Return True when s contains at least `brackets` complete [...] groups."""
+    """Return True when s contains at least `brackets` complete [...] groups.
+
+    :param s: The key text to scan.
+    :param brackets: The number of complete bracket groups to require.
+    :returns: True when the key has at least that many bracket groups.
+    """
     start = 0
     brackets_num = 0
     while start != -1 and brackets_num < brackets:
@@ -55,6 +72,9 @@ def _normalize(d: Any) -> Any:
 
     {'abc': {0: 'xyz', 1: 'pqr'}} becomes {'abc': ['xyz', 'pqr']}; index gaps are not filled, so
     {10: 'xyz', 12: 'pqr'} still yields a two-element list. An '' key unwraps to its single value.
+
+    :param d: The parsed value to normalize; a non-dict passes through unchanged.
+    :returns: The value with every int-keyed dict converted to a list.
     """
     newd = {}
     if not isinstance(d, dict):
@@ -79,6 +99,9 @@ def _normalize(d: Any) -> Any:
 def _parser_helper(key: str, val: str) -> dict[Any, Any]:
     """Parse one key=val pair into a nested dict, one level per bracket group.
 
+    :param key: The form key, possibly with bracket groups.
+    :param val: The form value.
+    :returns: The single-branch nested dict for the pair.
     :raises QueryParserError: When a bracketed key is malformed.
     """
     start_bracket = key.find('[')

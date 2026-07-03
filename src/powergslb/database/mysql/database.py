@@ -35,12 +35,21 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
 
     @staticmethod
     def join_operation(operation: str) -> str:
-        """Collapse a multiline SQL string into a single space-separated line."""
+        """Collapse a multiline SQL string into a single space-separated line.
+
+        :param operation: The SQL statement text.
+        :returns: The statement as one line with surrounding whitespace stripped.
+        """
         return ' '.join(filter(None, (line.strip() for line in operation.splitlines())))
 
     @contextlib.contextmanager
     def _cursor(self, operation: str, params: tuple[Any, ...]) -> Iterator[Any]:
-        """Run one SQL statement on a fresh buffered cursor and yield it, closing it on exit."""
+        """Run one SQL statement on a fresh buffered cursor and yield it, closing it on exit.
+
+        :param operation: The SQL statement to execute.
+        :param params: Statement placeholder values.
+        :yields: The buffered cursor with the statement executed.
+        """
         operation = self.join_operation(operation)
         if params:
             logging.debug('"%s" %% %s', operation, params)
@@ -55,14 +64,24 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
             cursor.close()
 
     def _select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        """Execute a result-set statement (SELECT, WITH...SELECT, SHOW, ...) and return its rows as dicts."""
+        """Execute a result-set statement (SELECT, WITH...SELECT, SHOW, ...) and return its rows as dicts.
+
+        :param operation: The SQL statement to execute.
+        :param params: Statement placeholder values.
+        :returns: The result rows, each keyed by column name.
+        """
         with self._cursor(operation, params) as cursor:
             logging.debug('%s rows returned', cursor.rowcount)
             column_names = [column[0] for column in cursor.description]
             return [dict(zip(column_names, row)) for row in cursor]
 
     def _modify(self, operation: str, params: tuple[Any, ...] = ()) -> int:
-        """Execute a write statement (INSERT, UPDATE, DELETE, ...) and return the affected row count."""
+        """Execute a write statement (INSERT, UPDATE, DELETE, ...) and return the affected row count.
+
+        :param operation: The SQL statement to execute.
+        :param params: Statement placeholder values.
+        :returns: The number of rows the statement affected.
+        """
         with self._cursor(operation, params) as cursor:
             logging.debug('%s rows affected', cursor.rowcount)
             return cursor.rowcount
@@ -73,6 +92,9 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
         autocommit stays on for every single-statement path; this executor suspends it for its own duration and
         restores it in finally, so an exception cannot return a connection to the pool mid-transaction. All
         statements run on this connection, so LAST_INSERT_ID() carries across them.
+
+        :param statements: The (operation, params) pairs to run in order.
+        :returns: The total number of rows affected across all statements.
         """
         self.autocommit = False
         total = 0

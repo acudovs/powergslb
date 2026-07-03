@@ -53,6 +53,11 @@ class Config:
         """Return one typed value, honoring an environment override.
 
         When the option is not in the file, default supplies both the value and the type to coerce to.
+
+        :param section: The config section name.
+        :param option: The option name within the section.
+        :param default: The value (and target type) when the option is absent.
+        :returns: The configured or overridden value.
         """
         value = self._data.get(section, {}).get(option, default)
         env_key = f'POWERGSLB_{section}_{option}'.upper()
@@ -65,6 +70,9 @@ class Config:
 
         POWERGSLB_<SECTION>_* environment keys are included, so an override can add an option the section
         does not define.
+
+        :param section: The config section name.
+        :returns: The section options with overrides applied, as a _Section dict.
         """
         options = set(self._data.get(section, {}))
         prefix = f'POWERGSLB_{section}_'.upper()
@@ -73,7 +81,12 @@ class Config:
 
 
 class _Section(dict[str, Any]):
-    """A config section whose get() and pop() resolves through Config, so an env override coerces to default's type."""
+    """A config section whose get() and pop() resolves through Config, so an env override coerces to default's type.
+
+    :param data: The resolved section options.
+    :param config: The owning Config the lookups go through.
+    :param section: The section name within the Config.
+    """
 
     def __init__(self, data: dict[str, Any], config: Config, section: str) -> None:
         super().__init__(data)
@@ -81,11 +94,21 @@ class _Section(dict[str, Any]):
         self._section = section
 
     def get(self, option: str, default: Any = None) -> Any:  # type: ignore[override]
-        """Return the option, coercing a POWERGSLB_<SECTION>_<OPTION> override to default's type."""
+        """Return the option, coercing a POWERGSLB_<SECTION>_<OPTION> override to default's type.
+
+        :param option: The option name within the section.
+        :param default: The value (and target type) when the option is absent.
+        :returns: The configured or overridden value.
+        """
         return self._config.get(self._section, option, default)
 
     def pop(self, option: str, default: Any = None) -> Any:  # type: ignore[override]
-        """Remove the option and return it, coercing a POWERGSLB_<SECTION>_<OPTION> override to default's type."""
+        """Remove the option and return it, coercing a POWERGSLB_<SECTION>_<OPTION> override to default's type.
+
+        :param option: The option name within the section.
+        :param default: The value (and target type) when the option is absent.
+        :returns: The configured or overridden value.
+        """
         value = self._config.get(self._section, option, default)
         super().pop(option, default)
         return value

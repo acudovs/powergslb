@@ -62,6 +62,7 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         """Serve the request once routing has matched this handler's 'route'."""
 
     def _handle_request(self) -> None:
+        """Set the per-request client data, split the URL, and dispatch; an off-route path gets a 404."""
         self._set_remote_ip()
         self._urlsplit()
 
@@ -85,6 +86,12 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         self.body = self.rfile.read(content_length)
 
     def _send_content(self, content: str, code: int = 200, debug: bool = True) -> None:
+        """Send a JSON response.
+
+        :param content: The JSON text to send.
+        :param code: HTTP status code of the response.
+        :param debug: When true, log the content at DEBUG.
+        """
         content_bytes = content.encode('utf-8')
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -99,7 +106,10 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         self.remote_ip = netaddr.IPAddress(self.address_string())
 
     def _urlsplit(self) -> None:
-        # self.path and self.query stay percent-encoded.
+        """Split self.path into the path segments (self.dirs) and the query string (self.query).
+
+        The segments are percent-decoded; self.path and self.query stay percent-encoded.
+        """
         path, self.query = urlsplit(self.path)[2:4]
         self.dirs = unquote(path).split('/')[1:]
 
@@ -128,7 +138,10 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         self._handle_request()
 
     def _client_ip(self) -> str:
-        """Client address: remote_ip when set, else the TCP peer."""
+        """Client address: remote_ip when set, else the TCP peer.
+
+        :returns: The client address.
+        """
         return str(self.remote_ip) if self.remote_ip is not None else self.address_string()
 
     def _log(self, level: int, format: str, *args: Any) -> None:  # pylint: disable=redefined-builtin

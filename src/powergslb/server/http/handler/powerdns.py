@@ -65,6 +65,9 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
         Per qtype: keep only in-view records and if none are in view drop that qtype. Then drop down records, unless
         that empties in-view set, in which case keep them all ('all down = all up', so DNS never fails entirely).
         Finally, the rrset's routing policy chooses the answers. A malformed policy is logged and drops that qtype.
+
+        :param all_records: The records at the queried name, keyed by qtype.
+        :returns: The chosen answers keyed by qtype; a qtype with no in-view records or a bad policy is absent.
         """
         context = self.context
         selected: dict[str, list[dict[str, Any]]] = {}
@@ -84,7 +87,10 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
         return selected
 
     def _get_all_domains(self) -> list[dict[str, Any]]:
-        """Build the getAllDomains zone list; a domain with an unparsable SOA serial is skipped and logged."""
+        """Build the getAllDomains zone list; a domain with an unparsable SOA serial is skipped and logged.
+
+        :returns: One zone entry per domain in the remote backend getAllDomains shape.
+        """
         # A flat flag, so the stdlib parser suffices; strict: honored only for exactly one 'true' value.
         include_disabled = parse_qs(self.query or '').get('includeDisabled') == ['true']
 
@@ -114,6 +120,9 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
         only when every record's view matches all clients (ViewRule.matches_all) and the routing policy is
         client-independent, so resolvers may cache the shared answer globally. Any narrower view/policy makes the answer
         subnet specific and carries the client's source prefix. An ECS opt-out (source prefix 0) yields 0 naturally.
+
+        :param group: The full rrset (all records of one qtype at the name), not just the selected answers.
+        :returns: The scopeMask prefix length for the group's answers.
         """
         if not group or group[0]['qtype'] in self._authority_qtypes:
             return 0
@@ -133,7 +142,10 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
         return 0
 
     def _get_lookup(self) -> list[dict[str, Any]]:
-        """Answer a lookup: fetch the records for (qname, qtype), select per rrset, and shape the response fields."""
+        """Answer a lookup: fetch the records for (qname, qtype), select per rrset, and shape the response fields.
+
+        :returns: The answer rows with qname, qtype, content, ttl and scopeMask.
+        """
         self.dirs[2] = self.dirs[2].rstrip('.')
         records = self.database.gslb_records(*self.dirs[2:])
         all_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -153,6 +165,10 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
         """Return True when the client matches the record's view rule.
 
         A malformed rule is logged and treated as non-matching (returns False).
+
+        :param record: The record carrying its view 'rule'.
+        :param context: Per-request client data the rule is matched against.
+        :returns: True when the client is in the record's view.
         """
         try:
             return ViewRule.resolve(record['rule']).matches(context)
@@ -161,7 +177,10 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
             return False
 
     def content(self) -> str:
-        """Dispatch /dns/lookup/<qname>/<qtype> and /dns/getAllDomains; anything else yields a false result."""
+        """Dispatch /dns/lookup/<qname>/<qtype> and /dns/getAllDomains; anything else yields a false result.
+
+        :returns: The JSON-encoded remote backend reply.
+        """
         if len(self.dirs) == 4 and self.dirs[1] == 'lookup':
             content: dict[str, Any] = {'result': self._get_lookup()}
         elif len(self.dirs) == 2 and self.dirs[1] == 'getAllDomains':

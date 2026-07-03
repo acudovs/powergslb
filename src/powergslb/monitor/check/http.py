@@ -40,6 +40,11 @@ class HttpCheck(Check):
     host: str = ''
 
     def __post_init__(self) -> None:
+        """Validate the URL, method and match options on top of the base field validation; pre-parse the status spec.
+
+        :raises ValueError: When 'url' is not an http(s) URL, 'method' is not GET or HEAD, or 'body_match' is
+            combined with HEAD.
+        """
         super().__post_init__()
         parts = urlsplit(self.url)
         if parts.scheme not in ('http', 'https') or not parts.netloc:
@@ -74,6 +79,10 @@ class HttpCheck(Check):
         return frozenset(statuses)
 
     def execute(self) -> bool:
+        """Issue one HTTP request to 'url' and evaluate the response.
+
+        :returns: True when the request completed in time with 'expected_status' and its body matches 'body_match'.
+        """
         deadline = time.monotonic() + self.timeout
         parts = urlsplit(self.url)
         hostname = parts.hostname

@@ -8,7 +8,11 @@ __all__ = ['hash_password', 'verify_password']
 
 
 def hash_password(password: str) -> str:
-    """Hash a password in Linux shadow crypt(3) SHA-512 ($6$) format with a random salt."""
+    """Hash a password in Linux shadow crypt(3) SHA-512 ($6$) format with a random salt.
+
+    :param password: The plaintext password to hash.
+    :returns: The $6$ hash string.
+    """
     return crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
 
 
@@ -23,6 +27,10 @@ def verify_password(password: str, stored: str) -> bool:
     An empty stored hash (an unknown user) never matches, yet verification still performs a full crypt and
     comparison against a dummy hash, so the response time does not reveal that the hash was absent. A malformed
     stored hash is rejected outright.
+
+    :param password: The plaintext password to verify.
+    :param stored: The stored crypt(3) hash; empty for an unknown user.
+    :returns: True when the password matches the stored hash.
     """
     accept = bool(stored)
     salt = stored if accept else _DUMMY_HASH

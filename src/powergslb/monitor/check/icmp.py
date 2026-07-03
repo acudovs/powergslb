@@ -22,4 +22,8 @@ class IcmpCheck(Check):
     ip: IPAddress
 
     def execute(self) -> bool:
+        """Ping the target 'ip' once.
+
+        :returns: True when the target replies within the timeout.
+        """
         return ping(self.ip, count=1, timeout=self.timeout, privileged=self.privileged).is_alive

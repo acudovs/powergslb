@@ -21,5 +21,9 @@ class TcpCheck(Check):
     port: Port
 
     def execute(self) -> bool:
+        """Open one TCP connection to the target.
+
+        :returns: True when the connection is established within the timeout.
+        """
         with socket.create_connection((self.ip, self.port), self.timeout):
             return True

@@ -22,6 +22,7 @@ class AbstractThread(threading.Thread, abc.ABC):
         self.sleep_interval: float = 0
 
     def run(self) -> None:
+        """Repeat task() every sleep_interval seconds until shutdown() is requested."""
         logging.debug('thread started')
         try:
             while not self.__shutdown_request.is_set():
@@ -33,7 +34,10 @@ class AbstractThread(threading.Thread, abc.ABC):
             self.__stopped.set()
 
     def shutdown(self, timeout: float = 0) -> None:
-        """Signal the thread to stop and wait up to timeout seconds for it to actually stop."""
+        """Signal the thread to stop and wait up to timeout seconds for it to actually stop.
+
+        :param timeout: Seconds to wait for the thread to stop; 0 waits indefinitely.
+        """
         logging.debug('thread shutdown')
         self.__shutdown_request.set()
         self.__stopped.wait(timeout)

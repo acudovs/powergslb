@@ -36,21 +36,38 @@ class SystemService:
         self._signum: int | None = None
 
     def _is_threads_alive(self) -> bool:
+        """Return True while every service thread is alive.
+
+        :returns: True while every service thread is alive.
+        """
         return all(service_thread.is_alive() for service_thread in self.service_threads)
 
     def _on_signal(self, signum: int, _frame: FrameType | None) -> None:
+        """Record the received signal and wake the supervision loop for shutdown.
+
+        :param signum: The received signal number.
+        :param _frame: Unused; required by the signal handler signature.
+        """
         self._signum = signum
         self._shutdown.set()
 
     @staticmethod
     def systemd_notify(status: str, unset_environment: bool = False) -> None:
-        """Send a status notification to systemd if the process was booted by it."""
+        """Send a status notification to systemd if the process was booted by it.
+
+        :param status: The sd_notify state string (e.g. 'READY=1', 'STOPPING=1').
+        :param unset_environment: When true, unset NOTIFY_SOCKET so later notifications are no-ops.
+        """
         if systemd.daemon.booted():
             systemd.daemon.notify(status, unset_environment)
 
     @staticmethod
     def watchdog_interval(default_interval: float) -> float:
-        """Return the loop sleep interval: half of WATCHDOG_USEC capped at default_interval, or default_interval."""
+        """Return the loop sleep interval: half of WATCHDOG_USEC capped at default_interval, or default_interval.
+
+        :param default_interval: Upper bound on the loop sleep, in seconds.
+        :returns: The loop sleep interval in seconds.
+        """
         if 'WATCHDOG_USEC' in os.environ:
             return min(default_interval, int(os.environ['WATCHDOG_USEC']) / 1000000 / 2)
         return default_interval

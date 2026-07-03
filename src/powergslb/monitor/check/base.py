@@ -15,13 +15,21 @@ __all__ = ['Check', 'IPAddress', 'Port', 'Positive', 'Regex']
 
 
 def _validate_port(value: int) -> None:
-    """Reject a TCP/UDP port outside the 1..65535 range."""
+    """Reject a TCP/UDP port outside the 1..65535 range.
+
+    :param value: The port number to validate.
+    :raises ValueError: When the value is out of range.
+    """
     if not 1 <= value <= 65535:
         raise ValueError('out of range')
 
 
 def _validate_positive(value: int) -> None:
-    """Reject a non-positive count/duration (interval, timeout, fall, rise must be >= 1)."""
+    """Reject a non-positive count/duration (interval, timeout, fall, rise must be >= 1).
+
+    :param value: The count or duration to validate.
+    :raises ValueError: When the value is not positive.
+    """
     if value < 1:
         raise ValueError('not positive')
 
@@ -56,7 +64,10 @@ class Check(abc.ABC):
     rise: Positive = 5
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Register the subclass in the type registry under its name token; reject duplicate names."""
+        """Register the subclass in the type registry under its name token; reject duplicate names.
+
+        :raises ValueError: When another subclass already registered the name.
+        """
         super().__init_subclass__(**kwargs)
         if cls.name in Check._registry:
             raise ValueError(f"duplicate check type '{cls.name}'")
@@ -64,7 +75,10 @@ class Check(abc.ABC):
 
     @classmethod
     def _config_options(cls) -> set[str]:
-        """Return the names of this subclass's own, non-private ClassVar attributes (the operator-tunable options)."""
+        """Return the names of this subclass's own, non-private ClassVar attributes (the operator-tunable options).
+
+        :returns: The tunable option names.
+        """
         hints = get_type_hints(cls)
         return {name for name in vars(cls).get('__annotations__', {})
                 if not name.startswith('_') and get_origin(hints.get(name)) is ClassVar}
@@ -75,6 +89,8 @@ class Check(abc.ABC):
 
         A ClassVar keeps its in-code default when its key is absent; a present value is coerced to the default's type.
         An option that matches no <type>_<option> of any registered check is logged as a warning (likely a typo).
+
+        :param options: The [monitor] config options.
         """
         consumed: set[str] = set()
         for type_name, subclass in cls._registry.items():
@@ -149,4 +165,6 @@ class Check(abc.ABC):
         """Run the check once; return True when the target is healthy.
 
         Subclasses MUST never block indefinitely and return within roughly self.timeout seconds.
+
+        :returns: True when the target is healthy.
         """

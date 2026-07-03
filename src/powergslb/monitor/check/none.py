@@ -17,4 +17,8 @@ class NoCheck(Check):
     skip = True
 
     def execute(self) -> bool:
+        """Report the target healthy unconditionally.
+
+        :returns: Always True.
+        """
         return True

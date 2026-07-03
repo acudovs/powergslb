@@ -22,6 +22,7 @@ class HTTPServerManager(threading.Thread):
     :param database_config: mysql.connector connect kwargs.
     :param status_registry: Shared health status registry.
     :param handler: The request handler class this port serves; selects the DNS or admin surface.
+    :raises ValueError: When TLS is enabled without a certificate.
     """
 
     def __init__(self,
@@ -76,7 +77,10 @@ class HTTPServerManager(threading.Thread):
             server.serve_forever()
 
     def shutdown(self, timeout: float = 0) -> None:
-        """Signal the server to stop serving and wait up to timeout seconds for the thread to stop."""
+        """Signal the server to stop serving and wait up to timeout seconds for the thread to stop.
+
+        :param timeout: Seconds to wait for the server thread to exit; 0 waits indefinitely.
+        """
         with self._lock:
             self._stopping = True
             server = self._server
@@ -95,5 +99,7 @@ def _default_root() -> str:
     Resolves the on-disk path of the powergslb.resources package. The admin UI is served from its admin/
     subdirectory, so this returns the package directory itself (the parent of admin/). Assumes a normally
     installed wheel, where importlib.resources yields a real filesystem path; PowerGSLB is not run from a zipapp.
+
+    :returns: The filesystem path of the powergslb.resources package.
     """
     return str(importlib.resources.files('powergslb.resources'))

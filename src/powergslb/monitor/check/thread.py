@@ -31,6 +31,7 @@ class CheckThread(AbstractThread):
         return self.status_writer.content_id
 
     def _check_fall(self) -> None:
+        """Count a failed run; after 'fall' consecutive failures mark the content down."""
         self._fall += 1
         self._rise = 0
 
@@ -39,6 +40,7 @@ class CheckThread(AbstractThread):
             self.status_writer.set_down()
 
     def _check_rise(self) -> None:
+        """Count a successful run; after 'rise' consecutive successes mark the content up."""
         self._fall = 0
         self._rise += 1
 

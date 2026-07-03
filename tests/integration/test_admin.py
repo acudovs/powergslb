@@ -81,7 +81,7 @@ def test_list_views(w2ui: W2UIClient) -> None:
 def test_list_types(w2ui: W2UIClient) -> None:
     data = w2ui.request('get-records', 'types').json()
     assert data['status'] == 'success'
-    assert {'A', 'AAAA', 'NS', 'SOA', 'MX', 'TXT', 'CNAME', 'SRV'}.issubset(
+    assert {'A', 'AAAA', 'NS', 'SOA', 'MX', 'TXT', 'CNAME', 'SRV', 'SVCB', 'HTTPS', 'CAA'}.issubset(
         {r['name_type'] for r in data['records']})
 
 

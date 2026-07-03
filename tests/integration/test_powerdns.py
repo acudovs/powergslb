@@ -74,6 +74,24 @@ def test_dig_srv_record(dns_addr: str) -> None:
     assert lines[0] == '10 100 5060 sip.example.com.'
 
 
+def test_dig_svcb_record(dns_addr: str) -> None:
+    lines = _dig(dns_addr, '_dns.example.com', 'SVCB')
+    # priority target SvcParams
+    assert lines == ['1 ns1.example.com. alpn="dot"']
+
+
+def test_dig_https_record(dns_addr: str) -> None:
+    lines = _dig(dns_addr, 'example.com', 'HTTPS')
+    # priority target SvcParams
+    assert lines == ['1 . alpn="h2,h3"']
+
+
+def test_dig_caa_record(dns_addr: str) -> None:
+    lines = _dig(dns_addr, 'example.com', 'CAA')
+    # flags tag "value"
+    assert lines == ['0 issue "ca.example.com"']
+
+
 def test_dig_unknown_name_returns_nothing(dns_addr: str) -> None:
     # A name with no records yields an empty +short answer (NXDOMAIN / NODATA)
     lines = _dig(dns_addr, 'no.such.name.example.com', 'A')

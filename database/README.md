@@ -226,7 +226,8 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
   password) or via `powergslb`'s `hash_password` function, then `UPDATE users`.
 - **Views**: `Public` (`0.0.0.0/0 ::/0`), `Private` (RFC 1918 ranges),
   and `Europe` (`country:DE country:FR continent:EU`) as a GeoIP example.
-- **Types**: the common DNS types (A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, SRV) keyed by their IANA numeric value.
+- **Types**: the common DNS types (A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, SRV, SVCB, HTTPS, CAA) keyed by their IANA
+  numeric value.
 - **Monitors**: `No check` (id 1, the inert default every seed record uses; its JSON is `{"type": "none"}` - the
   registered `none` check type that MonitorManager never threads) plus one example per other check type - `exec`,
   `icmp`, `http`, `tcp`, `tls` - with two `http` examples, one plain HTTP and one HTTPS.
@@ -235,8 +236,9 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 - **Routings**: `Round robin` (id 1, the default every rrset uses; `{"type": "round-robin"}`), `Weighted random`
   (`{"type": "weighted-random"}`), and `Sticky hash` (`{"type": "sticky-hash"}`). Every seed rrset uses round-robin;
   weighted-random and sticky-hash ship as ready-to-use policies you can point an rrset at.
-- **Zones**: `example.com`, `example.net`, `example.org`, each with SOA, NS, A, AAAA, CNAME, MX, SPF, TXT, and SRV.
-  All addresses are from the documentation ranges (`192.0.2.0/24`, `2001:db8::/32`) so the seed is safe to publish.
+- **Zones**: `example.com`, `example.net`, `example.org`, each with SOA, NS, A, AAAA, CNAME, MX, SPF, TXT, SRV,
+  SVCB, HTTPS, and CAA. All addresses are from the documentation ranges (`192.0.2.0/24`, `2001:db8::/32`) so the seed
+  is safe to publish.
 
 The three zones are identical in structure, which makes the seed a useful template. Because record names are stored
 relative to the zone, you can adopt a seed zone by renaming it: edit its `Domain` in the admin UI, or run

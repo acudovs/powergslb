@@ -107,10 +107,40 @@ def test_lookup_srv(dns: DNSClient) -> None:
     assert r['content'] == '10 100 5060 sip.example.com'
 
 
+def test_lookup_svcb(dns: DNSClient) -> None:
+    result = dns.lookup('_dns.example.com', 'SVCB')
+    assert len(result) == 1
+    r = result[0]
+    assert r['qtype'] == 'SVCB'
+    assert r['qname'] == '_dns.example.com'
+    assert r['ttl'] == 3600
+    assert r['content'] == '1 ns1.example.com. alpn="dot"'
+
+
+def test_lookup_https(dns: DNSClient) -> None:
+    result = dns.lookup('example.com', 'HTTPS')
+    assert len(result) == 1
+    r = result[0]
+    assert r['qtype'] == 'HTTPS'
+    assert r['qname'] == 'example.com'
+    assert r['ttl'] == 3600
+    assert r['content'] == '1 . alpn="h2,h3"'
+
+
+def test_lookup_caa(dns: DNSClient) -> None:
+    result = dns.lookup('example.com', 'CAA')
+    assert len(result) == 1
+    r = result[0]
+    assert r['qtype'] == 'CAA'
+    assert r['qname'] == 'example.com'
+    assert r['ttl'] == 3600
+    assert r['content'] == '0 issue "ca.example.com"'
+
+
 def test_lookup_any_returns_multiple_qtypes(dns: DNSClient) -> None:
     result = dns.lookup('example.com', 'ANY')
     qtypes = {r['qtype'] for r in result}
-    assert {'SOA', 'NS', 'A', 'AAAA', 'MX', 'TXT'}.issubset(qtypes)
+    assert {'SOA', 'NS', 'A', 'AAAA', 'MX', 'TXT', 'HTTPS', 'CAA'}.issubset(qtypes)
 
 
 def test_lookup_order_is_deterministic(dns: DNSClient) -> None:

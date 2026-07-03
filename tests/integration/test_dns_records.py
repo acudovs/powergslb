@@ -295,6 +295,58 @@ def test_mx_record_without_priority_number(
     assert result[0]['content'] == content
 
 
+# CAA record created through the admin API
+
+def test_caa_record_create_and_lookup(
+        w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    """A CAA record saved through the admin API is returned by the DNS backend with its quotes intact.
+
+    The read path is type-agnostic: the content string, including the double-quoted value field, passes through
+    to PowerDNS verbatim.
+    """
+    name = 'caa-test'
+    fqdn = f'{name}.example.com'
+    content = '0 issue "ca.example.net"'
+
+    r = w2ui.save('records', name=name, content=content,
+                  **{**base_record, 'name_type': 'CAA', 'ttl': 3600})
+    assert r.json()['status'] == 'success'
+    recid = w2ui.find_recid('records', name=name, content=content)
+    assert recid is not None
+    cleanup.append(('records', recid))
+
+    result = dns.lookup(fqdn, 'CAA')
+    assert len(result) == 1
+    assert result[0]['qtype'] == 'CAA'
+    assert result[0]['content'] == content
+
+
+# HTTPS record created through the admin API
+
+def test_https_record_create_and_lookup(
+        w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    """An HTTPS record saved through the admin API is returned by the DNS backend verbatim.
+
+    The content is an RFC 9460 ServiceMode binding whose SvcParams ('=', quotes, commas) must survive both the
+    w2ui save path and the DNS read path unchanged.
+    """
+    name = 'https-test'
+    fqdn = f'{name}.example.com'
+    content = '1 svc.example.net. alpn="h2" ipv4hint=192.0.2.91'
+
+    r = w2ui.save('records', name=name, content=content,
+                  **{**base_record, 'name_type': 'HTTPS', 'ttl': 3600})
+    assert r.json()['status'] == 'success'
+    recid = w2ui.find_recid('records', name=name, content=content)
+    assert recid is not None
+    cleanup.append(('records', recid))
+
+    result = dns.lookup(fqdn, 'HTTPS')
+    assert len(result) == 1
+    assert result[0]['qtype'] == 'HTTPS'
+    assert result[0]['content'] == content
+
+
 # sticky-hash: IPv6 client
 
 def test_sticky_hash_ipv6_client(

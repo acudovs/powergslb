@@ -191,7 +191,8 @@ class W2UIDatabaseMixIn(abc.ABC):
         """
         operation = """
             SELECT `id` AS `recid`,
-              `domain`
+              `domain`,
+              `description`
             FROM `domains`
         """
         params: tuple[Any, ...] = ()
@@ -351,26 +352,28 @@ class W2UIDatabaseMixIn(abc.ABC):
 
         return self._select(operation, params)
 
-    def save_domains(self, save_recid: int, domain: str, **_: Any) -> int:
+    def save_domains(self, save_recid: int, domain: str, description: str = '', **_: Any) -> int:
         """Insert or update a domain row and return the row count.
 
         :param save_recid: The domain id to update; 0 inserts a new row.
         :param domain: The zone name.
+        :param description: The free-form domain note.
         :returns: The number of rows affected.
         """
         if save_recid:
             operation = """
                 UPDATE `domains`
-                SET `domain` = %s
+                SET `domain` = %s,
+                  `description` = %s
                 WHERE `id` = %s
             """
-            params: tuple[Any, ...] = (domain, save_recid)
+            params: tuple[Any, ...] = (domain, description, save_recid)
         else:
             operation = """
-                INSERT INTO `domains` (`domain`)
-                VALUES (%s)
+                INSERT INTO `domains` (`domain`, `description`)
+                VALUES (%s, %s)
             """
-            params = (domain,)
+            params = (domain, description)
 
         return self._modify(operation, params)
 

@@ -35,10 +35,10 @@ INSERT INTO `routings` (`id`, `policy`, `policy_json`) VALUES
   (2, 'Weighted random', '{"type": "weighted-random"}'),
   (3, 'Sticky hash', '{"type": "sticky-hash"}');
 
-INSERT INTO `domains` (`id`, `domain`) VALUES
-  (1, 'example.com'),
-  (2, 'example.net'),
-  (3, 'example.org');
+INSERT INTO `domains` (`id`, `domain`, `description`) VALUES
+  (1, 'example.com', 'IANA example zone (.com)'),
+  (2, 'example.net', 'IANA example zone (.net)'),
+  (3, 'example.org', 'IANA example zone (.org)');
 
 -- rrsets: one per (zone, relative record name, type) carrying ttl and a routing policy; records reference rrset_id.
 

@@ -24,7 +24,7 @@ var gridSortData = [
 var gridPopupForm = (function (event) {
     switch (event.target) {
         case 'gridDomains':
-            openPopupForm(event, 'domain', 400, 175, 'formDomains');
+            openPopupForm(event, 'domain', 400, 210, 'formDomains');
             break;
         case 'gridMonitors':
             openPopupForm(event, 'monitor', 400, 210, 'formMonitors');
@@ -246,11 +246,13 @@ var config = {
         url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
-            {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true}
+            {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true},
+            {field: 'description', caption: 'Description', size: '300px', resizable: true, sortable: true}
         ],
         searches: [
             {field: 'recid', caption: 'ID', type: 'int'},
-            {field: 'domain', caption: 'Domain', type: 'text'}
+            {field: 'domain', caption: 'Domain', type: 'text'},
+            {field: 'description', caption: 'Description', type: 'text'}
         ],
         onAdd: gridPopupForm,
         onDblClick: gridPopupForm,
@@ -264,7 +266,8 @@ var config = {
         style: formStyle,
         url: w2uiUrl,
         fields: [
-            {field: 'domain', type: 'text', required: true, html: {caption: 'Domain: '}}
+            {field: 'domain', type: 'text', required: true, html: {caption: 'Domain: '}},
+            {field: 'description', type: 'text', required: false, html: {caption: 'Description: '}}
         ],
         onSave: function () {
             w2ui.gridDomains.reload();
@@ -465,7 +468,7 @@ var config = {
         columns: [
             {field: 'recid', caption: 'Value', size: '50px', resizable: true, sortable: true},
             {field: 'name_type', caption: 'Type', size: '100px', resizable: true, sortable: true},
-            {field: 'description', caption: 'Description', size: '150px', resizable: true, sortable: true}
+            {field: 'description', caption: 'Description', size: '300px', resizable: true, sortable: true}
         ],
         searches: [
             {field: 'recid', caption: 'Value', type: 'int'},

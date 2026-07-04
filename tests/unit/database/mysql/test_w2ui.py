@@ -178,15 +178,25 @@ def test_get_users_with_recid_appends_id(database: _FakeW2UIDatabase) -> None:
 # save_* insert vs update branch
 
 def test_save_domains_insert(database: _FakeW2UIDatabase) -> None:
-    database.save_domains(0, 'example.com')
+    database.save_domains(0, 'example.com', 'IANA example zone')
     assert _last_sql(database).startswith('INSERT')
-    assert _last_params(database) == ('example.com',)
+    assert _last_params(database) == ('example.com', 'IANA example zone')
 
 
 def test_save_domains_update(database: _FakeW2UIDatabase) -> None:
-    database.save_domains(5, 'example.com')
+    database.save_domains(5, 'example.com', 'IANA example zone')
     assert _last_sql(database).startswith('UPDATE')
-    assert _last_params(database) == ('example.com', 5)
+    assert _last_params(database) == ('example.com', 'IANA example zone', 5)
+
+
+def test_save_domains_description_defaults_empty(database: _FakeW2UIDatabase) -> None:
+    database.save_domains(0, 'example.com')
+    assert _last_params(database) == ('example.com', '')
+
+
+def test_get_domains_selects_description(database: _FakeW2UIDatabase) -> None:
+    database.get_domains()
+    assert '`description`' in _last_sql(database)
 
 
 def test_save_monitors_insert_and_update(database: _FakeW2UIDatabase) -> None:

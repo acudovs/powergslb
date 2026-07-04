@@ -122,7 +122,7 @@ def test_unknown_command_and_data_return_error(w2ui: W2UIClient) -> None:
 # get-record (single)
 
 def test_get_record_domain_and_monitor(w2ui: W2UIClient) -> None:
-    assert w2ui.record('domains', 1) == {'recid': 1, 'domain': 'example.com'}
+    assert w2ui.record('domains', 1) == {'recid': 1, 'domain': 'example.com', 'description': 'IANA example zone (.com)'}
 
     record = w2ui.record('monitors', 1)
     assert record['recid'] == 1
@@ -228,11 +228,12 @@ def test_crud_domain_lifecycle(w2ui: W2UIClient, cleanup: list[tuple[str, int]])
     assert recid is not None
     cleanup.append(('domains', recid))
 
-    assert w2ui.record('domains', recid) == {'recid': recid, 'domain': 'crud.integration.test'}
+    assert w2ui.record('domains', recid) == {'recid': recid, 'domain': 'crud.integration.test', 'description': ''}
 
-    assert w2ui.save('domains', recid=recid,
-                     domain='crud.updated.test').json()['status'] == 'success'
-    assert w2ui.record('domains', recid)['domain'] == 'crud.updated.test'
+    assert w2ui.save('domains', recid=recid, domain='crud.updated.test',
+                     description='updated by test').json()['status'] == 'success'
+    assert w2ui.record('domains', recid) == {'recid': recid, 'domain': 'crud.updated.test',
+                                             'description': 'updated by test'}
 
 
 def test_crud_monitor_lifecycle(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -> None:

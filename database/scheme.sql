@@ -46,6 +46,7 @@ CREATE TABLE `routings` (
 CREATE TABLE `domains` (
   `id` int NOT NULL AUTO_INCREMENT,
   `domain` varchar(255) NOT NULL,
+  `description` varchar(255) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
   UNIQUE KEY `domains_domain_uindex` (`domain`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -31,6 +31,7 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
     * [TCP parameters](#tcp-parameters)
     * [TLS parameters](#tls-parameters)
     * [Trust custom CA certificates](#trust-custom-ca-certificates)
+* [Traffic management patterns](#traffic-management-patterns)
 * [API](#api)
 * [Tests](#tests)
 * [License](#license)
@@ -738,12 +739,8 @@ Every routing policy reads the single per-record `weight`, but interprets it per
 [Routing policies](#routing-policies)). Under the default `round-robin` and under `sticky-hash`, `weight` is a
 **tier**: only the **highest-weight group** of live records is answered; equal-weight records all serve and load-share,
 while lower-weight records stay on standby until every higher-weight record at the name is down. Under
-`weighted-random`, `weight` is a **proportion** of the traffic instead.
-
-The tier behavior enables a **blue-green deployment**: run the new servers alongside the old ones at a lower weight,
-then raise their weight above the current group to cut all traffic over at once. The old servers fall to standby but
-keep serving, so rolling back is just lowering the weight again. It also gives **backup-only** records: put the backups
-in a lower weight tier under the same policy and they serve only once the whole primary tier is down.
+`weighted-random`, `weight` is a **proportion** of the traffic instead. See
+[Traffic management patterns](#traffic-management-patterns) for how the tiers and proportions map to concrete rollouts.
 
 ### Routing policies
 
@@ -955,6 +952,33 @@ system trust store. To check endpoints served by a private or internal CA, add t
 
 The build runs `update-ca-trust`, folding the certificate into the system trust store that OpenSSL and Python's `ssl`
 read, so `tls_verify` succeeds.
+
+---
+
+## Traffic management patterns
+
+The [routing policies](#routing-policies) compose with [weight](#weight-priority) and the
+[health checks](#health-checks) to express the common ways of shifting traffic across your backends. Each pattern is a
+policy plus a weight layout - no extra configuration:
+
+| goal                       | policy            | weight layout                                                     |
+|----------------------------|-------------------|-------------------------------------------------------------------|
+| Blue-green cutover         | `round-robin`     | new environment in a higher tier; lower it to roll back           |
+| Active-passive failover    | `round-robin`     | backups in a lower tier; serve only on full outage of the primary |
+| Canary / progressive / A-B | `weighted-random` | new version at a small proportion; raise it to shift more traffic |
+| Sticky sessions            | `sticky-hash`     | equal-tier records; each client network pins to one endpoint      |
+
+* **Blue-green cutover** (`round-robin`) - run the new servers alongside the old ones in a lower `weight` tier, then
+  raise their weight above the current group to cut all traffic over at once. The old servers fall to standby but keep
+  serving, so rolling back is just lowering the weight again.
+* **Active-passive failover** (`round-robin`) - put backup records in a lower `weight` tier under the same policy; they
+  stay on standby and serve only once every higher-weight record at the name is down.
+* **Canary / progressive / A-B** (`weighted-random`) - `weight` is a traffic proportion, so ship the new version at a
+  small weight next to the old (e.g. `5` vs `95` for a 5 % canary) and raise it gradually for a progressive rollout, or
+  fix the split for A-B testing. With the default `max_answers` of `1` the split is exact across queries.
+* **Sticky sessions** (`sticky-hash`) - each client network deterministically maps to the same endpoint via rendezvous
+  hashing, so stateful backends stay pinned and a health flap or record change remaps only ~1/N clients instead of
+  reshuffling everyone. It also keeps a client on one endpoint across queries, so a user never flips between backends.
 
 ---
 

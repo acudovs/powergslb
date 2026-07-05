@@ -42,7 +42,7 @@ class HTTPServerManager(threading.Thread):
             raise ValueError('TLS is enabled but no certificate is configured')
         self.ciphers: str | None = server_config.get('ciphers')
         self.root: str = server_config.get('root') or _default_root()
-        self.keep_alive_timeout: float = server_config.get('keep_alive_timeout', 30)
+        self.keep_alive_timeout: float = server_config.get('keep_alive_timeout', 300)
         self._database_config = database_config
         self._status_registry = status_registry
         self._handler = handler

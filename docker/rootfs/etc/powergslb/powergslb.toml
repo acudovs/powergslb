@@ -26,7 +26,6 @@ database = "/usr/share/powergslb/dbip-country-lite.mmdb"
 [server]
 address = "127.0.0.1"
 port = 8080
-keep_alive_timeout = 300
 
 [admin]
 address = "0.0.0.0"

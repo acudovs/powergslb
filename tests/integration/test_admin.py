@@ -11,6 +11,7 @@ Most tests drive the API through the w2ui client fixture; tests that exercise au
 requests use requests directly.
 """
 
+import re
 from typing import Any
 
 import requests
@@ -323,6 +324,23 @@ def test_admin_nonexistent_file_returns_404(admin_url: str) -> None:
     r = requests.get(f'{admin_url}/admin/no-such-file.txt',
                      auth=('admin', 'admin'), verify=False, timeout=10)
     assert r.status_code == 404
+
+
+def test_admin_index_asset_references_resolve(admin_url: str) -> None:
+    # every asset referenced by the dashboard page is served with a matching content type
+    content_types = {'.css': 'css', '.js': 'javascript', '.svg': 'svg'}
+    index = requests.get(f'{admin_url}/admin/',
+                         auth=('admin', 'admin'), verify=False, timeout=10)
+    assert index.status_code == 200
+
+    refs = re.findall(r'(?:href|src)="([^"]+)"', index.text)
+    assert refs
+    for ref in refs:
+        r = requests.get(f'{admin_url}/admin/{ref}',
+                         auth=('admin', 'admin'), verify=False, timeout=10)
+        assert r.status_code == 200, ref
+        suffix = ref[ref.rfind('.'):]
+        assert content_types[suffix] in r.headers.get('Content-Type', ''), ref
 
 
 # search OR logic

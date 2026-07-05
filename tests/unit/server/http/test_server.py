@@ -128,6 +128,7 @@ def test_init_defaults_root_to_bundled_resources(status_registry: StatusRegistry
                                status_registry, PowerDNSRequestHandler, name='Admin')
     assert thread.root == server_module._default_root()
     assert os.path.isfile(os.path.join(thread.root, 'admin', 'index.html'))
+    assert os.path.isfile(os.path.join(thread.root, 'admin', 'src', 'favicon.svg'))
 
 
 # run + shutdown: plain HTTP

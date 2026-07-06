@@ -589,11 +589,11 @@ is a boolean, and the rest are strings.
 
 | section      | purpose                         | key options                                                   |
 |--------------|---------------------------------|---------------------------------------------------------------|
-| `[database]` | MySQL / MariaDB connection      | `database`, `user`, `password`, `host`, `port`, `unix_socket` |
 | `[logging]`  | Python logging                  | `format`, `level`                                             |
-| `[monitor]`  | health-check engine             | `update_interval` (seconds), `icmp_privileged` (bool)         |
+| `[database]` | MySQL / MariaDB connection      | `database`, `user`, `password`, `host`, `port`, `unix_socket` |
 | `[server]`   | DNS interface (Remote Backend)  | `address`, `port`, TLS options, `keep_alive_timeout`          |
 | `[admin]`    | admin interface (web UI + API)  | `address`, `port`, TLS options, `keep_alive_timeout`, `root`  |
+| `[monitor]`  | health-check engine             | `update_interval` (seconds), per-check-type knobs             |
 | `[geoip]`    | geo routing for [views](#views) | `database` (path to a GeoIP database)                         |
 
 The `[database]` is passed straight to `mysql.connector` as connect kwargs. When `unix_socket` is set it takes
@@ -612,6 +612,18 @@ The bundled PowerDNS reaches the `[server]` DNS interface over loopback, so it s
 for an external PowerDNS instance, enable TLS on `[server]` the same way as on `[admin]` - just set `ssl = true` and
 point `cert` (and `key`) at a certificate - then switch the Remote Backend URL to `https://`.
 
+The `[monitor]` section tunes the health-check engine as a whole. `update_interval` is how often it re-reads the
+monitor configuration from the database; the remaining keys are `<type>_<option>` defaults applied to every check of
+that type (unlike the per-monitor JSON in [Health checks](#health-checks), these are process-global):
+
+| option              | type | default               | effect                                                               |
+|---------------------|------|-----------------------|----------------------------------------------------------------------|
+| `update_interval`   | int  | `60`                  | Seconds between database re-reads of the monitor configuration.      |
+| `exec_output_chunk` | int  | `65536`               | Bytes of command output searched by a check's `output_match`.        |
+| `http_body_chunk`   | int  | `65536`               | Bytes of the HTTP body read and searched by a check's `body_match`.  |
+| `http_user_agent`   | str  | `PowerGSLB/<version>` | `User-Agent` header every HTTP check sends.                          |
+| `icmp_privileged`   | bool | `true`                | Raw ICMP socket (`CAP_NET_RAW`) vs. an unprivileged datagram socket. |
+
 The `[geoip]` section `database` is the path to a MaxMind DB (MMDB) file. The Docker image bundles the
 [DB-IP IP-to-Country Lite](https://db-ip.com/db/download/ip-to-country-lite) at
 `/usr/share/powergslb/dbip-country-lite.mmdb`; point `database` at a
@@ -620,28 +632,57 @@ The `[geoip]` section `database` is the path to a MaxMind DB (MMDB) file. The Do
 ### Environment overrides
 
 Every option can be overridden by an environment variable named `POWERGSLB_<SECTION>_<OPTION>` (uppercased), coerced to
-the configured value's type. This is how the Docker image is tuned without editing the file. Examples across sections:
+the configured value's type. This is how the Docker image is tuned without editing the file; the systemd unit
+allow-lists these via `PassEnvironment`.
+
+<details>
+<summary>Click to expand example values</summary>
 
 ```shell
+# [logging]
+POWERGSLB_LOGGING_FORMAT="%(levelname)s %(message)s"  # Python logging format string
+POWERGSLB_LOGGING_LEVEL=INFO
+
+# [database]
+POWERGSLB_DATABASE_DATABASE=powergslb
+POWERGSLB_DATABASE_USER=powergslb
+POWERGSLB_DATABASE_PASSWORD=secret
 POWERGSLB_DATABASE_HOST=192.168.1.20                  # connect to a remote database
 POWERGSLB_DATABASE_PORT=3306
 POWERGSLB_DATABASE_UNIX_SOCKET=                       # empty: use host/port over TCP instead of the socket
-POWERGSLB_LOGGING_LEVEL=INFO
+POWERGSLB_DATABASE_CONNECTION_TIMEOUT=1
+
+# [server]
 POWERGSLB_SERVER_ADDRESS=0.0.0.0                      # expose the DNS backend beyond loopback
+POWERGSLB_SERVER_PORT=8080
+POWERGSLB_SERVER_SSL=false
+POWERGSLB_SERVER_CERT=
+POWERGSLB_SERVER_KEY=
+POWERGSLB_SERVER_CIPHERS=
+POWERGSLB_SERVER_KEEP_ALIVE_TIMEOUT=300
+
+# [admin]
+POWERGSLB_ADMIN_ADDRESS=0.0.0.0
 POWERGSLB_ADMIN_PORT=8443
+POWERGSLB_ADMIN_SSL=true
+POWERGSLB_ADMIN_CERT=/etc/powergslb/powergslb.pem
+POWERGSLB_ADMIN_KEY=                                  # separate key file when cert holds only the certificate
+POWERGSLB_ADMIN_CIPHERS=ECDHE-RSA-AES256-GCM-SHA384
+POWERGSLB_ADMIN_KEEP_ALIVE_TIMEOUT=300
+POWERGSLB_ADMIN_ROOT=/tmp/powergslb                   # override the admin UI document root
+
+# [monitor]
+POWERGSLB_MONITOR_UPDATE_INTERVAL=2                   # pick up monitor changes faster (handy for testing)
+POWERGSLB_MONITOR_ICMP_PRIVILEGED=false               # use an unprivileged ICMP datagram socket
+POWERGSLB_MONITOR_HTTP_BODY_CHUNK=65536
+POWERGSLB_MONITOR_HTTP_USER_AGENT=PowerGSLB-probe     # override the HTTP check User-Agent
+POWERGSLB_MONITOR_EXEC_OUTPUT_CHUNK=65536
+
+# [geoip]
 POWERGSLB_GEOIP_DATABASE=/data/GeoLite2-Country.mmdb  # use a MaxMind file instead of the bundled DB-IP Lite
 ```
 
-The `[monitor]` section tunes the health-check engine as a whole - `update_interval` is how often it re-reads the
-monitor configuration from the database, and `icmp_privileged` selects the raw vs. datagram ICMP socket:
-
-```shell
-POWERGSLB_MONITOR_UPDATE_INTERVAL=2       # pick up monitor changes faster (handy for testing)
-POWERGSLB_MONITOR_ICMP_PRIVILEGED=false   # use an unprivileged ICMP datagram socket
-```
-
-Individual health checks are not part of this file: each monitor is a row of JSON in the database, edited in the admin
-UI. See [Health checks](#health-checks) for the per-check parameters.
+</details>
 
 ---
 
@@ -850,8 +891,9 @@ Example:
 {"type": "exec", "args": ["/etc/powergslb/powergslb-check", "${content}"]}
 ```
 
-The whole run is bounded by `timeout`; on timeout the process is killed and the check fails. Only the first 64 KiB of
-output is kept for `output_match`; any excess is drained so a chatty command can still exit.
+The whole run is bounded by `timeout`; on timeout the process is killed and the check fails. Only the first
+`exec_output_chunk` bytes (a `[monitor]` [config](#configuration) knob, default 64 KiB) are kept for `output_match`;
+any excess is drained so a chatty command can still exit.
 
 ### ICMP parameters
 
@@ -887,7 +929,9 @@ sysctl -w net.ipv4.ping_group_range="0 2147483647"
 | tls_verify      | verify the server TLS certificate                                        | `true`      |
 | host            | override the HTTP `Host` header; TCP destination unchanged; `""` off     | `""`        |
 
-Redirects are never followed: a `3xx` is evaluated on its own status (accepted by the default success range).
+Redirects are never followed: a `3xx` is evaluated on its own status (accepted by the default success range). Only the
+first `http_body_chunk` bytes (a `[monitor]` [config](#configuration) knob, default 64 KiB) are read for `body_match`,
+and every request sends the `http_user_agent` header (same section) - both apply to all HTTP checks.
 
 Example:
 

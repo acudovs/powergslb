@@ -1,5 +1,14 @@
 # PowerGSLB - DNS Global Server Load Balancing
 
+[![CI][ci-badge]][ci-runs]
+[![Latest release][release-badge]][releases]
+[![Docker pulls][pulls-badge]][docker-hub]
+[![mypy: checked][mypy-badge]][ci-config]
+[![pylint: 10.00/10][pylint-badge]][ci-config]
+[![coverage: 100%][coverage-badge]][ci-config]
+[![Python 3.12+][python-badge]][pyproject]
+[![License: MIT][license-badge]][license]
+
 PowerGSLB is a DNS-based Global Server Load Balancing (GSLB) solution built as a PowerDNS Authoritative Server
 [Remote Backend](https://doc.powerdns.com/authoritative/backends/remote.html). It continuously health-checks the
 endpoints behind your DNS records and returns only the live ones, honoring weighted priorities, per-rrset routing
@@ -1142,3 +1151,18 @@ PowerGSLB is released under the MIT License. See [LICENSE](LICENSE) for details.
 
 The Docker image bundles the [IP Geolocation by DB-IP](https://db-ip.com/) database,
 licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+[ci-badge]: https://github.com/acudovs/powergslb/actions/workflows/ci.yml/badge.svg
+[ci-runs]: https://github.com/acudovs/powergslb/actions/workflows/ci.yml
+[release-badge]: https://img.shields.io/github/v/release/acudovs/powergslb
+[releases]: https://github.com/acudovs/powergslb/releases
+[pulls-badge]: https://img.shields.io/docker/pulls/acudovs/powergslb
+[docker-hub]: https://hub.docker.com/r/acudovs/powergslb
+[mypy-badge]: https://www.mypy-lang.org/static/mypy_badge.svg
+[pylint-badge]: https://img.shields.io/badge/pylint-10.00%2F10-brightgreen
+[coverage-badge]: https://img.shields.io/badge/coverage-100%25-brightgreen
+[ci-config]: .github/workflows/ci.yml
+[python-badge]: https://img.shields.io/badge/python-3.12%2B-blue
+[pyproject]: pyproject.toml
+[license-badge]: https://img.shields.io/github/license/acudovs/powergslb
+[license]: LICENSE

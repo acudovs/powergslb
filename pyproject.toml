@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "powergslb"
 dynamic = ["version", "dependencies"]
-description = "PowerGSLB is a PowerDNS Global Server Load Balancing (GSLB) solution"
+description = "PowerGSLB is a DNS-based Global Server Load Balancing (GSLB) solution"
 urls = { homepage = "https://github.com/acudovs/powergslb" }
 authors = [{ name = "Aleksejs Cudovs", email = "aleksejs.cudovs@gmail.com" }]
 license = "MIT"

@@ -28,6 +28,17 @@ def test_status_registry_retain() -> None:
     assert registry.is_down(2)
 
 
+def test_status_registry_snapshot() -> None:
+    registry = StatusRegistry()
+    assert not registry.snapshot()
+    registry.add(1)
+    registry.add(2)
+    snapshot = registry.snapshot()
+    assert sorted(snapshot) == [1, 2]
+    registry.remove(1)  # the snapshot is a copy, not a view
+    assert sorted(snapshot) == [1, 2]
+
+
 def test_status_writer() -> None:
     registry = StatusRegistry()
     writer = registry.get_writer(42)

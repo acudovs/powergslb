@@ -3,10 +3,10 @@
 """Tests for AdminRequestHandler.
 
 Basic-auth checking, the WWW-Authenticate response, the route (auth wall, w2ui CRUD, static fall-through),
-query/body parsing, the get/save/delete command handlers, w2ui search/sort/limit post-processing, the admin status
-decoration, and content() dispatch including its error wrapping. The handler is built with __new__ to skip the
-socket-opening __init__; the database is a fake exposing the get_/save_/delete_ methods the handler dispatches to by
-name.
+query/body parsing, the get/save/delete command handlers, the PageRequest plumbing into the SQL read
+pipeline, the status style annotation, and content() dispatch including its error wrapping. The handler is
+built with __new__ to skip the socket-opening __init__; the database is a fake exposing the token-dispatched
+get_data/save_data/delete_data entry points, rejecting unregistered tokens like the real mixin.
 """
 
 import base64
@@ -17,6 +17,7 @@ from typing import Any
 import netaddr
 import pytest
 
+from powergslb.database import PageRequest
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http.handler import admin as admin_module
 from powergslb.server.http.handler.admin import AdminRequestHandler
@@ -25,10 +26,13 @@ from .conftest import Recorder, build_recorder
 
 
 class _FakeDatabase:
-    """Record calls and return configured results for the dynamically-dispatched CRUD methods."""
+    """Record calls and return configured results for the token-dispatched CRUD entry points."""
+
+    _tables = {'domains', 'monitors', 'records', 'routings', 'status', 'types', 'users', 'views'}
 
     def __init__(self) -> None:
         self.get_result: list[dict[str, Any]] = []
+        self.get_total: int | None = None  # when set, overrides the returned total
         self.save_count = 1
         self.delete_count = 1
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
@@ -37,30 +41,31 @@ class _FakeDatabase:
     def _record(self, name: str, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((name, args, kwargs))
 
-    def get_records(self, recid: int = 0) -> list[dict[str, Any]]:
-        self._record('get_records', recid)
+    def _check(self, data: Any) -> None:
+        """Reject an unregistered token with ValueError, mirroring the real mixin's _table."""
+        if data not in self._tables:
+            raise ValueError(f"'{data}' not implemented")
+
+    def _get(self) -> tuple[list[dict[str, Any]], int]:
         if self.raise_on_get:
             raise RuntimeError('db boom')
-        return self.get_result
+        total = self.get_total if self.get_total is not None else len(self.get_result)
+        return self.get_result, total
 
-    def get_status(self) -> list[dict[str, Any]]:
-        self._record('get_status')
-        return self.get_result
+    def get_data(self, data: str, recid: int = 0, page: PageRequest | None = None,
+                 **kwargs: Any) -> tuple[list[dict[str, Any]], int]:
+        self._check(data)
+        self._record('get_data', data, recid, page, **kwargs)
+        return self._get()
 
-    def save_domains(self, recid: int, **kwargs: Any) -> int:
-        self._record('save_domains', recid, **kwargs)
+    def save_data(self, data: str, recid: int, **kwargs: Any) -> int:
+        self._check(data)
+        self._record('save_data', data, recid, **kwargs)
         return self.save_count
 
-    def save_monitors(self, recid: int, **kwargs: Any) -> int:
-        self._record('save_monitors', recid, **kwargs)
-        return self.save_count
-
-    def save_views(self, recid: int, **kwargs: Any) -> int:
-        self._record('save_views', recid, **kwargs)
-        return self.save_count
-
-    def delete_records(self, ids: list[Any]) -> int:
-        self._record('delete_records', tuple(ids))
+    def delete_data(self, data: str, ids: list[Any]) -> int:
+        self._check(data)
+        self._record('delete_data', data, tuple(ids))
         return self.delete_count
 
 
@@ -289,14 +294,14 @@ def test_delete_records_success() -> None:
     handler = _handler()
     handler.query = {'data': 'records', 'selected': [1, 2]}
     assert handler._delete_records() == {'status': 'success'}
-    assert handler.database.calls[-1] == ('delete_records', ((1, 2),), {})  # type: ignore[attr-defined]
+    assert handler.database.calls[-1] == ('delete_data', ('records', (1, 2)), {})  # type: ignore[attr-defined]
 
 
 def test_delete_records_wraps_single_selected() -> None:
     handler = _handler()
     handler.query = {'data': 'records', 'selected': 7}
     handler._delete_records()
-    assert handler.database.calls[-1] == ('delete_records', ((7,),), {})  # type: ignore[attr-defined]
+    assert handler.database.calls[-1] == ('delete_data', ('records', (7,)), {})  # type: ignore[attr-defined]
 
 
 def test_delete_records_not_implemented() -> None:
@@ -320,6 +325,50 @@ def test_get_items_collects_non_null_field() -> None:
     handler.database.get_result = [{'name': 'a'}, {'name': None}, {'other': 1}]  # type: ignore[attr-defined]
     handler.query = {'data': 'records', 'field': 'name'}
     assert handler._get_items() == {'status': 'success', 'items': ['a']}
+
+
+def test_get_items_passes_max_as_limit() -> None:
+    handler = _handler()
+    handler.database.get_result = [{'name': 'a'}]  # type: ignore[attr-defined]
+    handler.query = {'data': 'records', 'field': 'name', 'max': '250'}
+    assert handler._get_items() == {'status': 'success', 'items': ['a']}
+    _, args, _ = handler.database.calls[-1]  # type: ignore[attr-defined]
+    assert args == ('records', 0, PageRequest(limit=250))
+
+
+def test_get_items_pushes_contains_clause() -> None:
+    # the w2ui combo posts get-items as flat search=<typed text> plus max; it always becomes a server-side clause
+    handler = _handler()
+    handler.database.get_result = [{'domain': 'a'}]  # type: ignore[attr-defined]
+    handler.query = {'data': 'domains', 'field': 'domain', 'search': 'typed', 'max': '250'}
+    assert handler._get_items()['items'] == ['a']
+    _, args, _ = handler.database.calls[-1]  # type: ignore[attr-defined]
+    assert args == ('domains', 0, PageRequest(
+        searches=({'field': 'domain', 'type': 'text', 'operator': 'contains', 'value': 'typed'},), limit=250))
+
+
+def test_get_items_without_search_string_is_unfiltered() -> None:
+    # a combo with no typed text (empty combo) still lists the capped page, no clause
+    handler = _handler()
+    handler.database.get_result = [{'domain': 'a'}]  # type: ignore[attr-defined]
+    handler.query = {'data': 'domains', 'field': 'domain', 'max': '250'}
+    assert handler._get_items()['items'] == ['a']
+    _, args, _ = handler.database.calls[-1]  # type: ignore[attr-defined]
+    assert args == ('domains', 0, PageRequest(limit=250))
+
+
+def test_get_items_status_passes_snapshot() -> None:
+    # the status token routes through get_data with the down-id snapshot as a keyword argument
+    registry = StatusRegistry()
+    registry.add(3)
+    handler = _handler(status_registry=registry)
+    handler.database.get_result = [{'domain': 'example.com'}]  # type: ignore[attr-defined]
+    handler.query = {'data': 'status', 'field': 'domain'}
+    assert handler._get_items() == {'status': 'success', 'items': ['example.com']}
+    name, args, kwargs = handler.database.calls[-1]  # type: ignore[attr-defined]
+    assert name == 'get_data'
+    assert args == ('status', 0, PageRequest())
+    assert kwargs == {'down_ids': [3]}
 
 
 def test_get_items_not_implemented() -> None:
@@ -354,6 +403,20 @@ def test_get_record_not_found() -> None:
     assert 'not found' in content['message']
 
 
+def test_get_record_status_passes_snapshot() -> None:
+    # a single-row status read still needs the down ids, or a down record would report 'On'
+    registry = StatusRegistry()
+    registry.add(3)
+    handler = _handler(status_registry=registry)
+    handler.database.get_result = [{'recid': 3, 'status': 'Off'}]  # type: ignore[attr-defined]
+    handler.query = {'data': 'status', 'recid': '3'}
+    assert handler._get_record() == {'status': 'success', 'record': {'recid': 3, 'status': 'Off'}}
+    name, args, kwargs = handler.database.calls[-1]  # type: ignore[attr-defined]
+    assert name == 'get_data'
+    assert args == ('status', 3, None)
+    assert kwargs == {'down_ids': [3]}
+
+
 # _get_records
 
 def test_get_records_success() -> None:
@@ -365,12 +428,41 @@ def test_get_records_success() -> None:
     assert result['total'] == 2
 
 
-def test_get_records_status_decorates() -> None:
+def test_get_records_passes_page_request() -> None:
     handler = _handler()
-    handler.database.get_result = [{'id': 1, 'disabled': 0}]  # type: ignore[attr-defined]
+    handler.query = {'data': 'records', 'limit': '5', 'offset': '10', 'searchLogic': 'OR',
+                     'search': [{'field': 'domain'}], 'sort': [{'field': 'domain', 'direction': 'asc'}]}
+    handler._get_records()
+    name, args, _ = handler.database.calls[-1]  # type: ignore[attr-defined]
+    assert name == 'get_data'
+    assert args == ('records', 0, PageRequest(searches=({'field': 'domain'},), or_logic=True,
+                                              sorts=({'field': 'domain', 'direction': 'asc'},), limit=5, offset=10))
+
+
+def test_get_records_uses_returned_total() -> None:
+    # total is the database's full match count, not the page length
+    handler = _handler()
+    handler.database.get_result = [{'recid': 1}]  # type: ignore[attr-defined]
+    handler.database.get_total = 42  # type: ignore[attr-defined]
+    handler.query = {'data': 'records', 'limit': '1', 'offset': '0'}
+    result = handler._get_records()
+    assert result['total'] == 42
+    assert result['records'] == [{'recid': 1}]
+
+
+def test_get_records_status_passes_snapshot_and_styles() -> None:
+    registry = StatusRegistry()
+    registry.add(5)
+    handler = _handler(status_registry=registry)
+    handler.database.get_result = [{'status': 'Off'}, {'status': 'On'}]  # type: ignore[attr-defined]
     handler.query = {'data': 'status'}
     result = handler._get_records()
-    assert result['records'][0]['status'] == 'On'
+    name, args, kwargs = handler.database.calls[-1]  # type: ignore[attr-defined]
+    assert name == 'get_data'
+    assert args == ('status', 0, PageRequest())
+    assert kwargs == {'down_ids': [5]}
+    assert result['records'][0]['style'] == 'color: red'
+    assert result['records'][1]['style'] == 'color: green'
 
 
 def test_get_records_not_implemented() -> None:
@@ -380,42 +472,14 @@ def test_get_records_not_implemented() -> None:
         handler._get_records()
 
 
-def test_database_method_whitelist_blocks_non_table_attribute() -> None:
-    # A 'data' token that resolves to a real database attribute but is not a whitelisted table must be rejected,
-    # so the w2ui dispatch cannot reach an arbitrary method through getattr.
+def test_unregistered_token_never_reaches_a_database_attribute() -> None:
+    # A 'data' token that happens to name a real database attribute must still be rejected by the token
+    # registry, so the w2ui dispatch cannot reach an arbitrary method.
     handler = _handler()
     handler.database.get_secret = lambda: [{'leaked': 1}]  # type: ignore[attr-defined]
-    with pytest.raises(ValueError):
-        handler._database_method('get_', 'secret')
     handler.query = {'data': 'secret'}
     with pytest.raises(ValueError):
         handler._get_records()
-
-
-def test_database_method_resolves_whitelisted_table() -> None:
-    handler = _handler()
-    assert handler._database_method('get_', 'records') == handler.database.get_records
-
-
-# _limit_records
-
-def test_limit_with_offset() -> None:
-    handler = _handler()
-    handler.query = {'limit': '2', 'offset': '1'}
-    assert handler._limit_records([{'i': 0}, {'i': 1}, {'i': 2}, {'i': 3}]) == [{'i': 1}, {'i': 2}]
-
-
-def test_limit_with_max() -> None:
-    handler = _handler()
-    handler.query = {'max': '2'}
-    assert handler._limit_records([{'i': 0}, {'i': 1}, {'i': 2}]) == [{'i': 0}, {'i': 1}]
-
-
-def test_limit_without_params_returns_all() -> None:
-    handler = _handler()
-    handler.query = {}
-    records = [{'i': 0}]
-    assert handler._limit_records(records) == records
 
 
 # _save_record
@@ -424,7 +488,8 @@ def test_save_record_success() -> None:
     handler = _handler()
     handler.query = {'data': 'domains', 'recid': '0', 'record': {'domain': 'example.com'}}
     assert handler._save_record() == {'status': 'success'}
-    assert handler.database.calls[-1] == ('save_domains', (0,), {'domain': 'example.com'})  # type: ignore[attr-defined]
+    expected_call = ('save_data', ('domains', 0), {'domain': 'example.com'})
+    assert handler.database.calls[-1] == expected_call  # type: ignore[attr-defined]
 
 
 def test_save_record_not_implemented() -> None:
@@ -450,7 +515,7 @@ def test_save_record_monitor_valid_is_saved() -> None:
     handler.query = {'data': 'monitors', 'recid': '0',
                      'record': {'monitor': 'm', 'monitor_json': _VALID_MONITOR_JSON}}
     assert handler._save_record() == {'status': 'success'}
-    assert handler.database.calls[-1][0] == 'save_monitors'  # type: ignore[attr-defined]
+    assert handler.database.calls[-1][0] == 'save_data'  # type: ignore[attr-defined]
 
 
 def test_save_record_monitor_invalid_raises_and_skips_db() -> None:
@@ -542,133 +607,13 @@ def test_save_record_view_invalid_raises_and_skips_db() -> None:
     assert not handler.database.calls  # type: ignore[attr-defined]
 
 
-# _search_records
+# _style_status
 
-def _records() -> list[dict[str, Any]]:
-    return [{'name': 'alpha', 'n': 1}, {'name': 'beta', 'n': 2}]
-
-
-def test_search_absent_returns_all() -> None:
-    handler = _handler()
-    handler.query = {}
-    records = _records()
-    assert handler._search_records(records) == records
-
-
-def test_search_and_filters() -> None:
-    handler = _handler()
-    handler.query = {'search': [{'type': 'text', 'operator': 'is', 'field': 'name', 'value': 'alpha'}],
-                     'searchLogic': 'AND'}
-    assert handler._search_records(_records()) == [{'name': 'alpha', 'n': 1}]
-
-
-def test_search_or_unions() -> None:
-    handler = _handler()
-    handler.query = {'search': [{'type': 'text', 'operator': 'is', 'field': 'name', 'value': 'alpha'},
-                                {'type': 'int', 'operator': 'is', 'field': 'n', 'value': 2}],
-                     'searchLogic': 'OR'}
-    result = handler._search_records(_records())
-    assert {r['name'] for r in result} == {'alpha', 'beta'}
-
-
-def test_search_or_preserves_input_order() -> None:
-    handler = _handler()
-    handler.query = {'search': [{'type': 'text', 'operator': 'is', 'field': 'name', 'value': 'alpha'},
-                                {'type': 'int', 'operator': 'is', 'field': 'n', 'value': 2}],
-                     'searchLogic': 'OR'}
-    # both records match; the result keeps the order they were given in, not set-iteration order
-    assert handler._search_records(_records()) == _records()
-
-
-def test_search_missing_logic_defaults_to_and() -> None:
-    handler = _handler()
-    # No searchLogic sent: it must default to AND and return the matching subset, not an empty list.
-    handler.query = {'search': [{'type': 'text', 'operator': 'is', 'field': 'name', 'value': 'alpha'}]}
-    assert handler._search_records(_records()) == [{'name': 'alpha', 'n': 1}]
-
-
-def test_search_unknown_operator_is_skipped() -> None:
-    handler = _handler()
-    handler.query = {'search': [{'type': 'text', 'operator': 'wat', 'field': 'name', 'value': 'x'}],
-                     'searchLogic': 'AND'}
-    # the unusable search is skipped, so AND keeps the full set
-    assert handler._search_records(_records()) == _records()
-
-
-def test_search_missing_field_is_ignored() -> None:
-    handler = _handler()
-    handler.query = {'search': [{'type': 'text', 'operator': 'is', 'field': 'absent', 'value': 'x'}],
-                     'searchLogic': 'AND'}
-    assert not handler._search_records(_records())
-
-
-def test_search_between_malformed_value_is_no_match() -> None:
-    handler = _handler()
-    # 'between' expects a 2-element value; a scalar must count as no-match, not crash the whole request.
-    handler.query = {'search': [{'type': 'int', 'operator': 'between', 'field': 'n', 'value': 5}],
-                     'searchLogic': 'AND'}
-    assert not handler._search_records(_records())
-
-
-def test_search_int_over_none_field_is_no_match() -> None:
-    handler = _handler()
-    # int(None) raises TypeError; the record must be skipped, not abort the request.
-    records = [{'n': None}]
-    handler.query = {'search': [{'type': 'int', 'operator': 'is', 'field': 'n', 'value': 1}],
-                     'searchLogic': 'AND'}
-    assert not handler._search_records(records)
-
-
-# _sort_records
-
-def test_sort_ascending() -> None:
-    handler = _handler()
-    handler.query = {'sort': [{'field': 'n', 'direction': 'asc'}]}
-    records = [{'n': 2}, {'n': 1}]
-    handler._sort_records(records)
-    assert [r['n'] for r in records] == [1, 2]
-
-
-def test_sort_descending() -> None:
-    handler = _handler()
-    handler.query = {'sort': [{'field': 'n', 'direction': 'desc'}]}
-    records = [{'n': 1}, {'n': 2}]
-    handler._sort_records(records)
-    assert [r['n'] for r in records] == [2, 1]
-
-
-def test_sort_unknown_field_is_skipped() -> None:
-    handler = _handler()
-    handler.query = {'sort': [{'field': 'absent', 'direction': 'asc'}]}
-    records = [{'n': 2}, {'n': 1}]
-    handler._sort_records(records)
-    assert [r['n'] for r in records] == [2, 1]  # unchanged
-
-
-# _update_status
-
-def test_update_status_off_when_disabled() -> None:
-    handler = _handler()
-    records = [{'id': 1, 'disabled': 1}]
-    handler._update_status(records)
-    assert records[0]['status'] == 'Off' and records[0]['style'] == 'color: red'
-    assert 'id' not in records[0]
-
-
-def test_update_status_off_when_down() -> None:
-    registry = StatusRegistry()
-    registry.add(5)
-    handler = _handler(status_registry=registry)
-    records = [{'id': 5, 'disabled': 0}]
-    handler._update_status(records)
-    assert records[0]['status'] == 'Off'
-
-
-def test_update_status_on_when_healthy() -> None:
-    handler = _handler()
-    records = [{'id': 9, 'disabled': 0}]
-    handler._update_status(records)
-    assert records[0]['status'] == 'On' and records[0]['style'] == 'color: green'
+def test_style_status_off_is_red() -> None:
+    records: list[dict[str, Any]] = [{'status': 'Off'}, {'status': 'On'}]
+    AdminRequestHandler._style_status(records)
+    assert records[0]['style'] == 'color: red'
+    assert records[1]['style'] == 'color: green'
 
 
 # content dispatch
@@ -700,3 +645,10 @@ def test_content_surfaces_validation_error() -> None:
     payload = json.loads(handler.content())
     assert payload['status'] == 'error'
     assert "'bogus' not implemented" in payload['message']
+
+
+def test_content_non_int_paging_is_error() -> None:
+    # PageRequest.from_query raises ValueError, surfaced as a w2ui error reply
+    handler = _handler(query='cmd=get-records&data=records&limit=x&offset=0')
+    payload = json.loads(handler.content())
+    assert payload['status'] == 'error'

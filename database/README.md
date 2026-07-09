@@ -172,7 +172,7 @@ There is always a tradeoff between enforcing a rule in the database and enforcin
 pushes the structural DNS invariants down into the database on purpose, because the data is reached through two
 independent write paths:
 
-1. **The web admin UI** (`AdminRequestHandler` -> `W2UIDatabaseMixIn`), used day to day.
+1. **The web admin UI** (`AdminRequestHandler` -> `W2UIMixIn`), used day to day.
 2. **Manual SQL**, used for bulk imports, migrations, and operational fixes - including loading `data.sql` itself.
 
 A rule enforced only in the Python layer (path 1) is silently bypassed by path 2. By placing CNAME exclusivity, SOA
@@ -198,7 +198,7 @@ matching, routing-policy selection, password hashing, w2ui grid shaping). The ru
 
 The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql/`):
 
-**Read path** - `PowerDNSDatabaseMixIn` (`powerdns.py`):
+**Read path** - `PowerDNSMixIn` (`powerdns.py`):
 
 - `gslb_records(qname, qtype)` resolves the owning zone in SQL by longest-suffix match against `domains` (using
   `RIGHT()`/`SUBSTRING`, never `LIKE`, because `_` is a legal DNS label character), then rebuilds the answer FQDN with
@@ -207,13 +207,16 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 - `gslb_checks()` returns every record's id, content, and `monitor_json` for the monitor threads.
 - `gslb_domains()` returns each zone's apex SOA content for the PowerDNS zone cache.
 
-**Write path** - `W2UIDatabaseMixIn` (`w2ui.py`):
+**Write path** - `W2UIMixIn` (`w2ui.py`) routing to the `Table` classes (`tables.py`):
 
 - `check_user` authenticates an admin request against `users`.
-- `get_*` / `save_*` / `delete_*` back the w2ui CRUD grids for every table.
-- `save_records` writes the rrset and record levels in one transaction: an `INSERT ... ON DUPLICATE KEY UPDATE`
+- `get_data` / `save_data` / `delete_data` resolve the w2ui data token against the `TABLES` registry and delegate
+  to the table, which owns its SQL; search, sort and paging run in SQL (a `PageRequest`).
+- The `status` token's `Status.get` adds the On/Off `CASE` over `disabled` and the down-id snapshot on top of the
+  records join.
+- `Records.save` writes the rrset and record levels in one transaction: an `INSERT ... ON DUPLICATE KEY UPDATE`
   upserts the rrset and pins its id with `LAST_INSERT_ID(id)`, then the record statement reads that id back from
-  `LAST_INSERT_ID()` - honouring the "no `rrsets` reference in a `records` write" rule above.
+  `LAST_INSERT_ID()` - honoring the "no `rrsets` reference in a `records` write" rule above.
 
 ---
 

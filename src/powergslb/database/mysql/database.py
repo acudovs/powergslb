@@ -7,17 +7,18 @@ from typing import Any, Self
 
 import mysql.connector
 
-from powergslb.database.mysql.powerdns import PowerDNSDatabaseMixIn
-from powergslb.database.mysql.w2ui import W2UIDatabaseMixIn
+from powergslb.database.mysql.powerdns import PowerDNSMixIn
+from powergslb.database.mysql.w2ui import W2UIMixIn
 
 __all__ = ['MySQLDatabase']
 
 
-class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.MySQLConnection):
+class MySQLDatabase(PowerDNSMixIn, W2UIMixIn, mysql.connector.MySQLConnection):
     """MySQL/MariaDB connection with the PowerDNS and w2ui query mixins; usable as a context manager.
 
     Runs with autocommit on (not user-configurable), so every single-statement write persists on its own;
-    only _execute_transaction suspends autocommit to group statements and commit() them as a unit.
+    only execute_transaction suspends autocommit to group statements and commit() them as a unit.
+    select, modify and execute_transaction are the execution API the table layer and mixins consume.
 
     :param kwargs: mysql.connector connect arguments (database, user, password, host, port, unix_socket, ...).
     """
@@ -63,7 +64,7 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
         finally:
             cursor.close()
 
-    def _select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    def select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         """Execute a result-set statement (SELECT, WITH...SELECT, SHOW, ...) and return its rows as dicts.
 
         :param operation: The SQL statement to execute.
@@ -75,7 +76,7 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
             column_names = [column[0] for column in cursor.description]
             return [dict(zip(column_names, row)) for row in cursor]
 
-    def _modify(self, operation: str, params: tuple[Any, ...] = ()) -> int:
+    def modify(self, operation: str, params: tuple[Any, ...] = ()) -> int:
         """Execute a write statement (INSERT, UPDATE, DELETE, ...) and return the affected row count.
 
         :param operation: The SQL statement to execute.
@@ -86,7 +87,7 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
             logging.debug('%s rows affected', cursor.rowcount)
             return cursor.rowcount
 
-    def _execute_transaction(self, statements: list[tuple[str, tuple[Any, ...]]]) -> int:
+    def execute_transaction(self, statements: list[tuple[str, tuple[Any, ...]]]) -> int:
         """Run statements in one transaction on this connection; return the summed affected-row count.
 
         autocommit stays on for every single-statement path; this executor suspends it for its own duration and
@@ -100,7 +101,7 @@ class MySQLDatabase(PowerDNSDatabaseMixIn, W2UIDatabaseMixIn, mysql.connector.My
         total = 0
         try:
             for operation, params in statements:
-                total += self._modify(operation, params)
+                total += self.modify(operation, params)
             self.commit()
         except Exception:
             self.rollback()

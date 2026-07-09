@@ -39,8 +39,9 @@ tests/
     │   └── test_geo.py                ClientGeo: defaults to unknown, equality
     ├── database/mysql/
     │   ├── test_database.py            MySQLDatabase: SQL flattener, context manager, autocommit, result shaping
-    │   ├── test_powerdns.py            PowerDNSDatabaseMixIn SQL builders: gslb_checks/gslb_domains/gslb_records
-    │   └── test_w2ui.py                W2UIDatabaseMixIn SQL builders: check_user, CRUD (incl. routings), helpers
+    │   ├── test_powerdns.py            PowerDNSMixIn SQL builders: gslb_checks/gslb_domains/gslb_records
+    │   ├── test_tables.py              Table SQL/behavior: search/sort/paging pipeline, CRUD, records/users/status
+    │   └── test_w2ui.py                W2UIMixIn router: token rejection, per-method delegation smoke tests
     ├── monitor/
     │   ├── check/
     │   │   ├── test_base.py            Check: type registry, create() validation branches, timeout clamp

@@ -1,8 +1,8 @@
 # pylint: disable=missing-function-docstring, redefined-outer-name
 
-"""Tests for the PowerDNSDatabaseMixIn SQL builders.
+"""Tests for the PowerDNSMixIn SQL builders.
 
-gslb_checks, gslb_domains, and gslb_records. The mixin only assembles SQL and delegates to _select; a fake _select
+gslb_checks, gslb_domains, and gslb_records. The mixin only assembles SQL and delegates to select; a fake select
 records the operation/params so the assertions check the built query and bound parameters rather than a live
 database.
 """
@@ -11,17 +11,17 @@ from typing import Any
 
 import pytest
 
-from powergslb.database.mysql.powerdns import PowerDNSDatabaseMixIn
+from powergslb.database.mysql.powerdns import PowerDNSMixIn
 
 
-class _FakePowerDNSDatabase(PowerDNSDatabaseMixIn):
-    """Capture the last _select call and return a canned result."""
+class _FakePowerDNSDatabase(PowerDNSMixIn):
+    """Capture the last select call and return a canned result."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.result: list[dict[str, Any]] = []
 
-    def _select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    def select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         self.calls.append((operation, params))
         return self.result
 

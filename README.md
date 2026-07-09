@@ -191,6 +191,7 @@ classDiagram
         +add(id) None
         +remove(id) None
         +is_down(id) bool
+        +snapshot() list
         +get_writer(id) StatusWriter
         +retain(valid_ids) set
     }
@@ -268,7 +269,7 @@ classDiagram
 
     %% ===== routing =====
     class RoutingPolicy {
-        <<abstract>>
+        <<abstract dataclass>>
         +str name$
         +create(spec)$ RoutingPolicy
         +resolve(policy_json)$ RoutingPolicy
@@ -324,8 +325,6 @@ classDiagram
     class AdminRequestHandler {
         +route = "admin"
         -dict _commands$
-        -set _data_tables$
-        -dict _search_functions$
         +content() str
     }
     class queryparser {
@@ -340,25 +339,65 @@ classDiagram
     class MySQLDatabase {
         +Error
         +join_operation(op)$ str
-        -_select(op, params) list
-        -_modify(op, params) int
-        -_execute_transaction(stmts) int
+        +select(op, params) list
+        +modify(op, params) int
+        +execute_transaction(stmts) int
         +__enter__() Self
         +__exit__() None
     }
-    class PowerDNSDatabaseMixIn {
+    class PowerDNSMixIn {
         <<abstract>>
         +gslb_checks() list
         +gslb_domains(include_disabled) list
         +gslb_records(qname, qtype) list
     }
-    class W2UIDatabaseMixIn {
+    class W2UIMixIn {
         <<abstract>>
-        +str password_mask$
         +check_user(user, password) list
-        +get_*(recid) list
-        +save_*(...) int
-        +delete_*(ids) int
+        +get_data(data, recid, page, ...) tuple
+        +save_data(data, save_recid, ...) int
+        +delete_data(data, ids) int
+    }
+    class PageRequest {
+        <<dataclass>>
+        +tuple searches
+        +bool or_logic
+        +tuple sorts
+        +int | None limit
+        +int | None offset
+        +from_query(query)$ PageRequest
+    }
+    class Selector {
+        <<Protocol>>
+        +select(op, params) list
+    }
+    class Executor {
+        <<Protocol>>
+        +modify(op, params) int
+        +execute_transaction(stmts) int
+    }
+    class Table {
+        <<dataclass>>
+        +str name
+        +str key
+        +tuple fields
+        +tuple columns
+        +Mapping aliases
+        +Mapping defaults
+        +get(db, recid, page, ...) tuple
+        +save(db, save_recid, ...) int
+        +remove(db, ids) int
+    }
+    class Records {
+        +save(db, save_recid, ...) int
+    }
+    class Users {
+        -str _mask$
+        +check_user(db, user, password) list
+        +save(db, save_recid, ...) int
+    }
+    class Status {
+        +get(db, recid, page, down_ids) tuple
     }
 
     %% ===== stdlib bases =====
@@ -389,11 +428,16 @@ classDiagram
     SimpleHTTPRequestHandler <|-- HTTPRequestHandler
     HTTPRequestHandler <|-- PowerDNSRequestHandler
     HTTPRequestHandler <|-- AdminRequestHandler
-    PowerDNSDatabaseMixIn <|-- MySQLDatabase
-    W2UIDatabaseMixIn <|-- MySQLDatabase
+    PowerDNSMixIn <|-- MySQLDatabase
+    W2UIMixIn <|-- MySQLDatabase
     MySQLConnection <|-- MySQLDatabase
+    Selector <|-- Executor
+    Table <|-- Records
+    Table <|-- Users
+    Records <|-- Status
     ServiceThread <|.. MonitorManager : satisfies
     ServiceThread <|.. HTTPServerManager : satisfies
+    Executor <|.. MySQLDatabase : satisfies
 
     %% ===== Associations / composition =====
     PowerGSLB ..> Config : creates
@@ -420,8 +464,12 @@ classDiagram
     AdminRequestHandler ..> RoutingPolicy : resolve (validate)
     AdminRequestHandler ..> ViewRule : resolve (validate)
     AdminRequestHandler ..> queryparser : parse_query
+    AdminRequestHandler ..> PageRequest : builds
     queryparser ..> QueryParserError : raises
-    W2UIDatabaseMixIn ..> password : hash / verify
+    W2UIMixIn ..> Table : routes by token
+    Table ..> Executor : executes through
+    Table ..> PageRequest : reads
+    Users ..> password : hash / verify
     PowerDNSRequestHandler ..> RoutingPolicy : resolve
     PowerDNSRequestHandler ..> ViewRule : resolve
     PowerDNSRequestHandler ..> ClientContext : builds
@@ -1050,7 +1098,7 @@ PowerGSLB exposes two HTTP interfaces, both returning JSON:
   `users`, `status`:
     * `get-records` - list a table; supports `search`, `sort`, and `limit`/`offset` paging.
     * `get-record` (`recid=<id>`) - fetch one row by id.
-    * `get-items` (`field=<column>`) - list the distinct values of one column.
+    * `get-items` (`field=<column>`) - list the values of one column; supports `search`.
     * `save-record` (`recid=0` to insert, `recid=<id>` to update) - write one row from `record[...]` fields.
     * `delete-records` (`selected[0]=<id>`) - delete rows by id.
 

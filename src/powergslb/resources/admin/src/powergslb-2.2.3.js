@@ -6,7 +6,6 @@ var w2uiUrl = '/admin/w2ui';
 
 var gridShow = {
     footer: true,
-    lineNumbers: false,
     selectColumn: true,
     toolbar: true,
     toolbarReload: true,
@@ -173,6 +172,7 @@ var config = {
         postData: {data: 'status'},
         url: w2uiUrl,
         columns: [
+            {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'status', caption: 'Status', size: '55px', resizable: true, sortable: true},
             {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true},
             {field: 'name', caption: 'Name', size: '100px', resizable: true, sortable: true},
@@ -186,6 +186,7 @@ var config = {
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true}
         ],
         searches: [
+            {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'status', caption: 'Status', type: 'text'},
             {field: 'domain', caption: 'Domain', type: 'text'},
             {field: 'name', caption: 'Name', type: 'text'},
@@ -200,15 +201,14 @@ var config = {
         ],
         show: {
             footer: true,
-            lineNumbers: true,
             toolbar: true,
             toolbarReload: true,
             toolbarColumns: true,
             toolbarSearch: true
         },
         sortData: [
-            {field: 'domain', direction: 'asc'},
-            {field: 'status', direction: 'asc'}
+            {field: 'status', direction: 'asc'},
+            {field: 'recid', direction: 'asc'}
         ],
         toolbar: {
             items: [
@@ -231,6 +231,9 @@ var config = {
                     }
                 }
             }
+        },
+        onSelect: function (event) {
+            event.preventDefault();
         }
     },
 

@@ -474,7 +474,7 @@ def test_crud_type_lifecycle(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -
     assert w2ui.record('types', type_value)['name_type'] == 'CRUDTEST'
 
 
-# save-record tolerates an extra unexpected field (save_types **_ consistency)
+# save-record tolerates an extra unexpected field (save reads only the writable columns)
 
 def test_save_types_with_extra_field(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -> None:
     type_value = 998
@@ -484,7 +484,7 @@ def test_save_types_with_extra_field(w2ui: W2UIClient, cleanup: list[tuple[str, 
                         'record[name_type]': 'EXTRATEST',
                         'record[recid]': str(type_value),
                         'record[unexpected]': 'ignored'})
-    # the extra field is absorbed by save_types **_
+    # the extra field is ignored: save binds only the table's writable columns
     assert r.json()['status'] == 'success'
 
     created = next((t for t in w2ui.records('types') if t['name_type'] == 'EXTRATEST'), None)
@@ -507,6 +507,52 @@ def test_save_record_same_name_two_domains(
         recid = w2ui.find_recid('records', domain=domain, name=name)
         assert recid is not None, domain
         cleanup.append(('records', recid))
+
+
+# record update: save-record with an existing recid drives the rrset upsert + record UPDATE transaction
+
+def test_crud_record_update_lifecycle(
+        w2ui: W2UIClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    """Record-level and rrset-level edits of one record all persist under the same recid.
+
+    Records.save always runs the rrset upsert first and the record write second, linked via LAST_INSERT_ID().
+    A content-only edit makes the rrset upsert a complete no-op, so it must still pin the existing rrset id for
+    the record UPDATE (name and ttl surviving proves rrset_id stayed correct); ttl and routing-policy edits are
+    the mirror cases where only the rrset row changes; a rename re-keys the record onto a freshly upserted rrset
+    (the emptied old rrset is garbage-collected by trigger).
+    """
+    fields = {**base_record, 'name': 'crud-update'}
+    assert w2ui.save('records', **fields, content='192.0.2.60').json()['status'] == 'success'
+
+    recid = w2ui.find_recid('records', name='crud-update', content='192.0.2.60')
+    assert recid is not None
+    cleanup.append(('records', recid))
+
+    # content-only edit (record level): the rrset upsert changes nothing
+    assert w2ui.save('records', recid=recid, **fields, content='192.0.2.61').json()['status'] == 'success'
+    record = w2ui.record('records', recid)
+    assert record['content'] == '192.0.2.61'
+    assert (record['domain'], record['name'], record['ttl']) == ('example.com', 'crud-update', 300)
+
+    # ttl-only edit (rrset level): the rrset row changes, the record UPDATE is the no-op side
+    fields['ttl'] = 600
+    assert w2ui.save('records', recid=recid, **fields, content='192.0.2.61').json()['status'] == 'success'
+    record = w2ui.record('records', recid)
+    assert (record['ttl'], record['content']) == (600, '192.0.2.61')
+
+    # routing-policy edit (rrset level): the upsert's ON DUPLICATE KEY UPDATE re-resolves routing_id
+    fields['policy'] = 'Weighted random'
+    assert w2ui.save('records', recid=recid, **fields, content='192.0.2.61').json()['status'] == 'success'
+    record = w2ui.record('records', recid)
+    assert (record['policy'], record['ttl']) == ('Weighted random', 600)
+
+    # rename (rrset re-key): the upsert creates the new rrset and the record moves onto it
+    fields['name'] = 'crud-renamed'
+    assert w2ui.save('records', recid=recid, **fields, content='192.0.2.61').json()['status'] == 'success'
+    record = w2ui.record('records', recid)
+    assert (record['name'], record['content']) == ('crud-renamed', '192.0.2.61')
+    # the record moved, not copied: the old name is gone from the grid
+    assert w2ui.find_recid('records', name='crud-update') is None
 
 
 # delete non-existent record
@@ -736,7 +782,7 @@ def test_save_record_unknown_reference_rejected(
         w2ui: W2UIClient, base_record: dict[str, Any]) -> None:
     """An unknown domain/view/monitor name is rejected as a JSON error (HTTP 200) with no row inserted.
 
-    save_records resolves those names to ids via scalar subqueries; an unknown name yields NULL against a NOT NULL
+    Records.save resolves those names to ids via scalar subqueries; an unknown name yields NULL against a NOT NULL
     foreign-key column.
     """
     cases = (
@@ -832,3 +878,68 @@ def test_monitor_json_special_chars_round_trip(
         cleanup.append(('monitors', recid))
         assert w2ui.record('monitors', recid)['monitor_json'] == monitor_json, \
             f'{label}: monitor_json mangled in round-trip'
+
+
+# SQL-side paging: search combined with limit/offset
+
+def test_search_with_paging(w2ui: W2UIClient) -> None:
+    # total reflects all matching rows, records is the requested page
+    data = w2ui.request('get-records', 'domains', searchLogic='AND', limit='2', offset='0',
+                        **{'search[0][field]': 'domain', 'search[0][type]': 'text',
+                           'search[0][operator]': 'begins', 'search[0][value]': 'example.'}).json()
+    assert data['total'] == 3
+    assert len(data['records']) == 2
+
+
+# the status grid's On/Off value is computed in SQL and searchable like any other column
+
+def test_status_search_by_status_value(w2ui: W2UIClient) -> None:
+    data = w2ui.request('get-records', 'status', searchLogic='AND',
+                        **{'search[0][field]': 'status', 'search[0][type]': 'text',
+                           'search[0][operator]': 'is', 'search[0][value]': 'On'}).json()
+    assert data['status'] == 'success'
+    assert data['total'] > 0
+    assert all(r['status'] == 'On' for r in data['records'])
+
+    # the seed data has no disabled or down records (as test_list_status asserts)
+    data = w2ui.request('get-records', 'status', searchLogic='AND',
+                        **{'search[0][field]': 'status', 'search[0][type]': 'text',
+                           'search[0][operator]': 'is', 'search[0][value]': 'Off'}).json()
+    assert data['total'] == 0
+
+
+# the status grid exposes recid and pages by it, so its order matches the records grid
+
+def test_status_and_records_share_order(w2ui: W2UIClient) -> None:
+    records = w2ui.records('records', limit='100', offset='0')
+    status = w2ui.records('status', limit='100', offset='0')
+    assert [r['recid'] for r in records] == [s['recid'] for s in status]
+
+
+# sort desc combined with offset pages the sorted set
+
+def test_sort_desc_with_offset(w2ui: W2UIClient) -> None:
+    all_desc = [r['domain'] for r in w2ui.records(
+        'domains', **{'sort[0][field]': 'domain', 'sort[0][direction]': 'desc'})]
+    assert all_desc == sorted(all_desc, reverse=True)
+
+    page = w2ui.request('get-records', 'domains', limit='2', offset='1',
+                        **{'sort[0][field]': 'domain', 'sort[0][direction]': 'desc'}).json()
+    assert page['total'] == 3
+    assert [r['domain'] for r in page['records']] == all_desc[1:3]
+
+
+# get-items: the w2ui combo posts a flat search=<typed text> plus max, which must not become a clause
+
+def test_get_items_flat_search_and_max(w2ui: W2UIClient) -> None:
+    data = w2ui.request('get-items', 'domains', field='domain', search='exa', max='250').json()
+    assert data['status'] == 'success'
+    assert 'example.com' in data['items']
+
+
+# get-items on the status grid keeps working (down_ids is a required parameter of the status read)
+
+def test_get_items_status(w2ui: W2UIClient) -> None:
+    data = w2ui.request('get-items', 'status', field='domain').json()
+    assert data['status'] == 'success'
+    assert 'example.com' in data['items']

@@ -2,7 +2,7 @@
 
 """Tests for MySQLDatabase.
 
-The SQL flattener, the context-manager protocol, autocommit injection, and the _select (rows-as-dicts) / _modify
+The SQL flattener, the context-manager protocol, autocommit injection, and the select (rows-as-dicts) / modify
 (affected rowcount) split over a shared _cursor helper. MySQLDatabase subclasses the live mysql.connector
 connection, so instances are built with __new__ (skipping the connecting __init__) and the cursor is faked.
 """
@@ -84,24 +84,24 @@ def test_init_forces_autocommit(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_select_returns_list_of_dicts() -> None:
     cursor = _FakeCursor(description=[('a',), ('b',)], rows=[(1, 2), (3, 4)], rowcount=2)
     database = _db_with_cursor(cursor)
-    result = database._select('SELECT a, b FROM t')  # pylint: disable=protected-access
+    result = database.select('SELECT a, b FROM t')
     assert result == [{'a': 1, 'b': 2}, {'a': 3, 'b': 4}]
     assert cursor.closed is True
 
 
 def test_select_shapes_rows_by_description_regardless_of_keyword() -> None:
     # A row-returning statement that does not start with 'SELECT' (a CTE, SHOW, lowercase) still yields row dicts:
-    # _select reads the columns from cursor.description, not from the SQL's leading keyword.
+    # select reads the columns from cursor.description, not from the SQL's leading keyword.
     cursor = _FakeCursor(description=[('a',), ('b',)], rows=[(1, 2)], rowcount=1)
     database = _db_with_cursor(cursor)
-    result = database._select('WITH t AS (SELECT 1) SELECT a, b FROM t')  # pylint: disable=protected-access
+    result = database.select('WITH t AS (SELECT 1) SELECT a, b FROM t')
     assert result == [{'a': 1, 'b': 2}]
 
 
 def test_modify_returns_rowcount() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=7)
     database = _db_with_cursor(cursor)
-    result = database._modify('UPDATE t SET x = %s', (1,))  # pylint: disable=protected-access
+    result = database.modify('UPDATE t SET x = %s', (1,))
     assert result == 7
     assert cursor.executed == ('UPDATE t SET x = %s', (1,))
     assert cursor.closed is True
@@ -110,7 +110,7 @@ def test_modify_returns_rowcount() -> None:
 def test_modify_flattens_operation_before_running() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=0)
     database = _db_with_cursor(cursor)
-    database._modify('DELETE FROM t\n  WHERE id = %s', (1,))  # pylint: disable=protected-access
+    database.modify('DELETE FROM t\n  WHERE id = %s', (1,))
     assert cursor.executed is not None
     assert cursor.executed[0] == 'DELETE FROM t WHERE id = %s'
 
@@ -119,7 +119,7 @@ def test_select_closes_cursor_even_on_error() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=0, raise_on_execute=RuntimeError('boom'))
     database = _db_with_cursor(cursor)
     with pytest.raises(RuntimeError):
-        database._select('SELECT 1')  # pylint: disable=protected-access
+        database.select('SELECT 1')
     assert cursor.closed is True
 
 
@@ -147,8 +147,7 @@ class _TxDatabase(MySQLDatabase):
 def test_execute_transaction_commits_and_sums_rowcounts() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=3)
     database = _TxDatabase(cursor)
-    total = database._execute_transaction(  # pylint: disable=protected-access
-        [('INSERT INTO t VALUES (%s)', (1,)), ('UPDATE t SET x = %s', (2,))])
+    total = database.execute_transaction([('INSERT INTO t VALUES (%s)', (1,)), ('UPDATE t SET x = %s', (2,))])
     assert total == 6  # 3 + 3
     assert database.events == ['autocommit=False', 'commit', 'autocommit=True']
 
@@ -157,7 +156,6 @@ def test_execute_transaction_rolls_back_and_reraises_on_error() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=0, raise_on_execute=RuntimeError('boom'))
     database = _TxDatabase(cursor)
     with pytest.raises(RuntimeError):
-        database._execute_transaction(  # pylint: disable=protected-access
-            [('INSERT INTO t VALUES (%s)', (1,))])
+        database.execute_transaction([('INSERT INTO t VALUES (%s)', (1,))])
     # rolled back, never committed, and autocommit restored even on the error path
     assert database.events == ['autocommit=False', 'rollback', 'autocommit=True']

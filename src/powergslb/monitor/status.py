@@ -34,7 +34,7 @@ class StatusRegistry:
     """Tracks the content ids that are currently down."""
 
     def __init__(self) -> None:
-        # A plain set is thread-safe for this usage under CPython (atomic add/remove/in on ints).
+        # A plain set is thread-safe for this usage under CPython (atomic add/remove/in/copy on ints).
         self._status: set[int] = set()
 
     def add(self, content_id: int) -> None:
@@ -58,6 +58,13 @@ class StatusRegistry:
         :returns: True when the content id is marked down.
         """
         return content_id in self._status
+
+    def snapshot(self) -> list[int]:
+        """Return the down content ids as a list.
+
+        :returns: The content ids currently marked down.
+        """
+        return list(self._status)
 
     def get_writer(self, content_id: int) -> StatusWriter:
         """Return a StatusWriter for the given content id.

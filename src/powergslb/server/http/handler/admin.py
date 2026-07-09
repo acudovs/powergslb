@@ -3,10 +3,10 @@
 import base64
 import json
 import logging
-import operator
 from http.server import SimpleHTTPRequestHandler
-from typing import Any, Callable, ClassVar
+from typing import Any, ClassVar
 
+from powergslb.database import PageRequest
 from powergslb.monitor import MonitorManager
 from powergslb.routing import RoutingPolicy
 from powergslb.server.http.handler.queryparser import QueryParserError, parse_query
@@ -19,7 +19,8 @@ __all__ = ['AdminRequestHandler']
 class AdminRequestHandler(HTTPRequestHandler):
     """Serves the admin interface: Basic Auth, w2ui grid CRUD at /admin/w2ui, and static assets.
 
-    Search, sort, and paging are applied in Python over the full result set, matching the w2ui protocol.
+    Passes the w2ui query to the database get_data/save_data/delete_data dispatchers. Search, sort, and paging run in
+    SQL: the handler translates the query into a PageRequest and the database composes it into the SQL read.
     """
     route: ClassVar[str] = 'admin'
 
@@ -29,25 +30,6 @@ class AdminRequestHandler(HTTPRequestHandler):
         'get-record': '_get_record',
         'get-records': '_get_records',
         'save-record': '_save_record'
-    }
-
-    _data_tables: ClassVar[set[str]] = {
-        'domains', 'monitors', 'records', 'routings', 'status', 'types', 'users', 'views'
-    }
-
-    _search_functions: ClassVar[dict[str, dict[str, Callable[[Any, Any], bool]]]] = {
-        'int': {
-            'is': lambda x, y: int(x) == int(y),
-            'in': lambda x, y: (isinstance(y, list) and int(x) in y) or (int(x) in [int(y)]),
-            'not in': lambda x, y: (isinstance(y, list) and int(x) not in y) or (int(x) not in [int(y)]),
-            'between': lambda x, y: int(y[0]) <= int(x) <= int(y[1])
-        },
-        'text': {
-            'is': lambda x, y: str(x).lower() == str(y).lower(),
-            'begins': lambda x, y: str(x).lower().startswith(str(y).lower()),
-            'contains': lambda x, y: str(y).lower() in str(x).lower(),
-            'ends': lambda x, y: str(x).lower().endswith(str(y).lower())
-        }
     }
 
     def _handle_route(self) -> None:
@@ -105,21 +87,8 @@ class AdminRequestHandler(HTTPRequestHandler):
         if self.command != 'HEAD':  # a HEAD challenge carries the same headers but no body
             self.wfile.write(content_bytes)
 
-    def _database_method(self, prefix: str, data: Any) -> 'Callable[..., Any]':
-        """Resolve the database CRUD method for a whitelisted table token.
-
-        :param prefix: The method name prefix ('get_', 'save_' or 'delete_').
-        :param data: The table token from the query.
-        :returns: The bound database method.
-        :raises ValueError: When data is not a whitelisted table.
-        """
-        method = getattr(self.database, prefix + data, None) if data in self._data_tables else None
-        if method is None:
-            raise ValueError(f"'{data}' not implemented")
-        return method
-
     def _delete_records(self) -> dict[str, Any]:
-        """Handle the delete-records command: delete the selected rows from the query's table.
+        """Handle the delete-records command: delete the selected rows from the database.
 
         :returns: The w2ui status reply.
         """
@@ -128,64 +97,57 @@ class AdminRequestHandler(HTTPRequestHandler):
         if not isinstance(selected, list):
             selected = [selected]
 
-        if not self._database_method('delete_', data)(selected):
+        if not self.database.delete_data(data, selected):
             return {'status': 'error', 'message': 'records not deleted'}
         return {'status': 'success'}
 
+    def _get_data(self, data: Any, recid: int = 0,
+                  page: PageRequest | None = None) -> tuple[list[dict[str, Any]], int]:
+        """Read a token's table from the database; the status table needs the down-id snapshot.
+
+        :param data: The table token from the query.
+        :param recid: The key value to fetch; 0 fetches every row.
+        :param page: The search/sort/paging request; None returns every matching row.
+        :returns: The matching rows and the total match count.
+        """
+        if data == 'status':
+            return self.database.get_data(data, recid, page, down_ids=self.status_registry.snapshot())
+        return self.database.get_data(data, recid, page)
+
     def _get_items(self) -> dict[str, Any]:
-        """Handle the get-items command: collect one field's values from the query's table for a form dropdown.
+        """Handle the get-items command: collect one field's values from the database for a combo dropdown.
 
         :returns: The w2ui reply with the collected items.
         """
         data = self.query.get('data')
         field = self.query.get('field')
-
-        records = self._database_method('get_', data)()
-        items = [record.get(field) for record in self._limit_records(records) if record.get(field) is not None]
+        records, _ = self._get_data(data, page=PageRequest.from_query(self.query))
+        items = [record.get(field) for record in records if record.get(field) is not None]
         return {'status': 'success', 'items': items}
 
     def _get_record(self) -> dict[str, Any]:
-        """Handle the get-record command: fetch one row from the query's table by recid.
+        """Handle the get-record command: fetch one row from the database by recid.
 
         :returns: The w2ui reply with the record, or an error when the recid does not exist.
         """
         data = self.query.get('data')
         recid = int(self.query.get('recid'))
 
-        records = self._database_method('get_', data)(recid)
+        records, _ = self._get_data(data, recid)
         if not records:
             return {'status': 'error', 'message': f"get-record '{data}' id {recid} not found"}
         return {'status': 'success', 'record': records[0]}
 
     def _get_records(self) -> dict[str, Any]:
-        """Handle the get-records command: fetch the query's table, then search, sort and page it.
+        """Handle the get-records command: read the database records searched, sorted and paged in SQL.
 
         :returns: The w2ui reply with the total match count and the requested page.
         """
         data = self.query.get('data')
-
-        records = self._database_method('get_', data)()
+        records, total = self._get_data(data, page=PageRequest.from_query(self.query))
         if data == 'status':
-            self._update_status(records)
-        records = self._search_records(records)
-        self._sort_records(records)
-        return {'status': 'success', 'total': len(records), 'records': self._limit_records(records)}
-
-    def _limit_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Apply limit/offset or max paging from the query.
-
-        :param records: The full result set.
-        :returns: The requested page, or all records when the query sets no paging.
-        """
-        if 'limit' in self.query and 'offset' in self.query:
-            limit = int(self.query['limit'])
-            offset = int(self.query['offset'])
-            records = records[offset:offset + limit]
-        elif 'max' in self.query:
-            limit = int(self.query['max'])
-            records = records[:limit]
-
-        return records
+            self._style_status(records)
+        return {'status': 'success', 'total': total, 'records': records}
 
     def _parse_query(self) -> None:
         """Parse the query string (GET) or request body (POST) into self.query; a parse error yields an empty query."""
@@ -211,9 +173,9 @@ class AdminRequestHandler(HTTPRequestHandler):
         recid = int(self.query.get('recid'))
         record = self.query.get('record')
 
-        method = self._database_method('save_', data)
         self._validate_record(data, record)
-        if not method(recid, **record):
+
+        if not self.database.save_data(data, recid, **record):
             return {'status': 'error', 'message': 'record not changed'}
         return {'status': 'success'}
 
@@ -235,69 +197,14 @@ class AdminRequestHandler(HTTPRequestHandler):
         elif data == 'views':
             ViewRule.resolve(record['rule'])
 
-    def _search_match(self, record: dict[str, Any], search: dict[str, Any]) -> 'bool | None':
-        """Apply one search to one record.
-
-        :param record: The record to test.
-        :param search: The w2ui search clause (field, type, operator, value).
-        :returns: None when the search type/operator is unknown (skip it); otherwise the match result,
-            with a missing field or unconvertible value counting as no match.
-        """
-        search_function = (self._search_functions.get(search['type']) or {}).get(search['operator'])
-        if not callable(search_function):
-            return None
-        try:
-            return bool(search_function(record[search['field']], search['value']))
-        except (KeyError, ValueError, IndexError, TypeError):
-            return False
-
-    def _search_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Filter records by the query searches, combined with AND unless searchLogic is OR.
-
-        :param records: The records to filter.
-        :returns: The records matching the query searches; all of them when the query has none.
-        """
-        searches = self.query.get('search')
-        if not searches:
-            return records
-
-        or_logic = self.query.get('searchLogic') == 'OR'  # any non-'OR' (including absent) is AND
-        matched = []
-        for record in records:
-            results = [match for match in (self._search_match(record, search) for search in searches)
-                       if match is not None]  # drop searches with an unknown type/operator
-            keep = (any(results) if or_logic else all(results)) if results else not or_logic
-            if keep:
-                matched.append(record)
-        return matched
-
-    def _sort_records(self, records: list[dict[str, Any]]) -> None:
-        """Sort records in place by the query's sort keys; unknown fields are ignored.
-
-        :param records: The records to sort in place.
-        """
-        if 'sort' in self.query:
-            # w2ui sends sort keys primary-first; apply them least-significant-first so the primary key dominant.
-            for sort in reversed(self.query['sort']):
-                if records and sort['field'] not in records[0]:
-                    continue
-                reverse = sort['direction'] == 'desc'
-                records.sort(key=operator.itemgetter(sort['field']), reverse=reverse)
-
-    def _update_status(self, records: list[dict[str, Any]]) -> None:
-        """Annotate each record with its On/Off status and display style; drop the internal id.
+    @staticmethod
+    def _style_status(records: list[dict[str, Any]]) -> None:
+        """Annotate each status row with its display style from the SQL-computed status value.
 
         :param records: The status rows to annotate in place.
         """
         for record in records:
-            if record['disabled'] or self.status_registry.is_down(record['id']):
-                record['status'] = 'Off'
-                record['style'] = 'color: red'
-            else:
-                record['status'] = 'On'
-                record['style'] = 'color: green'
-
-            del record['id']
+            record['style'] = 'color: red' if record['status'] == 'Off' else 'color: green'
 
     def content(self) -> str:
         """Dispatch the w2ui cmd to its handler; an unknown command or a handler error becomes an error reply.

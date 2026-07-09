@@ -3,15 +3,15 @@
 import abc
 from typing import Any
 
-__all__ = ['PowerDNSDatabaseMixIn']
+__all__ = ['PowerDNSMixIn']
 
 
-class PowerDNSDatabaseMixIn(abc.ABC):
+class PowerDNSMixIn(abc.ABC):
     """PowerDNS related queries."""
 
     @abc.abstractmethod
-    def _select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        pass
+    def select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        """Execute a result-set statement and return its rows as dicts."""
 
     def gslb_checks(self) -> list[dict[str, Any]]:
         """Return every record's id, content and monitor for health checking.
@@ -26,7 +26,7 @@ class PowerDNSDatabaseMixIn(abc.ABC):
               JOIN `monitors` ON `records`.`monitor_id` = `monitors`.`id`
         """
 
-        return self._select(operation)
+        return self.select(operation)
 
     def gslb_domains(self, include_disabled: bool = False) -> list[dict[str, Any]]:
         """Return domains with an apex SOA and its content for the zone cache.
@@ -49,7 +49,7 @@ class PowerDNSDatabaseMixIn(abc.ABC):
                 WHERE `records`.`disabled` = 0
             """
 
-        return self._select(operation)
+        return self.select(operation)
 
     def gslb_records(self, qname: str, qtype: str) -> list[dict[str, Any]]:
         """Return all DNS records for qname and qtype, including view rules.
@@ -104,4 +104,4 @@ class PowerDNSDatabaseMixIn(abc.ABC):
             """
             params = (qname, qname, qname, qname, qname, qname, qtype)
 
-        return self._select(operation, params)
+        return self.select(operation, params)

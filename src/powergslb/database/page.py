@@ -5,6 +5,9 @@ from typing import Any
 
 __all__ = ['PageRequest']
 
+# A combo search whose whole text is one of these is a "match all".
+_WILDCARDS = frozenset('*+.?^$')
+
 
 def _clauses(value: Any) -> tuple[dict[str, Any], ...]:
     """Keep only the dict clauses of a list value; any other shape yields no clauses.
@@ -20,7 +23,8 @@ def _clauses(value: Any) -> tuple[dict[str, Any], ...]:
 def _searches(query: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     """Build search clauses from the query.
 
-    A grid posts a list of clause dicts; a combo posts a flat typed string.
+    A grid posts a list of clause dicts; a combo posts a flat typed string. A combo string that is a single
+    wildcard character is a "match all" shortcut and yields no clause, so the page lists unfiltered.
 
     :param query: The parsed w2ui query.
     :returns: The search clauses, or an empty tuple when there is nothing to search.
@@ -28,8 +32,12 @@ def _searches(query: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     search = query.get('search')
     if not search:
         return ()
+
     if isinstance(search, str):
+        if search in _WILDCARDS:
+            return ()
         return ({'field': query.get('field'), 'type': 'text', 'operator': 'contains', 'value': search},)
+
     return _clauses(search)
 
 

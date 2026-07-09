@@ -5,7 +5,8 @@
 The w2ui query to SQL-paging translation: limit+offset vs max precedence, ValueError on non-int paging
 values, the list-of-dicts-only shape gate on sort, and the dual-shape search gate - a grid posts a list
 of clause dicts, while a w2ui combo posts a flat search=<typed text> string on get-items that becomes a
-single contains clause on its field.
+single contains clause on its field, unless the whole text is one lone wildcard char (a "match all"
+shortcut w2ui filters client-side) that drops the clause so the capped page lists unfiltered.
 """
 
 from typing import Any
@@ -77,6 +78,27 @@ def test_empty_flat_search_string_is_dropped() -> None:
     page = PageRequest.from_query({'search': '', 'field': 'domain', 'max': '250'})
     assert not page.searches
     assert page.limit == 250
+
+
+@pytest.mark.parametrize('wildcard', ['*', '+', '.', '?', '^', '$'])
+def test_single_wildcard_combo_string_matches_all(wildcard: str) -> None:
+    # w2ui lists all its combo items for a lone '*', '?', '+', '.', '^' or '$'; drop the search so the page agrees
+    page = PageRequest.from_query({'search': wildcard, 'field': 'domain', 'max': '250'})
+    assert not page.searches
+    assert page.limit == 250
+
+
+@pytest.mark.parametrize('literal', ['%', ','])
+def test_non_wildcard_combo_string_still_searches(literal: str) -> None:
+    # w2ui treats '%' and ',' as literals, so the server keeps the contains clause to match w2ui's own filtering
+    page = PageRequest.from_query({'search': literal, 'field': 'domain', 'max': '250'})
+    assert page.searches == ({'field': 'domain', 'type': 'text', 'operator': 'contains', 'value': literal},)
+
+
+def test_multi_char_wildcard_string_still_searches() -> None:
+    # only a lone wildcard is the shortcut; a longer string keeps its contains clause verbatim
+    page = PageRequest.from_query({'search': '**', 'field': 'domain', 'max': '250'})
+    assert page.searches == ({'field': 'domain', 'type': 'text', 'operator': 'contains', 'value': '**'},)
 
 
 def test_non_list_sort_is_dropped() -> None:

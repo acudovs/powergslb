@@ -96,6 +96,33 @@ def test_view_based_filtering(
     assert result[0]['content'] == content
 
 
+# catch-all view precedence
+
+def test_catch_all_view_precedence(
+        w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    """A matched specific view excludes the match-all (Public) record; out-of-view clients get the catch-all.
+
+    One name carries a Private and a Public record: a private client gets only the Private answer, a public
+    client only the Public one.
+    """
+    name = 'catch-all-test'
+    fqdn = f'{name}.example.com'
+    private_content, public_content = '192.0.2.98', '192.0.2.99'
+
+    for content, view in ((private_content, 'Private'), (public_content, 'Public')):
+        r = w2ui.save('records', name=name, content=content, **{**base_record, 'view': view})
+        assert r.json()['status'] == 'success'
+        recid = w2ui.find_recid('records', name=name, content=content)
+        assert recid is not None
+        cleanup.append(('records', recid))
+
+    result = dns.lookup(fqdn, 'A', real_remote='10.0.0.1/32')
+    assert [r['content'] for r in result] == [private_content]
+
+    result = dns.lookup(fqdn, 'A', real_remote='8.8.8.8/32')
+    assert [r['content'] for r in result] == [public_content]
+
+
 # weight-based selection
 
 def test_weight_based_selection(

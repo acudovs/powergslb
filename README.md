@@ -169,6 +169,7 @@ classDiagram
         +configure(geoip_config)$ None
         +resolve(rule)$ ViewRule
         +matches(context) bool
+        +matches_all() bool
     }
 
     %% ===== monitor =====
@@ -273,6 +274,7 @@ classDiagram
         +str name$
         +create(spec)$ RoutingPolicy
         +resolve(policy_json)$ RoutingPolicy
+        +network_prefix(context) int | None
         +select(candidates, context)* list
     }
     class RoundRobin {
@@ -290,6 +292,7 @@ classDiagram
         +int max_answers
         +int ipv4_prefix
         +int ipv6_prefix
+        +network_prefix(context) int | None
         +select(candidates, context) list
     }
 
@@ -784,16 +787,22 @@ answering: the **view** filter (client match), then the **health** filter (drop 
 for the view filter and for sticky routing is read from the `X-Remotebackend-Real-Remote` header PowerDNS sends (the
 real resolver address, or the client subnet when [ECS](#edns-client-subnet-ecs) is in play), not the PowerDNS host.
 
-If the view filter leaves no candidate for a query type, that type is answered with nothing. If the health filter would
-empty a non-empty in-view set (every record is down), the down records are kept instead - "all down = all up" - so a
-name never goes empty during a full outage; the policy then picks among them as a last resort.
+If the view filter leaves no candidate for a query type, that type is answered with nothing. A match-all view (the
+seed `Public`, `0.0.0.0/0 ::/0`) is a **catch-all**: its records serve only when no narrower (specific) view matched
+the client or every matched specific-view record is down. The health filter picks the first non-empty tier of live
+specific-view records, live catch-all records, down specific-view records, down catch-all records - the down tiers
+are the "all down = all up" rule, so a name never goes empty during a full outage; the policy then picks among them
+as a last resort. Weights never cross a tier boundary: a high-weight `Public` record cannot outrank an in-view
+specific record.
 
 ### Views
 
 A view maps clients to records, so one name can resolve differently per client. Each view holds a space-separated
-`rule`, and a record references exactly one view; a record is a candidate only when the client matches the rule. The
-seed data ships a `Public` view (`0.0.0.0/0 ::/0`, matching every client), a `Private` view (the RFC 1918 ranges),
-and a geo `Europe` view (`country:DE country:FR continent:EU`).
+`rule`, and a record references exactly one view; a record is a candidate only when the client matches the rule. A
+view whose rule matches every client (a prefixlen-0 CIDR in both families) is a catch-all: its records serve only
+clients no specific view matched, per the precedence in [Record selection](#record-selection). The seed data ships a
+`Public` view (`0.0.0.0/0 ::/0`, the catch-all), a `Private` view (the RFC 1918 ranges), and a geo `Europe` view
+(`country:DE country:FR continent:EU`).
 
 A rule is a space-separated list or CIDR and geo tokens - the client matches when it satisfies any one of them:
 
@@ -868,9 +877,11 @@ references exactly one policy.
   the same live set and prefixes**. Example:
   `{"type": "sticky-hash"}` or `{"type": "sticky-hash", "max_answers": 2, "ipv4_prefix": 16}`.
 
-Liveness is decided by the [health checks](#health-checks) below. Across all policies, when every record at a name is
-down the set is reactivated ("all down = all up") so the name still resolves; `round-robin` / `sticky-hash` then serve
-the highest-weight tier as a last resort, and `weighted-random` falls back to its split.
+Liveness is decided by the [health checks](#health-checks) below, and candidates follow the view precedence in
+[Record selection](#record-selection): a live catch-all (`Public`) record takes over when every matched specific-view
+record is down. When every in-view record is down, the down records are reactivated ("all down = all up") so the name
+still resolves; `round-robin` / `sticky-hash` then serve the highest-weight tier as a last resort, and
+`weighted-random` falls back to its split.
 
 ### Disabled records
 
@@ -1072,7 +1083,7 @@ pattern is liveness-aware by default. Each pattern below is a view layout, a pol
 | Split-horizon     | `Private` vs `Public` view | internal addresses in `Private`, public addresses in `Public`       |
 | Regional failover | narrow view + fallback     | region-pinned records; `Public` = active fallback                   |
 
-* **Geo proximity** (optimization) - give each region its own view (`continent:AN`, `continent:EU`, ...) and put that
+* **Geo proximity** (optimization) - give each region its own view (`continent:NA`, `continent:EU`, ...) and put that
   region's records there, so a client resolves to the nearest backend. Regions coexist, each actively serving its own
   local traffic; the match-all `Public` is a catch-all for clients no region view matches.
 * **Split-horizon** (view) - put internal addresses in the `Private` view and public addresses in the `Public` view

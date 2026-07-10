@@ -3,8 +3,9 @@
 """Tests for PowerDNSRequestHandler.
 
 Remote-IP resolution (the PowerDNS header is honored only here), the GET-only route, view matching, the
-view -> health -> routing-policy filter pipeline (empty-in-view short-circuit, all-down=all-up keep-all, policy
-delegation, malformed-policy drop), the lookup and getAllDomains responses, and content() dispatch. The handler is
+view -> health -> routing-policy filter pipeline (empty-in-view short-circuit, catch-all view precedence,
+all-down=all-up keep-all, policy delegation, malformed-policy drop), the lookup and getAllDomains responses, and
+content() dispatch. The handler is
 built with __new__ to skip the socket-opening __init__; the database and the shared status set are faked so
 filtering needs no backend. Geo is driven through ViewRule._geoip (an inert reader by default).
 """
@@ -295,6 +296,52 @@ def test_filter_keep_all_does_not_resurrect_out_of_view(status_registry: StatusR
     assert not handler._select_records(records)
 
 
+# _select_records: catch-all view precedence
+
+def test_filter_specific_view_excludes_catch_all() -> None:
+    # A matched specific view wins; the match-all (Public) record is excluded even at a higher weight.
+    handler = _handler(['dns'], remote_ip='10.1.2.3')
+    records = {'A': [_record(id=1, rule='10.0.0.0/8', content='private'),
+                     _record(id=2, weight=100, content='public')]}
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['private']
+
+
+def test_filter_out_of_view_client_gets_catch_all() -> None:
+    handler = _handler(['dns'], remote_ip='203.0.113.5')
+    records = {'A': [_record(id=1, rule='10.0.0.0/8', content='private'), _record(id=2, content='public')]}
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['public']
+
+
+def test_filter_specific_all_down_fails_over_to_live_catch_all(status_registry: StatusRegistry) -> None:
+    # Every specific-view record is down -> the live catch-all takes over.
+    status_registry.add(1)
+    handler = _handler(['dns'], remote_ip='10.1.2.3', status_registry=status_registry)
+    records = {'A': [_record(id=1, rule='10.0.0.0/8', content='regional-down'), _record(id=2, content='public')]}
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['public']
+
+
+def test_filter_all_down_last_resort_prefers_specific(status_registry: StatusRegistry) -> None:
+    # Specific and catch-all all down -> the last resort stays view-consistent (down specific records).
+    status_registry.add(1)
+    status_registry.add(2)
+    handler = _handler(['dns'], remote_ip='10.1.2.3', status_registry=status_registry)
+    records = {'A': [_record(id=1, rule='10.0.0.0/8', content='regional-down'),
+                     _record(id=2, content='public-down')]}
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['regional-down']
+
+
+def test_filter_single_family_match_all_counts_as_specific() -> None:
+    # A one-family 0.0.0.0/0 is not match-all (it never matches IPv6 clients), so it ranks as a specific view.
+    handler = _handler(['dns'], remote_ip='203.0.113.5')
+    records = {'A': [_record(id=1, rule='0.0.0.0/0', content='v4-only'), _record(id=2, content='public')]}
+    result = handler._select_records(records)
+    assert [r['content'] for r in result['A']] == ['v4-only']
+
+
 def test_filter_delegates_candidates_and_context(monkeypatch: pytest.MonkeyPatch) -> None:
     # The live, in-view candidates and a ClientContext carrying the client IP reach the resolved policy's select().
     seen: dict[str, Any] = {}
@@ -440,8 +487,8 @@ def test_get_lookup_scopes_each_qtype_independently() -> None:
     scope = {(r['qtype'], r['content']): r['scopeMask'] for r in handler._get_lookup()}
     assert scope[('NS', 'ns1.example.com')] == 0  # NS is always scope 0 (infra/delegation)
     assert scope[('NS', 'ns2.example.com')] == 0
-    assert scope[('A', '192.0.2.1')] == 24  # the A rrset as a whole is subnet specific
-    assert scope[('A', '10.9.9.9')] == 24
+    assert ('A', '192.0.2.1') not in scope  # the matched specific view excludes the catch-all record
+    assert scope[('A', '10.9.9.9')] == 24  # the A rrset as a whole is subnet specific
 
 
 def test_get_lookup_public_client_mixed_rrset_scopes_source() -> None:

@@ -20,8 +20,8 @@ __all__ = ['PowerDNSRequestHandler']
 class PowerDNSRequestHandler(HTTPRequestHandler):
     """Answers PowerDNS remote backend queries on the DNS interface: lookup and getAllDomains.
 
-    Lookup answers run a per-qtype pipeline: a view filter, a health filter, then the rrset's routing policy,
-    which chooses the answers.
+    Lookup answers run a per-qtype pipeline: a view filter (a match-all view is a catch-all), a health filter,
+    then the rrset's routing policy, which chooses the answers.
     """
     route: ClassVar[str] = 'dns'
 
@@ -62,9 +62,13 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
     def _select_records(self, all_records: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
         """Select records to answer with, keyed by qtype.
 
-        Per qtype: keep only in-view records and if none are in view drop that qtype. Then drop down records, unless
-        that empties in-view set, in which case keep them all ('all down = all up', so DNS never fails entirely).
-        Finally, the rrset's routing policy chooses the answers. A malformed policy is logged and drops that qtype.
+        Per qtype: keep only in-view records and if none are in view drop that qtype. A match-all view (e.g. Public)
+        is a catch-all: its records serve only when no specific (narrower) view matched the client or every matched
+        specific-view record is down. Candidates are the first non-empty tier of: live specific-view records, live
+        catch-all records, down specific-view records, down catch-all records ('all down = all up', so DNS never
+        fails entirely). Finally, the rrset's routing policy chooses the answers; weights never cross a tier
+        boundary (a high-weight catch-all record cannot outrank an in-view specific one). A malformed policy is
+        logged and drops that qtype.
 
         :param all_records: The records at the queried name, keyed by qtype.
         :returns: The chosen answers keyed by qtype; a qtype with no in-view records or a bad policy is absent.
@@ -76,8 +80,9 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
             if not in_view:
                 continue
 
-            live = [record for record in in_view if not self.status_registry.is_down(record['id'])]
-            candidates = live or in_view  # all down = all up
+            specific = [record for record in in_view if not ViewRule.resolve(record['rule']).matches_all]
+            catch_all = [record for record in in_view if ViewRule.resolve(record['rule']).matches_all]
+            candidates = self._live(specific) or self._live(catch_all) or specific or catch_all
 
             try:
                 selected[qtype] = RoutingPolicy.resolve(group[0]['policy_json']).select(candidates, context)
@@ -85,6 +90,14 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
                 logging.error('%s %s routing policy invalid: %s: %s',
                               candidates[0]['qname'], qtype, type(e).__name__, e)
         return selected
+
+    def _live(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return the records whose health status is up.
+
+        :param records: The records to filter.
+        :returns: The records not currently marked down.
+        """
+        return [record for record in records if not self.status_registry.is_down(record['id'])]
 
     def _get_all_domains(self) -> list[dict[str, Any]]:
         """Build the getAllDomains zone list; a domain with an unparsable SOA serial is skipped and logged.

@@ -183,15 +183,15 @@ def test_backend_opt_out_source_zero_scope_zero(
 
 def test_backend_mixed_view_specific_client_scope_equals_source(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
-    """When a narrower-view record participates in the answer, scope is the source prefix even if a match-all
-    record is also selected: the answer set as a whole is subnet specific.
+    """A client matching the narrower view gets only the specific record (the match-all catch-all is excluded)
+    and scope is the source prefix: the answer set as a whole is subnet specific.
     """
     fqdn = 'ecs-mixed.example.com'
     _save_record(w2ui, base_record, cleanup, 'ecs-mixed', '192.0.2.215', view=_PUBLIC_VIEW)
     _save_record(w2ui, base_record, cleanup, 'ecs-mixed', '192.0.2.216', view='Private')
 
     result = dns.lookup(fqdn, 'A', real_remote='10.1.2.0/24')
-    assert {row['content'] for row in result} == {'192.0.2.215', '192.0.2.216'}
+    assert [row['content'] for row in result] == ['192.0.2.216']
     assert _scope(result) == 24
 
 
@@ -207,8 +207,8 @@ def test_backend_any_scopes_sibling_rrsets_independently(
 
     result = dns.lookup(fqdn, 'ANY', real_remote='10.1.2.0/24')
     scope = {(row['qtype'], row['content']): row['scopeMask'] for row in result}
-    assert scope[('A', '192.0.2.230')] == 24  # the A rrset as a whole is subnet specific
-    assert scope[('A', '192.0.2.231')] == 24
+    assert ('A', '192.0.2.230') not in scope  # the matched specific view excludes the catch-all record
+    assert scope[('A', '192.0.2.231')] == 24  # the A rrset as a whole is subnet specific
     assert scope[('AAAA', '2001:db8::30')] == 0  # the sibling AAAA rrset stays globally cacheable
 
 

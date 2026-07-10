@@ -1058,28 +1058,57 @@ read, so `tls_verify` succeeds.
 
 ## Traffic management patterns
 
-The [routing policies](#routing-policies) compose with [weight](#weight-priority) and the
-[health checks](#health-checks) to express the common ways of shifting traffic across your backends. Each pattern is a
-policy plus a weight layout - no extra configuration:
+Traffic management in PowerGSLB works along two independent axes: a [view](#views) decides *which* records a client may
+see at all (by CIDR or GeoIP), and the rrset's [routing policy](#routing-policies) plus [weight](#weight-priority)
+decides *which of those* to answer. Combined with the [health checks](#health-checks), they express the common ways of
+shifting traffic across backends. Health checks run continuously, pruning down records before the policy picks, so every
+pattern is liveness-aware by default. Each pattern below is a view layout, a policy plus a weight layout, or both.
 
-| goal                       | policy            | weight layout                                                     |
-|----------------------------|-------------------|-------------------------------------------------------------------|
-| Blue-green cutover         | `round-robin`     | new environment in a higher tier; lower it to roll back           |
-| Active-passive failover    | `round-robin`     | backups in a lower tier; serve only on full outage of the primary |
-| Canary / progressive / A-B | `weighted-random` | new version at a small proportion; raise it to shift more traffic |
-| Sticky sessions            | `sticky-hash`     | equal-tier records; each client network pins to one endpoint      |
+**Client-scoped patterns** use [views](#views) to serve one name differently per client, by network or location:
+
+| goal              | mechanism                  | view layout                                                         |
+|-------------------|----------------------------|---------------------------------------------------------------------|
+| Geo proximity     | per-region views           | each region in a `continent:`/`country:` view; `Public` = catch-all |
+| Split-horizon     | `Private` vs `Public` view | internal addresses in `Private`, public addresses in `Public`       |
+| Regional failover | narrow view + fallback     | region-pinned records; `Public` = active fallback                   |
+
+* **Geo proximity** (optimization) - give each region its own view (`continent:AN`, `continent:EU`, ...) and put that
+  region's records there, so a client resolves to the nearest backend. Regions coexist, each actively serving its own
+  local traffic; the match-all `Public` is a catch-all for clients no region view matches.
+* **Split-horizon** (view) - put internal addresses in the `Private` view and public addresses in the `Public` view
+  under one name, so on-network clients get private IPs and everyone else gets public ones.
+* **Regional failover** (resilience) - pin one region's clients to a narrow view of in-region backends, and pair it with
+  a `Public` fallback that actively carries traffic when those backends are down or the client is out of view. Same as
+  geo proximity, narrowed to one pinned region whose `Public` is a failover target rather than catch-all.
+
+Because ECS resolvers cache by subnet, always give any view-restricted name a `Public` (match-all) fallback record so
+an out-of-view client never gets an empty answer cached globally - see [EDNS Client Subnet](#edns-client-subnet-ecs).
+
+**Answer-selection patterns** pick which records to return from the candidates a view has already allowed:
+
+| goal                    | policy            | weight layout                                                     |
+|-------------------------|-------------------|-------------------------------------------------------------------|
+| Blue-green cutover      | `round-robin`     | new environment in a higher tier; lower it to roll back           |
+| Active-passive failover | `round-robin`     | backups in a lower tier; serve only on full outage of the primary |
+| Canary / A-B            | `weighted-random` | new version at a small proportion; raise it to shift more traffic |
+| Sticky sessions         | `sticky-hash`     | equal-tier records; each client network pins to one endpoint      |
 
 * **Blue-green cutover** (`round-robin`) - run the new servers alongside the old ones in a lower `weight` tier, then
   raise their weight above the current group to cut all traffic over at once. The old servers fall to standby but keep
   serving, so rolling back is just lowering the weight again.
 * **Active-passive failover** (`round-robin`) - put backup records in a lower `weight` tier under the same policy; they
   stay on standby and serve only once every higher-weight record at the name is down.
-* **Canary / progressive / A-B** (`weighted-random`) - `weight` is a traffic proportion, so ship the new version at a
-  small weight next to the old (e.g. `5` vs `95` for a 5 % canary) and raise it gradually for a progressive rollout, or
-  fix the split for A-B testing. With the default `max_answers` of `1` the split is exact across queries.
+* **Canary / A-B** (`weighted-random`) - `weight` is a traffic proportion, so ship the new version at a small weight
+  next to the old (e.g. `5` vs `95` for a 5 % canary) and raise it gradually for a progressive rollout, or fix the
+  split for A-B testing. With the default `max_answers` of `1` the split is exact across queries.
 * **Sticky sessions** (`sticky-hash`) - each client network deterministically maps to the same endpoint via rendezvous
   hashing, so stateful backends stay pinned and a health flap or record change remaps only ~1/N clients instead of
   reshuffling everyone. It also keeps a client on one endpoint across queries, so a user never flips between backends.
+
+The view and policy axes **stack**: the view filters first, so every routing policy operates on the per-client records.
+One name can therefore carry, say, a `weighted-random` canary *inside* each geo view, or active-passive failover
+*inside* the `Private` view. Steering by client and by routing policy together on a single rrset is what lets PowerGSLB
+serve client-scoped, health-checked, weighted answers at once.
 
 ---
 

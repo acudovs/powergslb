@@ -606,11 +606,11 @@ python3 -m venv --copies --system-site-packages --upgrade-deps .venv
 source .venv/bin/activate
 ```
 
-Install the build requirements and build the wheel:
+Install dev dependencies and the project in editable mode, then build the wheel:
 
 ```shell
-pip install -r requirements-build.txt
-pip wheel --wheel-dir dist --no-build-isolation --no-deps --verbose .
+pip install --group dev --editable .
+pip wheel --wheel-dir dist --no-deps --verbose .
 ```
 
 Install the built wheel:

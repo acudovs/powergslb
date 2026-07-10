@@ -26,8 +26,8 @@ jobs:
       - name: Create virtual environment
         run: python3 -m venv --copies --system-site-packages --upgrade-deps .venv
 
-      - name: Install build requirements
-        run: .venv/bin/pip install -r requirements-build.txt
+      - name: Install dev dependencies and project editable
+        run: .venv/bin/pip install --group dev --editable .
 
       - name: Lint
         run: .venv/bin/pylint src tests
@@ -41,7 +41,7 @@ jobs:
           .venv/bin/coverage report -m --fail-under=100
 
       - name: Build wheel
-        run: .venv/bin/pip wheel --wheel-dir dist --no-build-isolation --no-deps --verbose .
+        run: .venv/bin/pip wheel --wheel-dir dist --no-deps --verbose .
 
   docker-integration-publish:
     needs: lint-unit-wheel
@@ -73,8 +73,8 @@ jobs:
       - name: Create virtual environment
         run: python3 -m venv --copies --upgrade-deps .venv
 
-      - name: Install build requirements
-        run: .venv/bin/pip install -r requirements-build.txt
+      - name: Install test dependencies
+        run: .venv/bin/pip install --group test
 
       - name: Integration tests
         run: tests/run-integration.sh

@@ -1,6 +1,0 @@
-icmplib == 3.*
-legacycrypt == 0.*
-maxminddb == 3.*
-mysql-connector-python == 9.*
-netaddr == 1.*
-#systemd-python  # C extension; requires gcc, python3-devel, systemd-devel to build; already installed in the image.

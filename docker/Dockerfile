@@ -2,12 +2,11 @@
 FROM registry.access.redhat.com/ubi10/ubi AS builder
 
 WORKDIR /build
-COPY pyproject.toml requirements.txt ./
+COPY pyproject.toml ./
 COPY src src
 
 RUN python3 -m venv --copies --system-site-packages --upgrade-deps /opt/powergslb && \
-    /opt/powergslb/bin/pip install -r requirements.txt && \
-    /opt/powergslb/bin/pip install --no-deps .
+    /opt/powergslb/bin/pip install .
 
 # Stage 2: runtime
 FROM registry.access.redhat.com/ubi10/ubi-init

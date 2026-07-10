@@ -4,7 +4,7 @@
 
 - [Layout](#layout)
 - [Create virtual environment](#create-virtual-environment)
-- [Install build requirements](#install-build-requirements)
+- [Install dev dependencies and project editable](#install-dev-dependencies-and-project-editable)
 - [Linting](#linting)
 - [Unit tests with coverage](#unit-tests-with-coverage)
 - [Integration tests](#integration-tests)
@@ -89,10 +89,10 @@ python3 -m venv --copies --system-site-packages --upgrade-deps .venv
 
 ---
 
-## Install build requirements
+## Install dev dependencies and project editable
 
 ```bash
-.venv/bin/pip install -r requirements-build.txt
+.venv/bin/pip install --group dev --editable .
 ```
 
 ---

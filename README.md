@@ -328,6 +328,7 @@ classDiagram
     class AdminRequestHandler {
         +route = "admin"
         -dict _commands$
+        +send_head() BytesIO | BinaryIO | None
         +content() str
     }
     class queryparser {
@@ -597,7 +598,7 @@ docker run -it --privileged --name powergslb --hostname powergslb \
 ## Manual setup
 
 The Docker image is the recommended way to run PowerGSLB. To install the Python package directly - for development, or
-to integrate with an existing PowerDNS and MariaDB - build a wheel and install it into a virtual environment.
+to integrate with an existing PowerDNS and MariaDB - build the package and install it into a virtual environment.
 
 Create a virtual environment (activation is required each time before use):
 
@@ -606,11 +607,11 @@ python3 -m venv --copies --system-site-packages --upgrade-deps .venv
 source .venv/bin/activate
 ```
 
-Install dev dependencies and the project in editable mode, then build the wheel:
+Install dev dependencies and the project in editable mode, then build the sdist and wheel:
 
 ```shell
 pip install --group dev --editable .
-pip wheel --wheel-dir dist --no-deps --verbose .
+python -m build
 ```
 
 Install the built wheel:

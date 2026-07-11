@@ -1,4 +1,6 @@
+*.br
 *.egg-info/
+*.gz
 *.pyc
 .claude
 .coverage

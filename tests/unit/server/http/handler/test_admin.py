@@ -10,10 +10,16 @@ get_data/save_data/delete_data entry points, rejecting unregistered tokens like 
 """
 
 import base64
+import email.utils
+import gzip
 import io
 import json
+from http import HTTPStatus
+from http.server import SimpleHTTPRequestHandler
+from pathlib import Path
 from typing import Any
 
+import brotli
 import netaddr
 import pytest
 
@@ -257,6 +263,223 @@ def test_handle_route_w2ui_head_is_404(monkeypatch: Any) -> None:
     handler._handle_route()
     assert not sent
     assert handler.errors_sent == [404]
+
+
+# --- static asset encoding negotiation --------------------------------------------------------------------------
+
+
+def _static_recorder(directory: Path, path: str, headers: dict[str, str] | None = None) -> _Recorder:
+    handler = _recorder(headers)
+    handler.directory = str(directory)  # type: ignore[attr-defined]  # set per request by stdlib __init__
+    handler.path = path
+    return handler
+
+
+def _make_asset(directory: Path, name: str = 'app.js', body: bytes = b'console.log(42);') -> None:
+    (directory / name).write_bytes(body)
+    (directory / f'{name}.gz').write_bytes(gzip.compress(body, mtime=0))
+    (directory / f'{name}.br').write_bytes(brotli.compress(body))
+
+
+def test_send_head_serves_brotli_when_accepted(tmp_path: Path) -> None:
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br, gzip'})
+    f = handler.send_head()
+    try:
+        headers = dict(handler.headers_sent)
+        assert handler.responses_sent == [HTTPStatus.OK]
+        assert headers['Content-Encoding'] == 'br'
+        assert headers['Vary'] == 'Accept-Encoding'
+        assert 'javascript' in headers['Content-Type']
+        assert headers['Content-Length'] == str((tmp_path / 'app.js.br').stat().st_size)
+        assert f is not None and f.read() == (tmp_path / 'app.js.br').read_bytes()
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_serves_gzip_when_only_gzip_offered(tmp_path: Path) -> None:
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'gzip'})
+    f = handler.send_head()
+    try:
+        headers = dict(handler.headers_sent)
+        assert headers['Content-Encoding'] == 'gzip'
+        assert f is not None and f.read() == (tmp_path / 'app.js.gz').read_bytes()
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_drops_q0_token(tmp_path: Path) -> None:
+    # 'br;q=0' explicitly refuses brotli, so the gzip sibling is served instead.
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br;q=0, gzip'})
+    f = handler.send_head()
+    try:
+        assert dict(handler.headers_sent)['Content-Encoding'] == 'gzip'
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_identity_without_accept_encoding(tmp_path: Path) -> None:
+    # The identity file is served here too, so it carries Vary even though it has no Content-Encoding.
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {})
+    f = handler.send_head()
+    try:
+        headers = dict(handler.headers_sent)
+        assert 'Content-Encoding' not in headers
+        assert headers['Vary'] == 'Accept-Encoding'
+        assert f is not None and f.read() == b'console.log(42);'
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_identity_for_unsupported_encoding(tmp_path: Path) -> None:
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'deflate'})
+    f = handler.send_head()
+    try:
+        headers = dict(handler.headers_sent)
+        assert 'Content-Encoding' not in headers
+        assert headers['Vary'] == 'Accept-Encoding'
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_identity_when_sibling_missing(tmp_path: Path) -> None:
+    # An asset with no precompressed twin is served as identity, still carrying Vary, even when br is accepted.
+    (tmp_path / 'plain.js').write_bytes(b'x')
+    handler = _static_recorder(tmp_path, '/plain.js', {'Accept-Encoding': 'br'})
+    f = handler.send_head()
+    try:
+        headers = dict(handler.headers_sent)
+        assert 'Content-Encoding' not in headers
+        assert headers['Vary'] == 'Accept-Encoding'
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_not_modified_uses_encoded_mtime(tmp_path: Path) -> None:
+    _make_asset(tmp_path)
+    ims = email.utils.formatdate((tmp_path / 'app.js.br').stat().st_mtime, usegmt=True)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br', 'If-Modified-Since': ims})
+    f = handler.send_head()
+    assert f is None
+    assert handler.responses_sent == [HTTPStatus.NOT_MODIFIED]
+
+
+def test_head_reaches_the_same_negotiation(tmp_path: Path) -> None:
+    # do_HEAD routes through send_head too, so a HEAD negotiates and closes the encoded file with no body.
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br'})
+    handler.command = 'HEAD'
+    SimpleHTTPRequestHandler.do_HEAD(handler)
+    assert dict(handler.headers_sent)['Content-Encoding'] == 'br'
+    assert isinstance(handler.wfile, io.BytesIO)
+    assert handler.wfile.getvalue() == b''  # HEAD writes no body
+
+
+def test_send_head_malformed_qvalue_refuses_that_encoding(tmp_path: Path) -> None:
+    # An unparseable q-value counts as a refusal (nginx-style), so 'br;q=bad' drops br and gzip is served.
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br;q=bad, gzip'})
+    f = handler.send_head()
+    try:
+        assert dict(handler.headers_sent)['Content-Encoding'] == 'gzip'
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_ignores_malformed_if_modified_since(tmp_path: Path) -> None:
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br', 'If-Modified-Since': 'garbage'})
+    f = handler.send_head()
+    try:
+        assert handler.responses_sent == [HTTPStatus.OK]
+        assert dict(handler.headers_sent)['Content-Encoding'] == 'br'
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_head_naive_if_modified_since_is_treated_as_utc(tmp_path: Path) -> None:
+    # An obsolete tz-less If-Modified-Since is read as UTC; a 1990 date is stale, so the body is still sent.
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js',
+                               {'Accept-Encoding': 'br', 'If-Modified-Since': 'Mon, 01 Jan 1990 00:00:00'})
+    f = handler.send_head()
+    try:
+        assert handler.responses_sent == [HTTPStatus.OK]
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_send_static_head_missing_file_is_404(tmp_path: Path) -> None:
+    # Direct call exercises the TOCTOU guard: send_head normally checks isfile first.
+    (tmp_path / 'app.js').write_bytes(b'x')
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br'})
+    result = handler._send_static_head(str(tmp_path / 'app.js'), str(tmp_path / 'missing.js.br'), 'br')
+    assert result is None
+    assert handler.errors_sent == [HTTPStatus.NOT_FOUND]
+
+
+def test_send_static_head_closes_file_on_write_error(tmp_path: Path, monkeypatch: Any) -> None:
+    # A failure after the sibling is opened closes the file and re-raises, so the descriptor never leaks.
+    _make_asset(tmp_path)
+    handler = _static_recorder(tmp_path, '/app.js', {'Accept-Encoding': 'br'})
+
+    def boom(*_args: Any) -> None:
+        raise RuntimeError('header failure')
+
+    monkeypatch.setattr(handler, 'send_header', boom)
+    with pytest.raises(RuntimeError, match='header failure'):
+        handler._send_static_head(str(tmp_path / 'app.js'), str(tmp_path / 'app.js.br'), 'br')
+
+
+def test_send_head_serves_compressed_index_for_directory(tmp_path: Path) -> None:
+    # A browser hits /admin/ (a directory), so the resolved index.html must negotiate like any other asset.
+    _make_asset(tmp_path, 'index.html', b'<!doctype html><title>admin</title>')
+    handler = _static_recorder(tmp_path, '/', {'Accept-Encoding': 'br'})
+    f = handler.send_head()
+    try:
+        headers = dict(handler.headers_sent)
+        assert headers['Content-Encoding'] == 'br'
+        assert 'html' in headers['Content-Type']
+        assert f is not None and f.read() == (tmp_path / 'index.html.br').read_bytes()
+    finally:
+        if f is not None:
+            f.close()
+
+
+def test_static_file_path_directory_without_trailing_slash_defers(tmp_path: Path) -> None:
+    # A directory URL missing the trailing slash defers to stdlib's 301 redirect, not compression negotiation.
+    (tmp_path / 'sub').mkdir()
+    handler = _static_recorder(tmp_path, '/sub')
+    assert handler._static_file_path() is None
+
+
+def test_static_file_path_directory_without_index_defers(tmp_path: Path) -> None:
+    # A directory with no index page defers to stdlib's directory listing.
+    (tmp_path / 'sub').mkdir()
+    handler = _static_recorder(tmp_path, '/sub/')
+    assert handler._static_file_path() is None
+
+
+def test_send_head_directory_defers_to_stdlib(tmp_path: Path) -> None:
+    # An unresolved path (directory without a trailing slash) hands off to stdlib's 301 redirect, unnegotiated.
+    (tmp_path / 'sub').mkdir()
+    handler = _static_recorder(tmp_path, '/sub', {'Accept-Encoding': 'br'})
+    assert handler.send_head() is None
+    assert handler.responses_sent == [HTTPStatus.MOVED_PERMANENTLY]
+    assert ('Vary', 'Accept-Encoding') not in handler.headers_sent
 
 
 # --- w2ui CRUD --------------------------------------------------------------------------------------------------

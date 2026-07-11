@@ -1,4 +1,4 @@
-# pylint: disable=missing-function-docstring
+# pylint: disable=missing-function-docstring, redefined-outer-name, too-many-lines
 
 """Admin w2ui interface tests.
 
@@ -11,12 +11,25 @@ Most tests drive the API through the w2ui client fixture; tests that exercise au
 requests use requests directly.
 """
 
+import gzip
 import re
 from typing import Any
 
+import brotli
+import pytest
 import requests
 
 from .conftest import W2UIClient
+
+
+@pytest.fixture(scope='session')
+def admin_index_refs(admin_url: str) -> list[str]:
+    """The href/src asset references parsed from the admin dashboard index.html."""
+    index = requests.get(f'{admin_url}/admin/', auth=('admin', 'admin'), verify=False, timeout=10)
+    assert index.status_code == 200
+    refs = re.findall(r'(?:href|src)="([^"]+)"', index.text)
+    assert refs, 'index.html references no assets'
+    return refs
 
 
 # auth
@@ -326,16 +339,10 @@ def test_admin_nonexistent_file_returns_404(admin_url: str) -> None:
     assert r.status_code == 404
 
 
-def test_admin_index_asset_references_resolve(admin_url: str) -> None:
+def test_admin_index_asset_references_resolve(admin_url: str, admin_index_refs: list[str]) -> None:
     # every asset referenced by the dashboard page is served with a matching content type
     content_types = {'.css': 'css', '.js': 'javascript', '.svg': 'svg'}
-    index = requests.get(f'{admin_url}/admin/',
-                         auth=('admin', 'admin'), verify=False, timeout=10)
-    assert index.status_code == 200
-
-    refs = re.findall(r'(?:href|src)="([^"]+)"', index.text)
-    assert refs
-    for ref in refs:
+    for ref in admin_index_refs:
         r = requests.get(f'{admin_url}/admin/{ref}',
                          auth=('admin', 'admin'), verify=False, timeout=10)
         assert r.status_code == 200, ref
@@ -750,6 +757,60 @@ def test_admin_static_js_asset(admin_url: str) -> None:
     assert r.status_code == 200
     assert 'javascript' in r.headers.get('Content-Type', '').lower()
     assert len(r.content) > 0
+
+
+# precompressed sibling negotiation (built into the image by the in-tree backend)
+
+_COMPRESSIBLE_SUFFIXES = ('.js', '.css', '.svg', '.html')
+
+
+def _get_asset(admin_url: str, path: str, accept_encoding: str) -> requests.Response:
+    # stream=True leaves the body undecoded so Content-Encoding and the raw bytes can be inspected.
+    return requests.get(f'{admin_url}{path}', headers={'Accept-Encoding': accept_encoding},
+                        auth=('admin', 'admin'), verify=False, timeout=10, stream=True)
+
+
+def test_admin_static_assets_precompressed(admin_url: str, admin_index_refs: list[str]) -> None:
+    # The shipped image must carry the identity, .gz and .br of every compressible asset - verify all three
+    # for each asset, that each sibling is smaller than the identity, and that it decodes back to it.
+    assets = [f'/admin/{ref}' for ref in admin_index_refs if ref.endswith(_COMPRESSIBLE_SUFFIXES)]
+    assert assets, 'index.html references no compressible assets'
+    for path in assets:
+        identity = _get_asset(admin_url, path, 'identity')
+        assert identity.status_code == 200, path
+        assert 'Content-Encoding' not in identity.headers, path
+        # The identity representation is still negotiable, so a shared cache must key it on Accept-Encoding too.
+        assert identity.headers.get('Vary') == 'Accept-Encoding', path
+        body = identity.content
+
+        brotli_resp = _get_asset(admin_url, path, 'br')
+        assert brotli_resp.status_code == 200, path
+        assert brotli_resp.headers['Content-Encoding'] == 'br', path
+        assert brotli_resp.headers.get('Vary') == 'Accept-Encoding', path
+        br_body = brotli_resp.raw.read()
+        assert len(br_body) < len(body), path
+        assert brotli.decompress(br_body) == body, path
+
+        gzip_resp = _get_asset(admin_url, path, 'gzip')
+        assert gzip_resp.status_code == 200, path
+        assert gzip_resp.headers['Content-Encoding'] == 'gzip', path
+        gz_body = gzip_resp.raw.read()
+        assert len(gz_body) < len(body), path
+        assert gzip.decompress(gz_body) == body, path
+
+
+def test_admin_directory_index_precompressed(admin_url: str) -> None:
+    # The dashboard is reached at /admin/ (a directory), so the resolved index.html must negotiate too.
+    identity = _get_asset(admin_url, '/admin/', 'identity')
+    assert identity.status_code == 200
+    assert 'Content-Encoding' not in identity.headers
+    body = identity.content
+
+    brotli_resp = _get_asset(admin_url, '/admin/', 'br')
+    assert brotli_resp.status_code == 200
+    assert brotli_resp.headers['Content-Encoding'] == 'br'
+    assert 'html' in brotli_resp.headers['Content-Type']
+    assert brotli.decompress(brotli_resp.raw.read()) == body
 
 
 # regression: malformed get-record / save-record must return an error, not crash

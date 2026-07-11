@@ -32,6 +32,7 @@ tests/
 │   ├── test_powerdns.py                DNS responses via PowerDNS, A/AAAA/NS/SOA/CNAME/MX/TXT/SRV (requires dig)
 │   └── test_schema_constraints.py      raw-SQL constraints/triggers, GC, longest-zone-match (needs POWERGSLB_CONTAINER)
 └── unit/                               in-process unit tests (no container required); mirrors src/powergslb/ layout
+    ├── test_build_backend.py           build_backend/backend.py: admin-asset pre-compression, .gz/.br, keep-smaller
     ├── test_main.py                    entry point: argument parsing, thread wiring, SystemService startup
     ├── test_version.py                 version constant is a semver string
     ├── client/
@@ -63,7 +64,7 @@ tests/
     ├── server/http/
     │   ├── test_server.py              HTTPServerManager: config unpacking, bundled-resources root, plain/TLS run()
     │   └── handler/
-    │       ├── test_admin.py           AdminRequestHandler: auth, route, w2ui parsing/CRUD/search/sort, dispatch
+    │       ├── test_admin.py           AdminRequestHandler: auth, route, w2ui dispatch, static assets
     │       ├── test_powerdns.py        PowerDNSRequestHandler: header override, route, view/health/policy pipeline
     │       ├── test_queryparser.py     w2ui query-string parser: flat/nested/indexed/array forms, helpers
     │       ├── test_request.py         HTTPRequestHandler base: handle() errors, body, route skeleton, writers

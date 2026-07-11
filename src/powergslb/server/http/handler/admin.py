@@ -1,10 +1,16 @@
 """Admin interface handler: Basic Auth, w2ui CRUD protocol, and static assets."""
 
 import base64
+import datetime
+import email.utils
+import io
 import json
 import logging
+import os
+import urllib.parse
+from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler
-from typing import Any, ClassVar
+from typing import Any, ClassVar, BinaryIO
 
 from powergslb.database import PageRequest
 from powergslb.monitor import MonitorManager
@@ -32,6 +38,9 @@ class AdminRequestHandler(HTTPRequestHandler):
         'save-record': '_save_record'
     }
 
+    # (Content-Encoding token, precompressed sibling suffix), most preferred first.
+    _encodings: ClassVar[tuple[tuple[str, str], ...]] = (('br', '.br'), ('gzip', '.gz'))
+
     def _handle_route(self) -> None:
         """Authenticate, then serve the w2ui CRUD endpoint or fall through to the static admin assets."""
         if not self._is_authorized():
@@ -47,6 +56,120 @@ class AdminRequestHandler(HTTPRequestHandler):
             SimpleHTTPRequestHandler.do_HEAD(self)
         else:
             self.send_error(404)
+
+    def send_head(self) -> io.BytesIO | BinaryIO | None:
+        """Serve a static asset, preferring a precompressed sibling the client accepts.
+
+        A resolved file or a directory index is served from here; everything else stays pure stdlib.
+
+        :returns: An open file object for the caller to stream and close, or None when nothing further remains.
+        """
+        path = self._static_file_path()
+        if path is None:
+            return super().send_head()
+
+        accepted = self._accepted_encodings()
+        for encoding, suffix in self._encodings:
+            encoded_path = path + suffix
+            if encoding in accepted and os.path.isfile(encoded_path):
+                return self._send_static_head(path, encoded_path, encoding)
+
+        return self._send_static_head(path, path, None)
+
+    def _static_file_path(self) -> str | None:
+        """Resolve the request to the on-disk regular file stdlib would serve.
+
+        A directory URL resolves to its index page; a directory without a trailing slash or index page returns None.
+
+        :returns: The file path to negotiate, or None.
+        """
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            if not urllib.parse.urlsplit(self.path).path.endswith('/'):
+                return None
+
+            for index in self.index_pages:
+                index_path = os.path.join(path, index)
+                if os.path.isfile(index_path):
+                    return index_path
+            return None
+
+        return path if os.path.isfile(path) else None
+
+    def _accepted_encodings(self) -> set[str]:
+        """Parse Accept-Encoding into the set of codings the client accepts (dropping any q=0 token).
+
+        :returns: The lowercased coding tokens with a non-zero q-value.
+        """
+        accepted = set()
+        for part in self.headers.get('Accept-Encoding', '').split(','):
+            tokens = part.split(';')
+            coding = tokens[0].strip().lower()
+            if not coding:
+                continue
+            quality = 1.0
+            for param in tokens[1:]:
+                param = param.strip()
+                if param.startswith('q='):
+                    try:
+                        quality = float(param[2:])
+                    except ValueError:
+                        quality = 0.0  # unparseable q counts as a refusal (nginx-style)
+            if quality > 0:
+                accepted.add(coding)
+        return accepted
+
+    def _send_static_head(self, path: str, disk_path: str, encoding: str | None) -> io.BytesIO | BinaryIO | None:
+        """Send headers for a static asset, mirroring the stdlib static path.
+
+        The Content-Type is guessed from the original file, not the .br/.gz twin; Content-Length, Last-Modified and
+        the If-Modified-Since comparison all use the file actually served; Vary: Accept-Encoding rides every
+        representation so a shared cache keys the identity and precompressed bodies apart.
+
+        :param path: The original file path, used only to guess the Content-Type.
+        :param disk_path: The identity file or a precompressed sibling to open and serve.
+        :param encoding: The Content-Encoding token for a sibling, or None to serve the identity file.
+        :returns: The open file object, or None on a 304.
+        """
+        ctype = self.guess_type(path)
+        try:
+            f = open(disk_path, 'rb')  # pylint: disable=consider-using-with
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+            return None
+
+        try:
+            fs = os.fstat(f.fileno())
+            if 'If-Modified-Since' in self.headers and 'If-None-Match' not in self.headers:
+                try:
+                    ims = email.utils.parsedate_to_datetime(self.headers['If-Modified-Since'])
+                except (TypeError, IndexError, OverflowError, ValueError):
+                    pass
+                else:
+                    if ims.tzinfo is None:
+                        ims = ims.replace(tzinfo=datetime.timezone.utc)
+                    if ims.tzinfo is datetime.timezone.utc:
+                        last_modif = datetime.datetime.fromtimestamp(fs.st_mtime, datetime.timezone.utc)
+                        last_modif = last_modif.replace(microsecond=0)
+                        if last_modif <= ims:
+                            self.send_response(HTTPStatus.NOT_MODIFIED)
+                            self.end_headers()
+                            f.close()
+                            return None
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-Type', ctype)
+            if encoding is not None:
+                self.send_header('Content-Encoding', encoding)
+            self.send_header('Content-Length', str(fs[6]))
+            self.send_header('Last-Modified', self.date_time_string(fs.st_mtime))
+            self.send_header('Vary', 'Accept-Encoding')
+            self.end_headers()
+            return f
+
+        except BaseException:
+            f.close()
+            raise
 
     def _is_authorized(self) -> bool:
         """Validate Basic Auth credentials against the database; any parse failure counts as unauthorized.

@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
-  lint-unit-wheel:
+  lint-unit-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -40,11 +40,11 @@ jobs:
           .venv/bin/coverage run --source=src -m pytest tests/unit -q
           .venv/bin/coverage report -m --fail-under=100
 
-      - name: Build wheel
-        run: .venv/bin/pip wheel --wheel-dir dist --no-deps --verbose .
+      - name: Build sdist and wheel
+        run: .venv/bin/python -m build
 
   docker-integration-publish:
-    needs: lint-unit-wheel
+    needs: lint-unit-build
     if: >-
       github.event_name != 'push'
       || github.ref == 'refs/heads/master'

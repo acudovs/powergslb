@@ -2,6 +2,7 @@
 FROM registry.access.redhat.com/ubi10/ubi AS builder
 
 WORKDIR /build
+COPY build_backend build_backend
 COPY pyproject.toml ./
 COPY src src
 

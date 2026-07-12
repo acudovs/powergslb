@@ -201,6 +201,25 @@ def test_send_content_custom_code_and_debug_off() -> None:
     assert handler.responses_sent == [503]
 
 
+def test_base_encode_body_is_identity() -> None:
+    # The base handler never negotiates an encoding; the body passes through unchanged with no token.
+    handler = _recorder()
+    assert handler._encode_body(b'x' * 4096) == (b'x' * 4096, None)
+
+
+def test_send_content_no_encoding_or_cache_headers_by_default() -> None:
+    # The PowerDNS path inherits the identity _encode_body and _cache_control = None, so its responses carry
+    # neither Content-Encoding, Cache-Control, nor Vary.
+    handler = _recorder({'Accept-Encoding': 'br, gzip'})
+    handler._send_content('{"a":1}')
+    header_names = {name for name, _ in handler.headers_sent}
+    assert 'Content-Encoding' not in header_names
+    assert 'Cache-Control' not in header_names
+    assert 'Vary' not in header_names
+    assert isinstance(handler.wfile, io.BytesIO)
+    assert handler.wfile.getvalue() == b'{"a":1}'
+
+
 # log_message / log_error (thin wrappers over _log; stdlib access/error log routed through logging)
 
 def test_log_message_logs_at_info_with_remote_ip(caplog: pytest.LogCaptureFixture) -> None:

@@ -19,7 +19,7 @@ __all__ = ['HTTPRequestHandler']
 class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     """Shared plumbing for the role handlers: per-request state, body reading, and response writing.
 
-    One handler class serves one role on one port; the mounted segment is owned by 'route' and a subclass
+    One handler class serves one role on one port; the request path is owned by 'route' and a subclass
     implements '_handle_route()'. Each client connection gets one database connection, shared by its
     keep-alive requests and bounded by the idle timeout.
 
@@ -33,6 +33,9 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     wbufsize = -1
     max_body_size = 1048576
     route: ClassVar[str]
+
+    # Per-role Cache-Control for dynamic responses.
+    _cache_control: ClassVar[str | None] = None
 
     # Header names (lowercased) whose values carry credentials and are masked in the debug header dump.
     sensitive_headers: ClassVar[frozenset[str]] = frozenset({
@@ -85,6 +88,14 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
             raise ValueError(f"'Content-Length' header invalid: '{content_length}'") from e
         self.body = self.rfile.read(content_length)
 
+    def _encode_body(self, content_bytes: bytes) -> tuple[bytes, str | None]:
+        """Return the body to send and its Content-Encoding, or None for identity.
+
+        :param content_bytes: The identity response body.
+        :returns: The body and its Content-Encoding token, or None for identity.
+        """
+        return content_bytes, None
+
     def _send_content(self, content: str, code: int = 200, debug: bool = True) -> None:
         """Send a JSON response.
 
@@ -93,11 +104,16 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         :param debug: When true, log the content at DEBUG.
         """
         content_bytes = content.encode('utf-8')
+        body, encoding = self._encode_body(content_bytes)
         self.send_response(code)
+        if self._cache_control is not None:
+            self.send_header('Cache-Control', self._cache_control)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(content_bytes)))
+        if encoding is not None:
+            self.send_header('Content-Encoding', encoding)
+        self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(content_bytes)
+        self.wfile.write(body)
         if debug:
             logging.debug('%s', content)
 

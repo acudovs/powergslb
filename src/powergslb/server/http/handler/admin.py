@@ -3,6 +3,7 @@
 import base64
 import datetime
 import email.utils
+import gzip
 import io
 import json
 import logging
@@ -10,7 +11,9 @@ import os
 import urllib.parse
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler
-from typing import Any, ClassVar, BinaryIO
+from typing import Any, Callable, ClassVar, BinaryIO
+
+import brotli
 
 from powergslb.database import PageRequest
 from powergslb.monitor import MonitorManager
@@ -30,6 +33,8 @@ class AdminRequestHandler(HTTPRequestHandler):
     """
     route: ClassVar[str] = 'admin'
 
+    _cache_control: ClassVar[str | None] = 'no-store'
+
     _commands: ClassVar[dict[str, str]] = {
         'delete-records': '_delete_records',
         'get-items': '_get_items',
@@ -38,8 +43,13 @@ class AdminRequestHandler(HTTPRequestHandler):
         'save-record': '_save_record'
     }
 
-    # (Content-Encoding token, precompressed sibling suffix), most preferred first.
-    _encodings: ClassVar[tuple[tuple[str, str], ...]] = (('br', '.br'), ('gzip', '.gz'))
+    # (Content-Encoding token, precompressed sibling suffix, per-request compressor), most preferred first.
+    _encodings: ClassVar[tuple[tuple[str, str, Callable[[bytes], bytes]], ...]] = (
+        ('br', '.br', lambda data: brotli.compress(data, quality=5)),
+        ('gzip', '.gz', lambda data: gzip.compress(data, compresslevel=6)),
+    )
+    # Below this size a dynamic response is sent uncompressed.
+    _min_encode_size: ClassVar[int] = 256
 
     def _handle_route(self) -> None:
         """Authenticate, then serve the w2ui CRUD endpoint or fall through to the static admin assets."""
@@ -69,7 +79,7 @@ class AdminRequestHandler(HTTPRequestHandler):
             return super().send_head()
 
         accepted = self._accepted_encodings()
-        for encoding, suffix in self._encodings:
+        for encoding, suffix, _ in self._encodings:
             encoded_path = path + suffix
             if encoding in accepted and os.path.isfile(encoded_path):
                 return self._send_static_head(path, encoded_path, encoding)
@@ -118,6 +128,24 @@ class AdminRequestHandler(HTTPRequestHandler):
             if quality > 0:
                 accepted.add(coding)
         return accepted
+
+    def _encode_body(self, content_bytes: bytes) -> tuple[bytes, str | None]:
+        """Compress a dynamic response, negotiating brotli then gzip against Accept-Encoding.
+
+        Bodies under _min_encode_size go out identity (the CPU is not worth the tiny reply).
+
+        :param content_bytes: The identity response body.
+        :returns: The (possibly compressed) body and its Content-Encoding token, or None for identity.
+        """
+        if len(content_bytes) < self._min_encode_size:
+            return content_bytes, None
+
+        accepted = self._accepted_encodings()
+        for encoding, _, compress in self._encodings:
+            if encoding in accepted:
+                return compress(content_bytes), encoding
+
+        return content_bytes, None
 
     def _send_static_head(self, path: str, disk_path: str, encoding: str | None) -> io.BytesIO | BinaryIO | None:
         """Send headers for a static asset, mirroring the stdlib static path.

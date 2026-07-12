@@ -482,6 +482,69 @@ def test_send_head_directory_defers_to_stdlib(tmp_path: Path) -> None:
     assert ('Vary', 'Accept-Encoding') not in handler.headers_sent
 
 
+# --- dynamic response encoding ----------------------------------------------------------------------------------
+
+# A body at or above _min_encode_size so the encoding gate opens.
+_BIG_JSON = json.dumps({'records': [{'id': i, 'name': f'record-{i}'} for i in range(50)]}, separators=(',', ':'))
+
+
+def test_send_content_brotli_when_accepted() -> None:
+    assert len(_BIG_JSON.encode()) >= AdminRequestHandler._min_encode_size
+    handler = _recorder({'Accept-Encoding': 'br, gzip'})
+    handler._send_content(_BIG_JSON)
+    headers = dict(handler.headers_sent)
+    assert headers['Content-Encoding'] == 'br'
+    assert headers['Cache-Control'] == 'no-store'
+    assert 'Vary' not in headers
+    assert isinstance(handler.wfile, io.BytesIO)
+    body = handler.wfile.getvalue()
+    assert headers['Content-Length'] == str(len(body))
+    assert brotli.decompress(body).decode() == _BIG_JSON
+
+
+def test_send_content_gzip_when_only_gzip_offered() -> None:
+    handler = _recorder({'Accept-Encoding': 'gzip'})
+    handler._send_content(_BIG_JSON)
+    headers = dict(handler.headers_sent)
+    assert headers['Content-Encoding'] == 'gzip'
+    assert headers['Cache-Control'] == 'no-store'
+    assert 'Vary' not in headers
+    assert isinstance(handler.wfile, io.BytesIO)
+    assert gzip.decompress(handler.wfile.getvalue()).decode() == _BIG_JSON
+
+
+def test_send_content_q0_refusal_falls_back_to_gzip() -> None:
+    # 'br;q=0' refuses brotli, so gzip is the first accepted coding.
+    handler = _recorder({'Accept-Encoding': 'br;q=0, gzip'})
+    handler._send_content(_BIG_JSON)
+    assert dict(handler.headers_sent)['Content-Encoding'] == 'gzip'
+
+
+def test_send_content_identity_without_accept_encoding() -> None:
+    # No acceptable coding: identity body, no Content-Encoding, but Cache-Control still applies and no Vary.
+    handler = _recorder({})
+    handler._send_content(_BIG_JSON)
+    headers = dict(handler.headers_sent)
+    assert 'Content-Encoding' not in headers
+    assert headers['Cache-Control'] == 'no-store'
+    assert 'Vary' not in headers
+    assert isinstance(handler.wfile, io.BytesIO)
+    assert handler.wfile.getvalue() == _BIG_JSON.encode()
+
+
+def test_send_content_small_body_stays_identity() -> None:
+    # Below the size gate the reply is sent identity even when br is accepted; Cache-Control still applies.
+    small = json.dumps({'status': 'success'}, separators=(',', ':'))
+    assert len(small.encode()) < AdminRequestHandler._min_encode_size
+    handler = _recorder({'Accept-Encoding': 'br, gzip'})
+    handler._send_content(small)
+    headers = dict(handler.headers_sent)
+    assert 'Content-Encoding' not in headers
+    assert headers['Cache-Control'] == 'no-store'
+    assert isinstance(handler.wfile, io.BytesIO)
+    assert handler.wfile.getvalue() == small.encode()
+
+
 # --- w2ui CRUD --------------------------------------------------------------------------------------------------
 
 

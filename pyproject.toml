@@ -15,6 +15,7 @@ license = "MIT"
 scripts = { powergslb = "powergslb.main:PowerGSLB.main" }
 requires-python = ">=3.12"
 dependencies = [
+    "brotli == 1.*",
     "icmplib == 3.*",
     "legacycrypt == 0.*",
     "maxminddb == 3.*",

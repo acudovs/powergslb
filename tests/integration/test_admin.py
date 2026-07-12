@@ -4,8 +4,9 @@
 
 Covers the HTTPS management API at /admin/w2ui: HTTP Basic auth, the get-records / get-record / get-items / save-record
 / delete-records commands, pagination, search (text and int operators, AND/OR logic), sort, full CRUD lifecycles for
-every table, static file serving, and malformed input that must return a JSON error with the connection left usable. All
-write tests create their own rows and clean them up via try/finally.
+every table, static file serving (including precompressed-sibling negotiation), on-the-fly compression of the dynamic
+grid responses, and malformed input that must return a JSON error with the connection left usable. All write tests
+create their own rows and clean them up via try/finally.
 
 Most tests drive the API through the w2ui client fixture; tests that exercise auth, static files, POST, or raw/prepared
 requests use requests directly.
@@ -811,6 +812,57 @@ def test_admin_directory_index_precompressed(admin_url: str) -> None:
     assert brotli_resp.headers['Content-Encoding'] == 'br'
     assert 'html' in brotli_resp.headers['Content-Type']
     assert brotli.decompress(brotli_resp.raw.read()) == body
+
+
+# dynamic w2ui response compression (on the fly at request time, distinct from the static precompressed siblings)
+
+def _w2ui_get(admin_url: str, accept_encoding: str, **params: Any) -> requests.Response:
+    # stream=True leaves the body undecoded so Content-Encoding and the raw bytes can be inspected.
+    return requests.get(f'{admin_url}/admin/w2ui', params=params, headers={'Accept-Encoding': accept_encoding},
+                        auth=('admin', 'admin'), verify=False, timeout=10, stream=True)
+
+
+def test_w2ui_grid_compressed_on_the_fly(admin_url: str) -> None:
+    # A full grid page trips the size gate, so it is compressed per request. Unlike the static path the dynamic
+    # response carries Cache-Control: no-store and no Vary; both codings decode back to the identity body.
+    identity = _w2ui_get(admin_url, 'identity', cmd='get-records', data='records')
+    assert identity.status_code == 200
+    body = identity.content
+    assert len(body) >= 256
+    assert 'Content-Encoding' not in identity.headers
+    assert identity.headers.get('Cache-Control') == 'no-store'
+    assert 'Vary' not in identity.headers
+
+    brotli_resp = _w2ui_get(admin_url, 'br, gzip', cmd='get-records', data='records')
+    assert brotli_resp.headers['Content-Encoding'] == 'br'  # br preferred over gzip
+    assert brotli_resp.headers.get('Cache-Control') == 'no-store'
+    assert 'Vary' not in brotli_resp.headers
+    br_body = brotli_resp.raw.read()
+    assert len(br_body) < len(body)
+    assert brotli.decompress(br_body) == body
+
+    gzip_resp = _w2ui_get(admin_url, 'gzip', cmd='get-records', data='records')
+    assert gzip_resp.headers['Content-Encoding'] == 'gzip'
+    gz_body = gzip_resp.raw.read()
+    assert len(gz_body) < len(body)
+    assert gzip.decompress(gz_body) == body
+
+
+def test_w2ui_q0_refusal_falls_back_to_gzip(admin_url: str) -> None:
+    # 'br;q=0' explicitly refuses brotli, so the grid is served gzip instead.
+    resp = _w2ui_get(admin_url, 'br;q=0, gzip', cmd='get-records', data='records')
+    assert resp.headers['Content-Encoding'] == 'gzip'
+
+
+def test_w2ui_small_response_not_compressed(admin_url: str) -> None:
+    # A tiny reply (below the size gate) is sent identity even when br is accepted, but still no-store.
+    resp = _w2ui_get(admin_url, 'br', cmd='no-such-command', data='domains')
+    assert resp.status_code == 200
+    assert resp.json()['status'] == 'error'
+    assert len(resp.content) < 256
+    assert 'Content-Encoding' not in resp.headers
+    assert resp.headers.get('Cache-Control') == 'no-store'
+    assert 'Vary' not in resp.headers
 
 
 # regression: malformed get-record / save-record must return an error, not crash

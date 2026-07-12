@@ -394,6 +394,7 @@ classDiagram
         +remove(db, ids) int
     }
     class Records {
+        +get(db, recid, page, ...) tuple
         +save(db, save_recid, ...) int
     }
     class Users {
@@ -402,7 +403,8 @@ classDiagram
         +save(db, save_recid, ...) int
     }
     class Status {
-        +get(db, recid, page, down_ids) tuple
+        +save(db, save_recid, ...) int
+        +remove(db, ids) int
     }
 
     %% ===== stdlib bases =====

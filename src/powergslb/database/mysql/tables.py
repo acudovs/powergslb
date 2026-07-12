@@ -351,7 +351,14 @@ class Table:
 
 
 class Records(Table):
-    """The records admin table: reads the records, writes the rrset and record in one transaction."""
+    """The records admin table: reads the records, writes the rrset and record in one transaction.
+
+    All joins are inner joins on NOT NULL foreign keys, so the join is 1:1 with records: a page that operates only
+    on records table fields is answered by paging records by primary key first, then joining to just that page.
+    Only a search or sort on a joined field falls back to the full join. The total is COUNT over records alone.
+    """
+    # Exposed fields resolvable on the records table without the join; a page confined to these takes the fast path.
+    _local_fields: ClassVar[frozenset[str]] = frozenset({'recid', 'disabled', 'weight', 'content'})
 
     @property
     def _select(self) -> str:
@@ -379,6 +386,79 @@ class Records(Table):
               JOIN `monitors` ON `records`.`monitor_id` = `monitors`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
         """
+
+    def _local_select(self, **kwargs: Any) -> tuple[str, tuple[Any, ...]]:  # pylint: disable=unused-argument
+        """Build the records-only page source projecting the fields a local page searches and sorts by.
+
+        :param kwargs: Extra arguments a subclass may consume.
+        :returns: The records-only SELECT statement and its bound parameters.
+        """
+        return """
+            SELECT `records`.`id` AS `recid`,
+              `records`.`disabled`,
+              `records`.`weight`,
+              `records`.`content`
+            FROM `records`
+        """, ()
+
+    def _is_local(self, page: PageRequest) -> bool:
+        """Report whether the page searches and sorts only by records-table fields.
+
+        :param page: The search/sort/paging request.
+        :returns: True when every referenced field is local, so the page can skip the full join.
+        """
+        referenced = {clause.get('field') for clause in page.searches}
+        referenced.update(clause.get('field') for clause in page.sorts)
+        return referenced <= self._local_fields
+
+    def _join_page(self, db: Selector, id_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Join the lookup tables onto a page of record ids, preserving the page order.
+
+        :param db: The executor to run the query on.
+        :param id_rows: The page rows carrying each record id as recid, in order.
+        :returns: The joined rows in the same order.
+        """
+        if not id_rows:
+            return []
+        ids = [row['recid'] for row in id_rows]
+        placeholders = ', '.join(['%s'] * len(ids))
+        rows = db.select(f'{self._select} WHERE `records`.`id` IN ({placeholders})', tuple(ids))
+        # The join order is unspecified, so restore it from id_rows and skip any concurrent deleted ids.
+        by_id = {row['recid']: row for row in rows}
+        return [by_id[recid] for recid in ids if recid in by_id]
+
+    def _full_read(self, db: Selector, recid: int,  # pylint: disable=unused-argument
+                   page: PageRequest | None, **kwargs: Any) -> tuple[list[dict[str, Any]], int]:
+        """Read via the full join wrapped by the base search/sort/paging pipeline.
+
+        :param db: The executor to run the queries on.
+        :param recid: The record id to fetch; 0 fetches every row.
+        :param page: The search/sort/paging request.
+        :param kwargs: Extra arguments a subclass may consume.
+        :returns: The matching rows and the total match count.
+        """
+        return super().get(db, recid, page)
+
+    def get(self, db: Selector, recid: int = 0, page: PageRequest | None = None,
+            **kwargs: Any) -> tuple[list[dict[str, Any]], int]:
+        """Read the records, whole or by recid, paging by primary key before the join when possible.
+
+        A page that searches and sorts only by records-table fields selects its ids from records first, then joins
+        the lookup tables to just that page; anything referencing a joined field falls back to the full join.
+        Both shapes return identical rows, order and total.
+
+        :param db: The executor to run the queries on.
+        :param recid: The record id to fetch; 0 fetches every row.
+        :param page: The search/sort/paging request; None returns every row.
+        :param kwargs: Extra arguments a subclass may consume.
+        :returns: The matching rows and the total match count.
+        """
+        if recid or page is None or not self._is_local(page):
+            return self._full_read(db, recid, page, **kwargs)
+
+        source, params = self._local_select(**kwargs)
+        id_rows, total = self._read(db, source, params, page)
+        return self._join_page(db, id_rows), total
 
     def save(self, db: Executor, save_recid: int, **fields: Any) -> int:
         """Insert or update a record across the rrset and record tables in one transaction.
@@ -434,18 +514,58 @@ class Records(Table):
 
 
 class Status(Records):
-    """The status admin table: a read-only table over records adding the computed On/Off column."""
+    """The status admin table: a read-only table over records adding the computed On/Off column.
 
-    def get(self, db: Selector, recid: int = 0, page: PageRequest | None = None,
-            down_ids: Sequence[int] = (), **kwargs: Any) -> tuple[list[dict[str, Any]], int]:
-        """Read the records, whole or by recid, with their computed On/Off status.
+    The status is a SQL CASE over disabled and the down-id snapshot; both depend on records, so status
+    is a local field and the fast page path (records first, then the join) still applies to its default
+    status/recid sort. Only the fallback full path keeps the CASE on top of the wrapped join.
+    """
+    # The computed status rides on the records-only fast page too, so a status search or sort stays local.
+    _local_fields: ClassVar[frozenset[str]] = Records._local_fields | {'status'}
 
-        Wraps the records join as a derived table and adds the status column on top:
-        a SQL CASE over disabled and the down-id snapshot.
+    def _local_select(self, down_ids: Sequence[int] = (), **kwargs: Any) -> tuple[str, tuple[Any, ...]]:
+        """Build the records-only page source with the computed On/Off status column.
+
+        :param down_ids: The content ids currently marked down.
+        :param kwargs: Extra arguments a subclass may consume.
+        :returns: The records-only SELECT statement with the status CASE and its bound parameters.
+        """
+        down_condition = ''
+        params: tuple[Any, ...] = ()
+        if down_ids:
+            placeholders = ', '.join(['%s'] * len(down_ids))
+            down_condition = f' OR `records`.`id` IN ({placeholders})'
+            params = tuple(down_ids)
+
+        return f"""
+            SELECT `records`.`id` AS `recid`,
+              `records`.`disabled`,
+              `records`.`weight`,
+              `records`.`content`,
+              CASE WHEN `records`.`disabled`{down_condition} THEN 'Off' ELSE 'On' END AS `status`
+            FROM `records`
+        """, params
+
+    def _join_page(self, db: Selector, id_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Join the lookup tables onto the page and carry each row's computed status across.
+
+        :param db: The executor to run the query on.
+        :param id_rows: The page rows carrying each record id as recid and its status, in order.
+        :returns: The joined rows with their status, in the same order.
+        """
+        rows = super()._join_page(db, id_rows)
+        status = {row['recid']: row['status'] for row in id_rows}
+        for row in rows:
+            row['status'] = status[row['recid']]
+        return rows
+
+    def _full_read(self, db: Selector, recid: int, page: PageRequest | None,
+                   down_ids: Sequence[int] = (), **kwargs: Any) -> tuple[list[dict[str, Any]], int]:
+        """Read via the full join wrapped as a derived table with the status CASE on top.
 
         :param db: The executor to run the queries on.
         :param recid: The record id to fetch; 0 fetches every row.
-        :param page: The search/sort/paging request; None returns every row.
+        :param page: The search/sort/paging request.
         :param down_ids: The content ids currently marked down.
         :param kwargs: Extra arguments a subclass may consume.
         :returns: The matching status rows and the total match count.

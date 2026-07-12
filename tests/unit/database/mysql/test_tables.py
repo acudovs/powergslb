@@ -167,6 +167,96 @@ def test_status_get_recid_binds_after_down_ids(db: _FakeExecutor) -> None:
     assert _last_params(db) == (7, 5)
 
 
+# the records/status fast path: page records by primary key first, then join the lookup tables to the page
+
+def test_records_fast_path_pages_records_then_joins(db: _FakeExecutor) -> None:
+    # a local page selects its ids from records alone, counts records alone, then joins only the page ids
+    db.select_queue = [
+        [{'recid': 1}, {'recid': 2}],  # records-only page ids
+        [{'total': 5}],  # records-only count
+        [{'recid': 2, 'content': 'b'}, {'recid': 1, 'content': 'a'}],  # page join, returned unordered
+    ]
+    rows, total = RECORDS.get(db, page=PageRequest(limit=2, offset=0))
+    assert total == 5
+    # the page order (the id order) is preserved even though the page join came back reordered
+    assert [row['recid'] for row in rows] == [1, 2]
+    page_sql, _ = db.calls[0]
+    count_sql, _ = db.calls[1]
+    join_sql, join_params = db.calls[2]
+    assert 'JOIN' not in page_sql and page_sql.endswith('LIMIT %s OFFSET %s')
+    assert 'JOIN' not in count_sql and count_sql.startswith('SELECT COUNT(*)')
+    assert 'JOIN `rrsets`' in join_sql and 'WHERE `records`.`id` IN (%s, %s)' in join_sql
+    assert join_params == (1, 2)
+
+
+def test_records_fast_path_search_on_local_field(db: _FakeExecutor) -> None:
+    # a search on content (a records column) stays on the fast path
+    db.select_queue = [[{'recid': 3}], [{'recid': 3, 'content': 'x'}]]  # short page skips the count
+    rows, total = RECORDS.get(db, page=PageRequest(searches=(_search('content', value='x'),), limit=10, offset=0))
+    assert (rows, total) == ([{'recid': 3, 'content': 'x'}], 1)
+    page_sql, page_params = db.calls[0]
+    assert 'JOIN' not in page_sql and 'WHERE `content` = %s' in page_sql
+    assert page_params == ('x', 10, 0)
+    assert 'JOIN `rrsets`' in db.calls[1][0]
+
+
+def test_records_fast_path_empty_page_skips_join(db: _FakeExecutor) -> None:
+    # no page ids means no page join and no count: a single records-only query
+    db.select_result = []
+    rows, total = RECORDS.get(db, page=PageRequest(limit=10, offset=0))
+    assert (rows, total) == ([], 0)
+    assert len(db.calls) == 1
+    assert 'JOIN' not in _last_sql(db)
+
+
+def test_records_falls_back_to_full_join_on_joined_field(db: _FakeExecutor) -> None:
+    # a sort on domain (a joined column) needs the full join, so the base wrapped-join path runs
+    RECORDS.get(db, page=PageRequest(sorts=({'field': 'domain', 'direction': 'asc'},), limit=5))
+    assert len(db.calls) == 1
+    sql = _last_sql(db)
+    assert 'JOIN `rrsets`' in sql and 'ORDER BY `domain`, `recid` LIMIT %s' in sql
+
+
+def test_status_fast_path_pages_records_then_joins(db: _FakeExecutor) -> None:
+    # the default status/recid sort is local (status is computed from records columns), so it pages records first
+    db.select_queue = [
+        [{'recid': 1, 'status': 'On'}, {'recid': 2, 'status': 'Off'}],  # records-only page with the CASE
+        [{'total': 5}],  # records-only count
+        [{'recid': 2, 'content': 'b'}, {'recid': 1, 'content': 'a'}],  # page join, no status column
+    ]
+    page = PageRequest(sorts=({'field': 'status', 'direction': 'asc'}, {'field': 'recid', 'direction': 'asc'}),
+                       limit=2, offset=0)
+    rows, total = STATUS.get(db, page=page, down_ids=[2])
+    assert total == 5
+    assert [row['recid'] for row in rows] == [1, 2]
+    # the status computed on the records-only page is carried onto the joined page rows
+    assert {row['recid']: row['status'] for row in rows} == {1: 'On', 2: 'Off'}
+    page_sql, page_params = db.calls[0]
+    assert 'JOIN' not in page_sql
+    assert "CASE WHEN `records`.`disabled` OR `records`.`id` IN (%s) THEN 'Off' ELSE 'On' END AS `status`" in page_sql
+    # the down id binds in the source, before the paging params
+    assert page_params == (2, 2, 0)
+    assert 'JOIN `rrsets`' in db.calls[2][0]
+
+
+def test_status_fast_path_without_down_ids(db: _FakeExecutor) -> None:
+    db.select_queue = [[{'recid': 1, 'status': 'On'}], [{'recid': 1, 'content': 'a'}]]
+    rows, total = STATUS.get(db, page=PageRequest(sorts=({'field': 'status', 'direction': 'asc'},),
+                                                  limit=10, offset=0))
+    assert (total, rows[0]['status']) == (1, 'On')
+    page_sql = db.calls[0][0]
+    assert "CASE WHEN `records`.`disabled` THEN 'Off' ELSE 'On' END AS `status`" in page_sql
+    assert 'IN (' not in page_sql
+
+
+def test_status_falls_back_to_full_join_on_joined_field(db: _FakeExecutor) -> None:
+    # a sort on name (a joined column) forces the CASE-over-wrapped-join full path
+    STATUS.get(db, page=PageRequest(sorts=({'field': 'name', 'direction': 'desc'},), limit=5), down_ids=[7])
+    sql = _last_sql(db)
+    assert 'JOIN `rrsets`' in sql
+    assert "CASE WHEN `r`.`disabled` OR `r`.`recid` IN (%s)" in sql
+
+
 def test_status_save_is_rejected(db: _FakeExecutor) -> None:
     # the status grid is read-only; the inherited records writes must stay unreachable in code too
     with pytest.raises(ValueError, match='read-only'):

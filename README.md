@@ -26,6 +26,7 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
 * [Configuration](#configuration)
 * [Database](#database)
 * [Web administration interface](#web-administration-interface)
+* [Response compression](#response-compression)
 * [Record selection](#record-selection)
     * [Views](#views)
     * [EDNS Client Subnet (ECS)](#edns-client-subnet-ecs)
@@ -777,6 +778,29 @@ in [database/README.md](database/README.md).
 ![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-views.png?raw=true)
 
 [More images](images)
+
+---
+
+## Response compression
+
+The admin interface compresses its responses to cut transfer size and speed up the web console over slow or remote
+links. The DNS backend is never compressed: its answers are small JSONs.
+
+Compression is negotiated from the request `Accept-Encoding` header. Brotli is preferred over gzip, an explicit `q=0`
+refuses that coding, and a client that accepts neither coding is served the uncompressed response. Two paths are
+handled independently.
+
+**Static assets.** The bundled console (the w2ui and jQuery frontend: `.js`, `.css`, `.html`, and `.svg` files) is
+precompressed once, when the wheel is built, into `.gz` (gzip level 9) and `.br` (Brotli quality 11) siblings placed
+next to each file. A sibling is kept only when it is smaller than the original, so already-tiny assets stay
+uncompressed. At request time the handler serves the precompressed twin the client accepts, or the original file
+otherwise. The response carries `Vary: Accept-Encoding`, a `Content-Type` guessed from the original file name, and
+conditional-request (`If-Modified-Since`) handling, so caches keep the identity and compressed representations apart.
+
+**Dynamic responses.** The w2ui grid data served at `/admin/w2ui` is generated per request and compressed on the fly
+with Brotli quality 5 or gzip level 6, tuned for low latency rather than maximum ratio. A response smaller than 256
+bytes is sent uncompressed, where the processing cost outweighs the saving. Each dynamic response carries
+`Cache-Control: no-store` and no `Vary`: it is never cached, so there is no stored coding to mismatch.
 
 ---
 

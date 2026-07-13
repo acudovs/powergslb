@@ -26,7 +26,6 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
 * [Configuration](#configuration)
 * [Database](#database)
 * [Web administration interface](#web-administration-interface)
-* [Response compression](#response-compression)
 * [Record selection](#record-selection)
     * [Views](#views)
     * [EDNS Client Subnet (ECS)](#edns-client-subnet-ecs)
@@ -42,6 +41,11 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
     * [TLS parameters](#tls-parameters)
     * [Trust custom CA certificates](#trust-custom-ca-certificates)
 * [Traffic management patterns](#traffic-management-patterns)
+* [Performance](#performance)
+    * [DNS query path](#dns-query-path)
+    * [PowerDNS caching](#powerdns-caching)
+    * [Response compression](#response-compression)
+    * [Admin grid paging](#admin-grid-paging)
 * [API](#api)
 * [Tests](#tests)
 * [License](#license)
@@ -352,6 +356,7 @@ classDiagram
     }
     class PowerDNSMixIn {
         <<abstract>>
+        +zone_suffixes(qname)$ list
         +gslb_checks() list
         +gslb_domains(include_disabled) list
         +gslb_records(qname, qtype) list
@@ -783,29 +788,6 @@ in [database/README.md](database/README.md).
 
 ---
 
-## Response compression
-
-The admin interface compresses its responses to cut transfer size and speed up the web console over slow or remote
-links. The DNS backend is never compressed: its answers are small JSONs.
-
-Compression is negotiated from the request `Accept-Encoding` header. Brotli is preferred over gzip, an explicit `q=0`
-refuses that coding, and a client that accepts neither coding is served the uncompressed response. Two paths are
-handled independently.
-
-**Static assets.** The bundled console (the w2ui and jQuery frontend: `.js`, `.css`, `.html`, and `.svg` files) is
-precompressed once, when the wheel is built, into `.gz` (gzip level 9) and `.br` (Brotli quality 11) siblings placed
-next to each file. A sibling is kept only when it is smaller than the original, so already-tiny assets stay
-uncompressed. At request time the handler serves the precompressed twin the client accepts, or the original file
-otherwise. The response carries `Vary: Accept-Encoding`, a `Content-Type` guessed from the original file name, and
-conditional-request (`If-Modified-Since`) handling, so caches keep the identity and compressed representations apart.
-
-**Dynamic responses.** The w2ui grid data served at `/admin/w2ui` is generated per request and compressed on the fly
-with Brotli quality 5 or gzip level 6, tuned for low latency rather than maximum ratio. A response smaller than 256
-bytes is sent uncompressed, where the processing cost outweighs the saving. Each dynamic response carries
-`Cache-Control: no-store` and no `Vary`: it is never cached, so there is no stored coding to mismatch.
-
----
-
 ## Record selection
 
 For each query PowerGSLB starts from every enabled record at the requested `(name, type)` and runs a pipeline before
@@ -1147,6 +1129,80 @@ The view and policy axes **stack**: the view filters first, so every routing pol
 One name can therefore carry, say, a `weighted-random` canary *inside* each geo view, or active-passive failover
 *inside* the `Private` view. Steering by client and by routing policy together on a single rrset is what lets PowerGSLB
 serve client-scoped, health-checked, weighted answers at once.
+
+---
+
+## Performance
+
+PowerGSLB answers DNS queries with low, flat latency at scale and keeps the web console responsive on large tables.
+The guiding principle is that correctness and freshness are the defaults: GSLB answers are per-client (view /
+[ECS](#edns-client-subnet-ecs)), health-dependent and routing-randomized, so the application recomputes them on every
+query rather than caching them. Response caching is available but ships **off**, opt-in with the trade-offs below.
+
+### DNS query path
+
+Every backend lookup resolves the owning zone by an indexed longest-suffix match: the candidate parent zones of the
+query name are computed in the application and matched against the unique-indexed `domains.domain`, and the
+most-specific zone wins. This is an index lookup, so per-lookup latency stays flat as the number of zones grows.
+PowerDNS issues each resolution as several backend lookups - an `ANY` lookup for the name, a separate `SOA` lookup
+for the authority section, and additional-section glue for `NS` / `MX` targets.
+
+### PowerDNS caching
+
+PowerDNS Authoritative can cache backend answers to skip repeated lookups. Three TTLs in `pdns.conf` (shipped at
+`docker/rootfs/etc/pdns/pdns.conf.powergslb`) control it:
+
+```
+cache-ttl=0           # packet cache: a full response, keyed by the exact query (including ECS)
+query-cache-ttl=0     # query cache: a backend record set, keyed by name / type / zone (no ECS)
+negquery-cache-ttl=0  # negative (NODATA / NXDOMAIN) entries in the query cache
+```
+
+Two properties hold regardless of the TTLs and make caching safe to enable when you want it:
+
+* Only globally cacheable answers are ever cached. An answer that varies by client - any view / ECS differentiated
+  name, or a [`sticky-hash`](#routing-policies) rrset - carries a non-zero ECS scope, and PowerDNS never caches
+  a scoped answer; it is recomputed on every query. Enabling caching cannot serve one subnet's answer to another.
+* `negquery-cache-ttl` never affects positive answers. It gates only negative responses, and it does not change
+  the negative TTL sent to resolvers (that is the zone's `SOA` minimum).
+
+Raising the TTLs speeds up repeated, globally cacheable queries at the cost of freshness. The side effects, per TTL:
+
+* `cache-ttl` / `query-cache-ttl` delay health failover and admin edits on match-all (scope-0) names: a record
+  that goes down, or an edit, is masked for up to `min(cache-ttl, record TTL)` for an identical repeat and up to
+  `query-cache-ttl` for other clients. Per-subnet names are unaffected (never cached).
+* `cache-ttl` / `query-cache-ttl` freeze the routing pick per cache entry: `round-robin` rotation and `weighted-random`
+  draws are recomputed once per TTL instead of per query (`sticky-hash` is deterministic, so unaffected).
+* `negquery-cache-ttl` widens the ECS negative-answer window. A view-restricted name with no `Public` fallback
+  returns `NODATA` to an out-of-view client; that negative is cached globally, so it can withhold the records from
+  in-view clients for up to `negquery-cache-ttl` at the authoritative server (and up to the zone `SOA` minimum at
+  downstream ECS resolvers). See [EDNS Client Subnet (ECS)](#edns-client-subnet-ecs).
+
+To enable caching - set conservative TTLs within your health-failover budget and never above your served record TTLs.
+Before raising `negquery-cache-ttl`, give every view-restricted name a `Public` (match-all) fallback record.
+
+### Response compression
+
+The admin interface compresses its responses to cut transfer size and speed up the web console. The DNS backend is
+never compressed. Compression is negotiated from the request `Accept-Encoding` header. Brotli is preferred over gzip,
+and a client that accepts neither coding is served the uncompressed response. Two paths are handled independently.
+
+**Static assets.** The bundled console files (`.js`, `.css`, `.html`, and `.svg`) are precompressed once at build time,
+into `.gz` (gzip level 9) and `.br` (Brotli quality 11) siblings placed next to each file. A sibling is kept only when
+it is smaller than the original, so already-tiny assets stay uncompressed. At request time the handler serves the
+precompressed twin the client accepts, or the original file otherwise. The response carries `Vary: Accept-Encoding`
+and `If-Modified-Since` handling, so caches keep the identity and compressed representations apart.
+
+**Dynamic responses.** The w2ui grid data served at `/admin/w2ui` is generated per request and compressed on the fly
+with Brotli quality 5 or gzip level 6, tuned for low latency rather than maximum ratio. A response smaller than 256
+bytes is sent uncompressed, where the processing cost outweighs the saving. Each dynamic response carries
+`Cache-Control: no-store` and is never cached.
+
+### Admin grid paging
+
+The admin Status and Records grids page large tables without materializing a full join per page: a page of rows is
+selected by primary key from the `records` table alone (with search, sort and paging in SQL), then the lookup tables
+are joined to just that page. This keeps the grids responsive at hundreds of thousands of records.
 
 ---
 

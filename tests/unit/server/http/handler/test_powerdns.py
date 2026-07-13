@@ -223,7 +223,7 @@ def test_is_in_view_cidr_matches_without_consulting_geoip(monkeypatch: pytest.Mo
 
 
 def test_is_in_view_geo_inert_with_unloaded_geoip(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An unloaded reader resolves to no location, so geo tokens never match (CIDR behaviour is unchanged).
+    # An unloaded reader resolves to no location, so geo tokens never match (CIDR behavior is unchanged).
     monkeypatch.setattr(ViewRule, '_geoip', _FakeGeoIP(country=None, continent=None))
     handler = _handler(['dns'])
     assert _in_view(handler, _record(rule='continent:EU')) is False
@@ -458,11 +458,11 @@ def test_scope_prefix_sticky_hash_opt_out_is_zero() -> None:
 
 # _get_lookup
 
-def test_get_lookup_strips_trailing_dot_and_projects() -> None:
+def test_get_lookup_passes_qname_through_and_projects() -> None:
     handler = _handler(['dns', 'lookup', 'example.com.', 'A'])
     handler.database.records = [_record(content='192.0.2.1', ttl=30)]  # type: ignore[attr-defined]
     result = handler._get_lookup()
-    assert handler.database.gslb_records_args == ('example.com', 'A')  # type: ignore[attr-defined]
+    assert handler.database.gslb_records_args == ('example.com.', 'A')  # type: ignore[attr-defined]
     assert result == [{'qname': 'example.com', 'qtype': 'A', 'content': '192.0.2.1', 'ttl': 30, 'scopeMask': 0}]
 
 

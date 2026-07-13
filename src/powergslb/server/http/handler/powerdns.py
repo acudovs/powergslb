@@ -159,7 +159,6 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
 
         :returns: The answer rows with qname, qtype, content, ttl and scopeMask.
         """
-        self.dirs[2] = self.dirs[2].rstrip('.')
         records = self.database.gslb_records(*self.dirs[2:])
         all_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for record in records:

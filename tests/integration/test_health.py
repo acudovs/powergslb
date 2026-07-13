@@ -4,7 +4,7 @@
 
 Reads the status table through the admin API on a freshly seeded container where every record is healthy: confirms all
 records report On with the expected fields, that 'No check' records never go down, and that the status table row count
-matches the records table. Active fall/rise lifecycle behaviour is covered in test_monitor_health.py.
+matches the records table. Active fall/rise lifecycle behavior is covered in test_monitor_health.py.
 """
 
 from .conftest import DNSClient, W2UIClient

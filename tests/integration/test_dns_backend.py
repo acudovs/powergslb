@@ -416,8 +416,9 @@ def test_longest_zone_match_prefers_child(
         w2ui: W2UIClient, dns: DNSClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
     """A query for host.sub.example.com resolves in the child zone, not the parent.
 
-    With both example.com and sub.example.com seeded, the NOT EXISTS guard makes the most-specific suffix win. A
-    decoy record under the parent at the relative name 'host.sub' must not be returned.
+    With both example.com and sub.example.com seeded, the longest matching zone (the `domain IN (...)` suffix lookup)
+    makes the most-specific suffix win. A decoy record under the parent at the relative name 'host.sub' must not be
+    returned.
     """
     child = 'sub.example.com'
     parent_content, child_content = '203.0.113.1', '198.51.100.1'

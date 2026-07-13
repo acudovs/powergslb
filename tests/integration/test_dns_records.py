@@ -1,6 +1,6 @@
 # pylint: disable=missing-function-docstring
 
-"""DNS record behaviour tests.
+"""DNS record behavior tests.
 
 Each test creates records via the admin API and exercises the DNS backend. Owner names are stored relative to the
 zone (the label left of the domain), so each test saves the relative `name` and looks the answer up by its FQDN.

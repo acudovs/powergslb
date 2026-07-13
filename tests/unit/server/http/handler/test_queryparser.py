@@ -12,7 +12,7 @@ from powergslb.server.http.handler import queryparser
 from powergslb.server.http.handler.queryparser import QueryParserError, parse_query
 
 
-# parse_query: top-level behaviour
+# parse_query: top-level behavior
 
 def test_empty_string_returns_empty_dict() -> None:
     assert not parse_query('')

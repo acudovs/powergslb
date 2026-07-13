@@ -51,22 +51,34 @@ class PowerDNSMixIn(abc.ABC):
 
         return self.select(operation)
 
+    @staticmethod
+    def zone_suffixes(qname: str) -> list[str]:
+        """Return qname and every parent suffix formed by dropping leading labels.
+
+        :param qname: The queried FQDN without a trailing dot.
+        :returns: qname first, then each shorter suffix down to the last label.
+        """
+        labels = qname.split('.')
+        return ['.'.join(labels[index:]) for index in range(len(labels))]
+
     def gslb_records(self, qname: str, qtype: str) -> list[dict[str, Any]]:
         """Return all DNS records for qname and qtype, including view rules.
 
-        The owning zone is resolved in SQL by longest-suffix match against `domains` (RIGHT(), never LIKE: '_'
-        is a legal DNS label char); the relative record name is recovered with SUBSTRING, and the answer's FQDN is
-        rebuilt with CASE/CONCAT. The NOT EXISTS guard makes the most-specific zone win when a parent and a
-        delegated child both suffix-match.
+        The owning zone is the most-specific `domains` row whose name is a suffix of qname: the suffix candidates
+        are matched by the unique index (`domain IN (...)`) and the longest is picked. The relative record name is
+        recovered from that zone with SUBSTRING and the answer FQDN is rebuilt with CASE/CONCAT.
 
         :param qname: The queried FQDN.
         :param qtype: The queried record type; 'ANY' matches every type.
         :returns: The enabled records at qname with their rrset, routing and view attributes.
         """
-        operation = """
+        qname = qname.rstrip('.')
+        suffixes = self.zone_suffixes(qname)
+        placeholders = ', '.join(['%s'] * len(suffixes))
+        operation = f"""
             SELECT
               CASE WHEN `rrsets`.`name` = '@' THEN `domains`.`domain`
-                   ELSE CONCAT(`rrsets`.`name`, '.', `domains`.`domain`) END AS `qname`,
+                ELSE CONCAT(`rrsets`.`name`, '.', `domains`.`domain`) END AS `qname`,
               `types`.`type` AS `qtype`,
               `rrsets`.`ttl`,
               `routings`.`policy_json`,
@@ -80,15 +92,14 @@ class PowerDNSMixIn(abc.ABC):
               JOIN `routings` ON `rrsets`.`routing_id` = `routings`.`id`
               JOIN `records` ON `records`.`rrset_id` = `rrsets`.`id`
               JOIN `views` ON `records`.`view_id` = `views`.`id`
-            WHERE (
-                (%s = `domains`.`domain` AND `rrsets`.`name` = '@')
-                OR (RIGHT(%s, CHAR_LENGTH(`domains`.`domain`) + 1) = CONCAT('.', `domains`.`domain`)
-                    AND `rrsets`.`name` = SUBSTRING(%s, 1, CHAR_LENGTH(%s) - CHAR_LENGTH(`domains`.`domain`) - 1))
+            WHERE `domains`.`domain` = (
+                SELECT `d`.`domain` FROM `domains` `d`
+                WHERE `d`.`domain` IN ({placeholders})
+                ORDER BY CHAR_LENGTH(`d`.`domain`) DESC LIMIT 1
               )
-              AND NOT EXISTS (
-                SELECT 1 FROM `domains` `d2`
-                WHERE CHAR_LENGTH(`d2`.`domain`) > CHAR_LENGTH(`domains`.`domain`)
-                  AND (%s = `d2`.`domain` OR RIGHT(%s, CHAR_LENGTH(`d2`.`domain`) + 1) = CONCAT('.', `d2`.`domain`))
+              AND `rrsets`.`name` = (
+                CASE WHEN %s = `domains`.`domain` THEN '@'
+                  ELSE SUBSTRING(%s, 1, CHAR_LENGTH(%s) - CHAR_LENGTH(`domains`.`domain`) - 1) END
               )
         """
 
@@ -96,12 +107,12 @@ class PowerDNSMixIn(abc.ABC):
             operation += """
                 AND `records`.`disabled` = 0
             """
-            params: tuple[str, ...] = (qname, qname, qname, qname, qname, qname)
+            params: tuple[str, ...] = (*suffixes, qname, qname, qname)
         else:
             operation += """
                 AND `types`.`type` = %s
-                  AND `records`.`disabled` = 0
+                AND `records`.`disabled` = 0
             """
-            params = (qname, qname, qname, qname, qname, qname, qtype)
+            params = (*suffixes, qname, qname, qname, qtype)
 
         return self.select(operation, params)

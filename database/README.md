@@ -200,10 +200,10 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 
 **Read path** - `PowerDNSMixIn` (`powerdns.py`):
 
-- `gslb_records(qname, qtype)` resolves the owning zone in SQL by longest-suffix match against `domains` (using
-  `RIGHT()`/`SUBSTRING`, never `LIKE`, because `_` is a legal DNS label character), then rebuilds the answer FQDN with
-  `CASE`/`CONCAT`. A `NOT EXISTS` guard makes the most-specific zone win when a parent and a delegated child both
-  suffix-match. Disabled records are excluded; view/health filtering and the routing policy run in Python.
+- `gslb_records(qname, qtype)` resolves the owning zone by a longest-suffix match: the candidate parent zones of
+  `qname` matched against `domains.domain` with `domain IN (...)` and the longest match wins (most-specific zone).
+  It recovers the relative record name with `SUBSTRING` and rebuilds the answer FQDN with `CASE`/`CONCAT`.
+  Disabled records are excluded; view/health filtering and the routing policy run in Python.
 - `gslb_checks()` returns every record's id, content, and `monitor_json` for the monitor threads.
 - `gslb_domains()` returns each zone's apex SOA content for the PowerDNS zone cache.
 

@@ -1182,6 +1182,14 @@ Raising the TTLs speeds up repeated, globally cacheable queries at the cost of f
 To enable caching - set conservative TTLs within your health-failover budget and never above your served record TTLs.
 Before raising `negquery-cache-ttl`, give every view-restricted name a `Public` (match-all) fallback record.
 
+The three TTLs above are independent of the PowerDNS **zone cache** (`zone-cache-refresh-interval`, default 300s),
+which PowerGSLB feeds through the `getAllDomains` backend request. The zone cache is an in-memory list of the
+authoritative zones, with their ids and `SOA` serials, refreshed on that interval. PowerDNS uses it to decide which
+zone a query belongs to, answering out-of-zone names and rejecting unknown ones without a backend lookup. It caches no
+view / health / routing decision, so it never affects answer freshness, and it is **on** by default. The only trade-off
+is that a newly added or removed domain becomes visible at the next refresh, up to `zone-cache-refresh-interval`
+seconds. Records within an already-known zone are unaffected, so keep it enabled.
+
 ### Response compression
 
 The admin interface compresses its responses to cut transfer size and speed up the web console. The DNS backend is

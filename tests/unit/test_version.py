@@ -18,3 +18,10 @@ def test_admin_js_matches_version() -> None:
     index = (admin / 'index.html').read_text()
     assert f'src/powergslb-{VERSION}.js' in index
     assert (admin / 'src' / f'powergslb-{VERSION}.js').is_file()
+
+
+def test_admin_css_matches_version() -> None:
+    admin = importlib.resources.files('powergslb.resources') / 'admin'
+    index = (admin / 'index.html').read_text()
+    assert f'src/powergslb-{VERSION}.css' in index
+    assert (admin / 'src' / f'powergslb-{VERSION}.css').is_file()

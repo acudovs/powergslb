@@ -1,26 +1,43 @@
 // ====================================================
+// Theme
+// ====================================================
+
+var themeStorageKey = 'powergslb.theme';
+
+// Resolve and apply the theme synchronously during head parse (before the body paints):
+// an explicit stored choice wins, otherwise follow the OS prefers-color-scheme.
+(function () {
+    var stored = localStorage.getItem(themeStorageKey);
+    var theme = stored || (window.matchMedia
+    && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+})();
+
+// The toggle is a toolbar button; its sun/moon icon is drawn by CSS (.pg-icon-theme) keyed on data-theme,
+// so it switches with the theme without any per-grid glyph bookkeeping.
+var themeToolbarItem = function () {
+    return {id: 'theme', type: 'button', icon: 'pg-icon-theme', hint: 'Toggle theme'};
+};
+
+var toggleTheme = function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem(themeStorageKey, next);
+};
+
+var themeToolbarClick = function (event) {
+    if (event.target === 'theme') {
+        toggleTheme();
+    }
+};
+
+// ====================================================
 // Widget configuration
 // ====================================================
 
 var w2uiUrl = '/admin/w2ui';
 
-var gridShow = {
-    footer: true,
-    selectColumn: true,
-    toolbar: true,
-    toolbarReload: true,
-    toolbarColumns: true,
-    toolbarSearch: true,
-    toolbarAdd: true,
-    toolbarEdit: true,
-    toolbarDelete: true
-};
-
-var gridSortData = [
-    {field: 'recid', direction: 'asc'}
-];
-
-var gridPopupForm = (function (event) {
+var gridPopupForm = function (event) {
     switch (event.target) {
         case 'gridDomains':
             openPopupForm(event, 'domain', 400, 210, 'formDomains');
@@ -29,7 +46,7 @@ var gridPopupForm = (function (event) {
             openPopupForm(event, 'monitor', 400, 210, 'formMonitors');
             break;
         case 'gridRecords':
-            openPopupForm(event, 'record', 400, 525, 'formRecords');
+            openPopupForm(event, 'record', 400, 485, 'formRecords');
             break;
         case 'gridRoutings':
             openPopupForm(event, 'routing', 400, 210, 'formRoutings');
@@ -44,9 +61,9 @@ var gridPopupForm = (function (event) {
             openPopupForm(event, 'view', 400, 210, 'formViews');
             break;
     }
-});
+};
 
-var openPopupForm = (function (event, record, popup_width, popup_height, form_name) {
+var openPopupForm = function (event, record, popup_width, popup_height, form_name) {
     var form_title;
     var form = w2ui[form_name];
     var grid = w2ui[event.target];
@@ -81,26 +98,30 @@ var openPopupForm = (function (event, record, popup_width, popup_height, form_na
             }
         }
     })
-});
-
-var formActions = {
-    'Close': function () {
-        w2popup.close();
-    },
-    'Save': function () {
-        if (this.validate().length === 0) {
-            this.save();
-            w2popup.close();
-        }
-    }
 };
-
-var formStyle = 'border: 0px; background-color: transparent';
 
 var panelStyle = 'border: 1px solid #dfdfdf; padding: 5px;';
 
 var reloadInterval = 3000;
 var reloadIntervalId = 0;
+
+var startAutoReload = function () {
+    if (reloadIntervalId === 0) {
+        reloadIntervalId = setInterval(function () {
+            w2ui.gridStatus.reload();
+        }, reloadInterval);
+        w2ui.gridStatus.toolbar.check('reload');
+        w2ui.gridStatus.reload();
+    }
+};
+
+var stopAutoReload = function () {
+    if (reloadIntervalId !== 0) {
+        clearInterval(reloadIntervalId);
+        reloadIntervalId = 0;
+        w2ui.gridStatus.toolbar.uncheck('reload');
+    }
+};
 
 var config = {
 
@@ -149,7 +170,6 @@ var config = {
         ],
         onClick: function (event) {
             switch (event.target) {
-                case 'gridStatus':
                 case 'gridDomains':
                 case 'gridMonitors':
                 case 'gridRecords':
@@ -157,6 +177,9 @@ var config = {
                 case 'gridTypes':
                 case 'gridUsers':
                 case 'gridViews':
+                    stopAutoReload();
+                // fall through
+                case 'gridStatus':
                     w2ui.layout.content('main', w2ui[event.target]);
                     break;
             }
@@ -214,21 +237,22 @@ var config = {
             items: [
                 {id: 'break', type: 'break'},
                 {
-                    id: 'reload', type: 'check', caption: 'Auto Reload', icon: 'w2ui-icon-reload',
+                    id: 'reload', type: 'check', caption: 'Auto', icon: 'w2ui-icon-reload',
                     checked: false, hint: 'Auto reload data in the list'
-                }
+                },
+                {type: 'spacer'},
+                themeToolbarItem()
             ],
             onClick: function (event) {
                 if (event.target === 'reload') {
-                    if (event.object.checked === false) {
-                        reloadIntervalId = setInterval(function () {
-                            w2ui.gridStatus.reload();
-                        }, reloadInterval);
-                        w2ui.gridStatus.reload();
+                    event.preventDefault();
+                    if (reloadIntervalId === 0) {
+                        startAutoReload();
                     } else {
-                        clearInterval(reloadIntervalId);
-                        reloadIntervalId = 0;
+                        stopAutoReload();
                     }
+                } else if (event.target === 'theme') {
+                    toggleTheme();
                 }
             }
         },
@@ -244,9 +268,6 @@ var config = {
     gridDomains: {
         name: 'gridDomains',
         postData: {data: 'domains'},
-        show: gridShow,
-        sortData: gridSortData,
-        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true},
@@ -256,25 +277,16 @@ var config = {
             {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'domain', caption: 'Domain', type: 'text'},
             {field: 'description', caption: 'Description', type: 'text'}
-        ],
-        onAdd: gridPopupForm,
-        onDblClick: gridPopupForm,
-        onEdit: gridPopupForm
+        ]
     },
 
     formDomains: {
         name: 'formDomains',
         postData: {data: 'domains'},
-        actions: formActions,
-        style: formStyle,
-        url: w2uiUrl,
         fields: [
             {field: 'domain', type: 'text', required: true, html: {caption: 'Domain: '}},
             {field: 'description', type: 'text', required: false, html: {caption: 'Description: '}}
-        ],
-        onSave: function () {
-            w2ui.gridDomains.reload();
-        }
+        ]
     },
 
     // ====================================================
@@ -284,9 +296,6 @@ var config = {
     gridMonitors: {
         name: 'gridMonitors',
         postData: {data: 'monitors'},
-        show: gridShow,
-        sortData: gridSortData,
-        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'monitor', caption: 'Monitor', size: '150px', resizable: true, sortable: true},
@@ -296,25 +305,16 @@ var config = {
             {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'monitor_json', caption: 'Monitor JSON', type: 'text'}
-        ],
-        onAdd: gridPopupForm,
-        onDblClick: gridPopupForm,
-        onEdit: gridPopupForm
+        ]
     },
 
     formMonitors: {
         name: 'formMonitors',
         postData: {data: 'monitors'},
-        actions: formActions,
-        style: formStyle,
-        url: w2uiUrl,
         fields: [
             {field: 'monitor', type: 'text', required: true, html: {caption: 'Monitor: '}},
             {field: 'monitor_json', type: 'text', required: true, html: {caption: 'Monitor JSON: '}}
-        ],
-        onSave: function () {
-            w2ui.gridMonitors.reload();
-        }
+        ]
     },
 
     // ====================================================
@@ -324,9 +324,6 @@ var config = {
     gridRecords: {
         name: 'gridRecords',
         postData: {data: 'records'},
-        show: gridShow,
-        sortData: gridSortData,
-        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'domain', caption: 'Domain', size: '100px', resizable: true, sortable: true},
@@ -352,18 +349,12 @@ var config = {
             {field: 'policy', caption: 'Routing', type: 'text'},
             {field: 'monitor', caption: 'Monitor', type: 'text'},
             {field: 'view', caption: 'View', type: 'text'}
-        ],
-        onAdd: gridPopupForm,
-        onDblClick: gridPopupForm,
-        onEdit: gridPopupForm
+        ]
     },
 
     formRecords: {
         name: 'formRecords',
         postData: {data: 'records'},
-        actions: formActions,
-        style: formStyle,
-        url: w2uiUrl,
         focus: 1,
         fields: [
             {
@@ -412,10 +403,7 @@ var config = {
                     placeholder: 'Type to search...', match: 'contains', url: w2uiUrl
                 }
             }
-        ],
-        onSave: function () {
-            w2ui.gridRecords.reload();
-        }
+        ]
     },
 
     // ====================================================
@@ -425,9 +413,6 @@ var config = {
     gridRoutings: {
         name: 'gridRoutings',
         postData: {data: 'routings'},
-        show: gridShow,
-        sortData: gridSortData,
-        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'policy', caption: 'Policy', size: '150px', resizable: true, sortable: true},
@@ -437,25 +422,16 @@ var config = {
             {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'policy', caption: 'Policy', type: 'text'},
             {field: 'policy_json', caption: 'Policy JSON', type: 'text'}
-        ],
-        onAdd: gridPopupForm,
-        onDblClick: gridPopupForm,
-        onEdit: gridPopupForm
+        ]
     },
 
     formRoutings: {
         name: 'formRoutings',
         postData: {data: 'routings'},
-        actions: formActions,
-        style: formStyle,
-        url: w2uiUrl,
         fields: [
             {field: 'policy', type: 'text', required: true, html: {caption: 'Policy: '}},
             {field: 'policy_json', type: 'text', required: true, html: {caption: 'Policy JSON: '}}
-        ],
-        onSave: function () {
-            w2ui.gridRoutings.reload();
-        }
+        ]
     },
 
     // ====================================================
@@ -465,9 +441,6 @@ var config = {
     gridTypes: {
         name: 'gridTypes',
         postData: {data: 'types'},
-        show: gridShow,
-        sortData: gridSortData,
-        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'Value', size: '50px', resizable: true, sortable: true},
             {field: 'name_type', caption: 'Type', size: '100px', resizable: true, sortable: true},
@@ -477,18 +450,12 @@ var config = {
             {field: 'recid', caption: 'Value', type: 'int'},
             {field: 'name_type', caption: 'Type', type: 'text'},
             {field: 'description', caption: 'Description', type: 'text'}
-        ],
-        onAdd: gridPopupForm,
-        onDblClick: gridPopupForm,
-        onEdit: gridPopupForm
+        ]
     },
 
     formTypes: {
         name: 'formTypes',
         postData: {data: 'types'},
-        actions: formActions,
-        style: formStyle,
-        url: w2uiUrl,
         fields: [
             {
                 field: 'recid', type: 'int', required: true, html: {caption: 'Value: '},
@@ -496,10 +463,7 @@ var config = {
             },
             {field: 'name_type', type: 'text', required: true, html: {caption: 'Type: '}},
             {field: 'description', type: 'text', required: true, html: {caption: 'Description: '}}
-        ],
-        onSave: function () {
-            w2ui.gridTypes.reload();
-        }
+        ]
     },
 
     // ====================================================
@@ -509,9 +473,6 @@ var config = {
     gridUsers: {
         name: 'gridUsers',
         postData: {data: 'users'},
-        show: gridShow,
-        sortData: gridSortData,
-        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'user', caption: 'User', size: '100px', resizable: true, sortable: true},
@@ -521,26 +482,17 @@ var config = {
             {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'user', caption: 'User', type: 'text'},
             {field: 'name', caption: 'Name', type: 'text'}
-        ],
-        onAdd: gridPopupForm,
-        onDblClick: gridPopupForm,
-        onEdit: gridPopupForm
+        ]
     },
 
     formUsers: {
         name: 'formUsers',
         postData: {data: 'users'},
-        actions: formActions,
-        style: formStyle,
-        url: w2uiUrl,
         fields: [
             {field: 'user', type: 'text', required: true, html: {caption: 'User: '}},
             {field: 'name', type: 'text', required: true, html: {caption: 'Name: '}},
             {field: 'password', type: 'password', required: true, html: {caption: 'Password: '}}
-        ],
-        onSave: function () {
-            w2ui.gridUsers.reload();
-        }
+        ]
     },
 
     // ====================================================
@@ -550,9 +502,6 @@ var config = {
     gridViews: {
         name: 'gridViews',
         postData: {data: 'views'},
-        show: gridShow,
-        sortData: gridSortData,
-        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
             {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true},
@@ -562,27 +511,60 @@ var config = {
             {field: 'recid', caption: 'ID', type: 'int'},
             {field: 'view', caption: 'View', type: 'text'},
             {field: 'rule', caption: 'Rule', type: 'text'}
-        ],
-        onAdd: gridPopupForm,
-        onDblClick: gridPopupForm,
-        onEdit: gridPopupForm
+        ]
     },
 
     formViews: {
         name: 'formViews',
         postData: {data: 'views'},
-        actions: formActions,
-        style: formStyle,
-        url: w2uiUrl,
         fields: [
             {field: 'view', type: 'text', required: true, html: {caption: 'View: '}},
             {field: 'rule', type: 'text', required: true, html: {caption: 'Rule: '}}
-        ],
-        onSave: function () {
-            w2ui.gridViews.reload();
-        }
+        ]
     }
 };
+
+// Apply the shared configuration to every editable PowerGSLB entity, keyed by base name.
+['Domains', 'Monitors', 'Records', 'Routings', 'Types', 'Users', 'Views'].forEach(
+    function (base) {
+        var grid = config['grid' + base];
+        grid.show = {
+            footer: true,
+            selectColumn: true,
+            toolbar: true,
+            toolbarReload: true,
+            toolbarColumns: true,
+            toolbarSearch: true,
+            toolbarAdd: true,
+            toolbarEdit: true,
+            toolbarDelete: true
+        };
+        grid.sortData = [{field: 'recid', direction: 'asc'}];
+        grid.url = w2uiUrl;
+        grid.toolbar = {items: [{type: 'spacer'}, themeToolbarItem()], onClick: themeToolbarClick};
+        grid.onAdd = gridPopupForm;
+        grid.onDblClick = gridPopupForm;
+        grid.onEdit = gridPopupForm;
+
+        var form = config['form' + base];
+        form.actions = {
+            'Close': function () {
+                w2popup.close();
+            },
+            'Save': function () {
+                if (this.validate().length === 0) {
+                    this.save();
+                    w2popup.close();
+                }
+            }
+        };
+        form.style = 'border: 0px; background-color: transparent';
+        form.url = w2uiUrl;
+        form.onSave = function () {
+            w2ui['grid' + base].reload();
+        };
+    }
+);
 
 // ====================================================
 // Widget initialization
@@ -590,6 +572,7 @@ var config = {
 
 $(function () {
     // on page initialization
+    w2obj.grid.prototype.buttons.add.caption = 'Add';
     $('#powergslb').w2layout(config.layout);
     w2ui.layout.content('left', $().w2sidebar(config.sidebar));
     w2ui.layout.content('main', $().w2grid(config.gridStatus));

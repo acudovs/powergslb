@@ -1,0 +1,435 @@
+/*
+ * PowerGSLB admin dark theme.
+ *
+ * Overrides the vendored w2ui 1.4.3 light palette. Every rule that restyles a w2ui element is scoped under
+ * html[data-theme="dark"], so the light theme (attribute absent or "light") is the untouched w2ui default.
+ */
+
+/* Palette */
+html[data-theme="dark"] {
+    color-scheme: dark;
+
+    --pg-bg: #1e1e1e;          /* page background           */
+    --pg-surface: #252526;     /* raised panels, forms      */
+    --pg-header: #2d2d30;      /* headers, toolbars         */
+    --pg-border: #3a3a3a;      /* separators, panel borders */
+    --pg-field: #3c3c3c;       /* input backgrounds         */
+    --pg-field-border: #555;   /* input / separator borders */
+    --pg-text: #d4d4d4;        /* primary text              */
+    --pg-muted: #9aa0a6;       /* labels, group headings    */
+    --pg-hover: #2a2d2e;       /* row / node hover          */
+    --pg-accent: #094771;      /* selection background      */
+    --pg-accent-text: #ffffff; /* selection text            */
+}
+
+html[data-theme="dark"] body {
+    background-color: var(--pg-bg);
+    color: var(--pg-text);
+}
+
+/* Inputs, selects, textareas. w2ui applies a global "input:not([type=button]),select,textarea { background:#fff }"
+   rule; recolor everything text-like at once (never the toggle checkbox, never real buttons). */
+html[data-theme="dark"] input:not([type=button]):not([type=checkbox]),
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea {
+    color: var(--pg-text);
+    background-color: var(--pg-field);
+    border-color: var(--pg-field-border);
+}
+
+/* The "Disabled" toggle slider */
+html[data-theme="dark"] input[type=checkbox].w2ui-toggle + div {
+    background-color: var(--pg-field);
+    border-color: var(--pg-field-border);
+}
+
+/* Overlays: column chooser, combo lists, search builder */
+html[data-theme="dark"] .w2ui-overlay {
+    background-color: var(--pg-header);
+    border-color: var(--pg-border);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .6);
+}
+
+html[data-theme="dark"] .w2ui-overlay:before {
+    background-color: var(--pg-header);
+    border-color: var(--pg-border);
+}
+
+html[data-theme="dark"] .w2ui-overlay table.w2ui-drop-menu {
+    color: var(--pg-text);
+    background-color: var(--pg-header);
+}
+
+html[data-theme="dark"] .w2ui-overlay table.w2ui-drop-menu .w2ui-item-even {
+    background-color: var(--pg-header);
+}
+
+html[data-theme="dark"] .w2ui-overlay table.w2ui-drop-menu .w2ui-item-odd {
+    background-color: var(--pg-surface);
+}
+
+html[data-theme="dark"] .w2ui-overlay table.w2ui-drop-menu tr:hover,
+html[data-theme="dark"] .w2ui-overlay .w2ui-col-on-off table tr:hover {
+    background-color: var(--pg-hover);
+}
+
+html[data-theme="dark"] .w2ui-overlay table.w2ui-drop-menu tr.w2ui-selected {
+    background-color: var(--pg-accent);
+}
+
+html[data-theme="dark"] .w2ui-overlay .w2ui-grid-searches {
+    background-color: var(--pg-surface);
+}
+
+/* Search-builder overlay chrome: cell separators and the actions (Reset / Search) bar. */
+html[data-theme="dark"] .w2ui-overlay .w2ui-grid-searches table td.caption,
+html[data-theme="dark"] .w2ui-overlay .w2ui-grid-searches table td.operator {
+    color: var(--pg-text);
+    border-right-color: var(--pg-border);
+}
+
+html[data-theme="dark"] .w2ui-overlay .w2ui-grid-searches table td.actions > div {
+    background-color: var(--pg-header);
+    border-top-color: var(--pg-border);
+}
+
+/* Native selects with a baked-in light gradient (styled control + the search-builder operator dropdown). */
+html[data-theme="dark"] .w2ui-select,
+html[data-theme="dark"] .w2ui-overlay .w2ui-grid-searches table td.operator select {
+    color: var(--pg-text) !important;
+    background-image: none !important;
+    background-color: var(--pg-field) !important;
+    border-color: var(--pg-field-border);
+}
+
+/* Every .btn carries a white "box-shadow: 0 1px 0 #fff" underline; drop it on all variants (Close and Save). */
+html[data-theme="dark"] button.btn {
+    box-shadow: none;
+}
+
+/* Neutral buttons (e.g. Close); the colored variants (Save is btn-green) keep their fill. */
+html[data-theme="dark"] button.btn:not(.btn-blue):not(.btn-green):not(.btn-orange):not(.btn-red) {
+    color: var(--pg-text);
+    background-image: none;
+    background-color: var(--pg-field);
+    border-color: var(--pg-field-border);
+}
+
+html[data-theme="dark"] button.btn:not(.btn-blue):not(.btn-green):not(.btn-orange):not(.btn-red):hover {
+    background-color: var(--pg-hover);
+}
+
+/* Forms (rendered inside popups) */
+html[data-theme="dark"] .w2ui-form .w2ui-buttons {
+    background-color: var(--pg-header);
+    border-top-color: var(--pg-border);
+}
+
+html[data-theme="dark"] .w2ui-field > label {
+    color: var(--pg-muted);
+}
+
+/* Color picker (.w2ui-color); swatch cells keep their own inline colors. */
+html[data-theme="dark"] .w2ui-color {
+    background-color: var(--pg-header);
+}
+
+/* Date / time / datetime picker (.w2ui-calendar, rendered inside .w2ui-overlay) */
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-title {
+    color: var(--pg-text);
+    background-image: none;
+    background-color: var(--pg-header);
+}
+
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-jump {
+    background-color: var(--pg-surface);
+}
+
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-jump > :first-child {
+    border-right-color: var(--pg-border);
+}
+
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-jump .w2ui-jump-month:hover,
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-jump .w2ui-jump-year:hover,
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-jump .w2ui-jump-month.selected,
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-jump .w2ui-jump-year.selected {
+    color: var(--pg-text);
+    border-color: var(--pg-border);
+    background-color: var(--pg-hover);
+}
+
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-previous,
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-next {
+    color: var(--pg-muted);
+}
+
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-previous:hover,
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-next:hover {
+    border-color: var(--pg-border);
+    background-color: var(--pg-hover);
+}
+
+/* Prev / next arrows are border-triangles; recolor the two visible edges. */
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-previous > div,
+html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-next > div {
+    border-left-color: var(--pg-muted);
+    border-top-color: var(--pg-muted);
+}
+
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td,
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td.w2ui-day-empty {
+    color: var(--pg-text);
+    border-color: var(--pg-surface);
+    background-color: var(--pg-bg);
+}
+
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days tr.w2ui-day-title td {
+    color: var(--pg-muted);
+    border-color: var(--pg-surface);
+    background-color: var(--pg-surface);
+}
+
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td:hover,
+html[data-theme="dark"] .w2ui-calendar-time td div:hover {
+    color: var(--pg-accent-text);
+    border-color: var(--pg-border);
+    background-color: var(--pg-hover);
+}
+
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td.w2ui-today {
+    background-color: var(--pg-accent);
+}
+
+html[data-theme="dark"] .w2ui-calendar-time td:nth-child(even) {
+    background-color: var(--pg-surface);
+}
+
+/* Enum multi-select and file upload share the .w2ui-list tag box. */
+html[data-theme="dark"] .w2ui-list {
+    border-color: var(--pg-field-border);
+    background-color: var(--pg-field);
+}
+
+html[data-theme="dark"] .w2ui-list ul li {
+    color: var(--pg-text);
+    border-color: var(--pg-accent);
+    background-color: var(--pg-header);
+}
+
+html[data-theme="dark"] .w2ui-list ul li:hover {
+    background-color: var(--pg-hover);
+}
+
+html[data-theme="dark"] .w2ui-list .w2ui-enum-placeholder {
+    color: var(--pg-muted);
+}
+
+/* Layout panels. panelStyle sets an inline "1px solid #dfdfdf" border on .w2ui-panel-content, so the border override
+   must target that element (not .w2ui-panel) to remove the light frame. */
+html[data-theme="dark"] .w2ui-panel,
+html[data-theme="dark"] .w2ui-layout > div .w2ui-panel .w2ui-panel-content {
+    border-color: var(--pg-border) !important;
+}
+
+html[data-theme="dark"] .w2ui-layout > div .w2ui-panel .w2ui-panel-content {
+    background-color: var(--pg-surface);
+    color: var(--pg-text);
+}
+
+/* Grid: body and rows */
+html[data-theme="dark"] .w2ui-grid,
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body {
+    background-color: var(--pg-bg);
+    color: var(--pg-text);
+    border-color: var(--pg-border);
+}
+
+/* w2ui casts a light shadow below the column-header band; darken it so no white line bleeds under the toolbar. */
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-columns {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-records table tr.w2ui-odd {
+    background-color: var(--pg-bg);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-records table tr.w2ui-even {
+    background-color: var(--pg-surface);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-records table tr.w2ui-odd:hover,
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-records table tr.w2ui-even:hover {
+    background-color: var(--pg-hover);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-records table tr.w2ui-selected,
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-records table td.w2ui-selected {
+    color: var(--pg-accent-text) !important;
+    background-color: var(--pg-accent) !important;
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body table td {
+    border-right-color: var(--pg-border);
+}
+
+/* Column headers: a lighter band than the toolbar, bordered on all edges (mirrors light, where the header is
+   lighter than the toolbar and both separator lines read). */
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-body table .w2ui-head {
+    color: var(--pg-text);
+    background-image: none;
+    background-color: #3a3a3e;
+    border-right-color: var(--pg-field-border);
+    border-bottom-color: var(--pg-field-border);
+}
+
+/* Grid: toolbar, search, footer */
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-toolbar {
+    background-color: var(--pg-header);
+    border-bottom-color: var(--pg-field-border); /* the separator line above the header */
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+html[data-theme="dark"] .w2ui-toolbar {
+    background-color: var(--pg-header);
+}
+
+html[data-theme="dark"] .w2ui-toolbar table.w2ui-button .w2ui-tb-caption {
+    color: var(--pg-text);
+}
+
+html[data-theme="dark"] .w2ui-toolbar table.w2ui-button.over {
+    background-color: var(--pg-hover);
+    border-color: var(--pg-border);
+}
+
+html[data-theme="dark"] .w2ui-toolbar table.w2ui-button.down,
+html[data-theme="dark"] .w2ui-toolbar table.w2ui-button.checked {
+    background-color: var(--pg-accent);
+    border-color: var(--pg-border);
+}
+
+html[data-theme="dark"] .w2ui-toolbar table.w2ui-button.checked .w2ui-tb-caption {
+    color: var(--pg-accent-text);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-toolbar-search .w2ui-search-all {
+    color: var(--pg-text);
+    background-color: var(--pg-field);
+    border-color: var(--pg-field-border);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-footer {
+    color: var(--pg-text);
+    background-image: none;
+    background-color: var(--pg-surface);
+    border-top-color: var(--pg-border);
+    box-shadow: 0 -1px 4px rgba(0, 0, 0, .4);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-footer .w2ui-footer-center .w2ui-footer-nav a.w2ui-footer-btn {
+    color: var(--pg-text);
+}
+
+html[data-theme="dark"] .w2ui-grid .w2ui-grid-footer .w2ui-footer-center .w2ui-footer-nav a.w2ui-footer-btn:hover {
+    color: var(--pg-accent-text);
+    background-color: var(--pg-accent);
+}
+
+/* Popups */
+html[data-theme="dark"] .w2ui-popup {
+    background-color: var(--pg-surface);
+    border-color: var(--pg-border);
+    box-shadow: 0 0 25px rgba(0, 0, 0, .7);
+}
+
+html[data-theme="dark"] .w2ui-popup .w2ui-msg-title {
+    color: var(--pg-text);
+    background-image: none;
+    background-color: var(--pg-header);
+    border-bottom-color: var(--pg-border); /* w2ui draws a 2px #bfbfbf line under the title */
+}
+
+html[data-theme="dark"] .w2ui-popup .w2ui-msg-body {
+    color: var(--pg-text);
+    background-color: var(--pg-surface);
+}
+
+/* Alert / confirm dialogs (w2alert / w2confirm) render their buttons in this bar. */
+html[data-theme="dark"] .w2ui-popup .w2ui-msg-buttons {
+    background-color: var(--pg-header);
+    border-top-color: var(--pg-border);
+}
+
+/* The close button hovers to a light #ccc box by default; keep the hover dark. */
+html[data-theme="dark"] .w2ui-popup .w2ui-msg-close:hover {
+    background-color: var(--pg-border);
+    border-color: var(--pg-field-border);
+}
+
+/* Sidebar */
+html[data-theme="dark"] .w2ui-sidebar {
+    background-color: var(--pg-surface) !important;
+}
+
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div .w2ui-node {
+    background-color: var(--pg-surface);
+}
+
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div .w2ui-node .w2ui-node-caption,
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div .w2ui-node .w2ui-node-image,
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div td.w2ui-node-data .w2ui-node-image > span {
+    color: var(--pg-text);
+    text-shadow: none;
+}
+
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div .w2ui-node .w2ui-node-image > span {
+    color: var(--pg-muted) !important;
+}
+
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div .w2ui-node:hover {
+    background-color: var(--pg-hover);
+    border-top-color: transparent;
+    border-bottom-color: transparent;
+}
+
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div .w2ui-node-group {
+    color: var(--pg-muted);
+}
+
+html[data-theme="dark"] .w2ui-sidebar .w2ui-sidebar-div .w2ui-selected .w2ui-node-caption {
+    color: var(--pg-accent-text) !important;
+    text-shadow: none !important;
+}
+
+/* File upload preview grid (.w2ui-listview; stock forces background: #fff !important). */
+html[data-theme="dark"] .w2ui-listview {
+    background-color: var(--pg-surface) !important;
+}
+
+html[data-theme="dark"] .w2ui-listview > ul > li > div > div.caption {
+    color: var(--pg-text);
+}
+
+html[data-theme="dark"] .w2ui-listview > ul > li.hover {
+    background-color: var(--pg-hover);
+}
+
+/* Theme toggle toolbar button. Its glyph is a normal-font character (not the w2ui icon font), swapped by
+   data-theme, and drawn larger / higher-contrast than the muted default icons so the lone button is easy to spot. */
+.pg-icon-theme:before {
+    content: '\263E'; /* U+263E LAST QUARTER MOON */
+}
+
+html[data-theme="dark"] .pg-icon-theme:before {
+    content: '\2600'; /* U+2600 BLACK SUN WITH RAYS */
+}
+
+.w2ui-toolbar table.w2ui-button .w2ui-tb-image > span.pg-icon-theme {
+    margin-top: 1px;
+    font-size: 18px;
+    color: #444;
+}
+
+html[data-theme="dark"] .w2ui-toolbar table.w2ui-button .w2ui-tb-image > span.pg-icon-theme {
+    color: var(--pg-text);
+}

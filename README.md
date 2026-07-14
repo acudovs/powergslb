@@ -765,9 +765,15 @@ in [database/README.md](database/README.md).
 
 ## Web administration interface
 
+The console offers a light and a dark theme.
+
 **Status**
 
 ![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-status.png?raw=true)
+
+**Status (Dark theme)**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-status-dark.png?raw=true)
 
 **Advanced search**
 

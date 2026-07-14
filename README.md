@@ -506,12 +506,12 @@ removing the container discards everything. That is the right mode for a demo an
 the container, see [Persisting data](#persisting-data) below.
 
 ```shell
-docker pull docker.io/acudovs/powergslb:2.3.1
+docker pull docker.io/acudovs/powergslb:2.3.2
 
 docker run -it --privileged \
     --name powergslb --hostname powergslb \
     --tmpfs /run --tmpfs /tmp \
-    docker.io/acudovs/powergslb:2.3.1
+    docker.io/acudovs/powergslb:2.3.2
 ```
 
 Find the container IP address and use it to reach the services:
@@ -562,7 +562,7 @@ docker run -it --privileged \
     --name powergslb --hostname powergslb \
     --tmpfs /run --tmpfs /tmp \
     -v powergslb-db:/var/lib/mysql \
-    docker.io/acudovs/powergslb:2.3.1
+    docker.io/acudovs/powergslb:2.3.2
 ```
 
 First boot initializes the database inside the volume; later runs detect the existing data and reuse it untouched. A

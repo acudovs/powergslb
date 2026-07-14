@@ -90,7 +90,7 @@ class StickyHash(RoutingPolicy):
         :param context: Per-request client data; its address family picks the prefix.
         :returns: 'ipv6_prefix' for an IPv6 client, else 'ipv4_prefix'.
         """
-        return self.ipv6_prefix if context.remote.ip.version == 6 else self.ipv4_prefix
+        return self.ipv6_prefix if context.ip.version == 6 else self.ipv4_prefix
 
     def select(self, candidates: list[dict[str, Any]], context: ClientContext) -> list[dict[str, Any]]:
         """Answer up to 'max_answers' records from the highest-weight tier, sticky per masked client network.
@@ -103,5 +103,5 @@ class StickyHash(RoutingPolicy):
         if not tier:
             return []
 
-        network = _masked_network(context.remote.ip, self.ipv4_prefix, self.ipv6_prefix)
+        network = _masked_network(context.ip, self.ipv4_prefix, self.ipv6_prefix)
         return _sticky_pick(tier, network, self.max_answers)

@@ -80,8 +80,10 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
             if not in_view:
                 continue
 
-            specific = [record for record in in_view if not ViewRule.resolve(record['rule']).matches_all]
-            catch_all = [record for record in in_view if ViewRule.resolve(record['rule']).matches_all]
+            specific: list[dict[str, Any]] = []
+            catch_all: list[dict[str, Any]] = []
+            for record in in_view:
+                (catch_all if ViewRule.resolve(record['rule']).matches_all else specific).append(record)
             candidates = self._live(specific) or self._live(catch_all) or specific or catch_all
 
             try:
@@ -140,7 +142,7 @@ class PowerDNSRequestHandler(HTTPRequestHandler):
         if not group or group[0]['qtype'] in self._authority_qtypes:
             return 0
 
-        source_prefix = self.context.remote.prefixlen
+        source_prefix = self.context.prefixlen
         for record in group:
             try:
                 match_all = ViewRule.resolve(record['rule']).matches_all

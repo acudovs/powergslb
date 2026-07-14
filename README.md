@@ -155,7 +155,8 @@ classDiagram
         +str | None continent
     }
     class ClientContext {
-        +IPNetwork remote
+        +IPAddress ip
+        +int prefixlen
         +ClientGeo | None geo
     }
 
@@ -171,10 +172,10 @@ classDiagram
         -GeoIPReader | None _geoip$
         +tuple~IPNetwork~ cidrs
         +tuple~tuple~ geos
+        +bool matches_all
         +configure(geoip_config)$ None
         +resolve(rule)$ ViewRule
         +matches(context) bool
-        +matches_all() bool
     }
 
     %% ===== monitor =====
@@ -417,7 +418,7 @@ classDiagram
     class SimpleHTTPRequestHandler { <<stdlib>> }
     class HTTPServer { <<stdlib>> }
     class ThreadingMixIn { <<stdlib>> }
-    class MySQLConnection { <<stdlib>> }
+    class MySQLConnection { <<mysql.connector>> }
     class dict { <<builtin>> }
 
     %% ===== Inheritance =====
@@ -442,7 +443,6 @@ classDiagram
     HTTPRequestHandler <|-- AdminRequestHandler
     PowerDNSMixIn <|-- MySQLDatabase
     W2UIMixIn <|-- MySQLDatabase
-    MySQLConnection <|-- MySQLDatabase
     Selector <|-- Executor
     Table <|-- Records
     Table <|-- Users
@@ -471,6 +471,7 @@ classDiagram
     HTTPServerManager --> StatusRegistry
     HTTPServerManager ..> HTTPRequestHandler : instantiates per request
     HTTPRequestHandler --> MySQLDatabase : per-connection
+    MySQLDatabase o--> MySQLConnection : holds
     HTTPRequestHandler --> StatusRegistry
     AdminRequestHandler ..> MonitorManager : build_check (validate)
     AdminRequestHandler ..> RoutingPolicy : resolve (validate)

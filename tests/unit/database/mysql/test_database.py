@@ -1,10 +1,11 @@
-# pylint: disable=missing-function-docstring
+# pylint: disable=missing-function-docstring, protected-access
 
 """Tests for MySQLDatabase.
 
 The SQL flattener, the context-manager protocol, autocommit injection, and the select (rows-as-dicts) / modify
-(affected rowcount) split over a shared _cursor helper. MySQLDatabase subclasses the live mysql.connector
-connection, so instances are built with __new__ (skipping the connecting __init__) and the cursor is faked.
+(affected rowcount) split over a shared _cursor helper. MySQLDatabase holds a mysql.connector connection by
+composition, so instances are built with __new__ (skipping the connecting __init__) and a fake connection whose
+cursor() yields a fake cursor is attached.
 """
 
 from typing import Any
@@ -39,9 +40,35 @@ class _FakeCursor:
         self.closed = True
 
 
+class _FakeConnection:
+    """Minimal stand-in for a mysql.connector connection: yields a fixed cursor and records control calls."""
+
+    def __init__(self, cursor: _FakeCursor) -> None:
+        self._cursor = cursor
+        self.autocommit = True
+        self.events: list[str] = []
+
+    def cursor(self, **_kwargs: Any) -> _FakeCursor:
+        return self._cursor
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == 'autocommit' and hasattr(self, 'events'):
+            self.events.append(f'autocommit={value}')
+        object.__setattr__(self, name, value)
+
+    def commit(self) -> None:
+        self.events.append('commit')
+
+    def rollback(self) -> None:
+        self.events.append('rollback')
+
+    def close(self) -> None:
+        self.events.append('close')
+
+
 def _db_with_cursor(cursor: _FakeCursor) -> MySQLDatabase:
     database = MySQLDatabase.__new__(MySQLDatabase)
-    database.cursor = lambda **_kwargs: cursor  # type: ignore[method-assign, assignment]
+    database._connection = _FakeConnection(cursor)  # type: ignore[assignment]
     return database
 
 
@@ -62,21 +89,22 @@ def test_enter_returns_self() -> None:
     assert database.__enter__() is database  # pylint: disable=unnecessary-dunder-call
 
 
-def test_exit_disconnects() -> None:
-    database = MySQLDatabase.__new__(MySQLDatabase)
-    calls = []
-    database.disconnect = lambda: calls.append(True)  # type: ignore[method-assign, misc]
+def test_exit_closes_connection() -> None:
+    cursor = _FakeCursor(description=None, rows=[], rowcount=0)
+    database = _db_with_cursor(cursor)
     database.__exit__(None, None, None)
-    assert calls == [True]
+    assert database._connection.events == ['close']  # type: ignore[attr-defined]
 
 
-def test_init_forces_autocommit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_init_connects_with_autocommit(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_super_init(self: Any, **kwargs: Any) -> None:  # pylint: disable=unused-argument
+    def fake_connect(**kwargs: Any) -> object:
         captured.update(kwargs)
+        return object()
 
-    monkeypatch.setattr(mysql.connector.MySQLConnection, '__init__', fake_super_init)
+    # The C-vs-pure choice is delegated to the factory; __init__ only injects autocommit and holds the result.
+    monkeypatch.setattr(mysql.connector, 'connect', fake_connect)
     MySQLDatabase(host='127.0.0.1', user='u')
     assert captured == {'host': '127.0.0.1', 'user': 'u', 'autocommit': True}
 
@@ -123,39 +151,21 @@ def test_select_closes_cursor_even_on_error() -> None:
     assert cursor.closed is True
 
 
-class _TxDatabase(MySQLDatabase):
-    """MySQLDatabase whose autocommit is a plain attribute (shadowing the inherited property), recording the
-    commit/rollback/autocommit-toggle sequence so the transaction control flow can be asserted offline."""
-    autocommit = True  # shadows mysql.connector's autocommit property with a settable plain attribute
-
-    def __init__(self, cursor: _FakeCursor) -> None:  # pylint: disable=super-init-not-called
-        self.events: list[str] = []
-        self.cursor = lambda **_kwargs: cursor  # type: ignore[method-assign, assignment]
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == 'autocommit':
-            self.events.append(f'autocommit={value}')
-        object.__setattr__(self, name, value)
-
-    def commit(self) -> None:
-        self.events.append('commit')
-
-    def rollback(self) -> None:
-        self.events.append('rollback')
-
-
 def test_execute_transaction_commits_and_sums_rowcounts() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=3)
-    database = _TxDatabase(cursor)
+    database = _db_with_cursor(cursor)
     total = database.execute_transaction([('INSERT INTO t VALUES (%s)', (1,)), ('UPDATE t SET x = %s', (2,))])
     assert total == 6  # 3 + 3
-    assert database.events == ['autocommit=False', 'commit', 'autocommit=True']
+    # autocommit is suspended for the transaction, the statements commit as a unit, then autocommit is restored.
+    assert database._connection.events == [  # type: ignore[attr-defined]
+        'autocommit=False', 'commit', 'autocommit=True']
 
 
 def test_execute_transaction_rolls_back_and_reraises_on_error() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=0, raise_on_execute=RuntimeError('boom'))
-    database = _TxDatabase(cursor)
+    database = _db_with_cursor(cursor)
     with pytest.raises(RuntimeError):
         database.execute_transaction([('INSERT INTO t VALUES (%s)', (1,))])
     # rolled back, never committed, and autocommit restored even on the error path
-    assert database.events == ['autocommit=False', 'rollback', 'autocommit=True']
+    assert database._connection.events == [  # type: ignore[attr-defined]
+        'autocommit=False', 'rollback', 'autocommit=True']

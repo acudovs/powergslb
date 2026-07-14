@@ -3,9 +3,10 @@
 import contextlib
 import logging
 from collections.abc import Iterator
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import mysql.connector
+from mysql.connector.abstracts import MySQLConnectionAbstract
 
 from powergslb.database.mysql.powerdns import PowerDNSMixIn
 from powergslb.database.mysql.w2ui import W2UIMixIn
@@ -13,12 +14,11 @@ from powergslb.database.mysql.w2ui import W2UIMixIn
 __all__ = ['MySQLDatabase']
 
 
-class MySQLDatabase(PowerDNSMixIn, W2UIMixIn, mysql.connector.MySQLConnection):
-    """MySQL/MariaDB connection with the PowerDNS and w2ui query mixins; usable as a context manager.
+class MySQLDatabase(PowerDNSMixIn, W2UIMixIn):
+    """MySQL/MariaDB query facade over a mysql.connector connection; usable as a context manager.
 
     Runs with autocommit on (not user-configurable), so every single-statement write persists on its own;
     only execute_transaction suspends autocommit to group statements and commit() them as a unit.
-    select, modify and execute_transaction are the execution API the table layer and mixins consume.
 
     :param kwargs: mysql.connector connect arguments (database, user, password, host, port, unix_socket, ...).
     """
@@ -26,13 +26,14 @@ class MySQLDatabase(PowerDNSMixIn, W2UIMixIn, mysql.connector.MySQLConnection):
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs['autocommit'] = True
-        super().__init__(**kwargs)
+        # connect() returns MySQLConnection or CMySQLConnection (C-extension) when the connector ships it.
+        self._connection = cast(MySQLConnectionAbstract, mysql.connector.connect(**kwargs))
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: Any) -> None:
-        self.disconnect()
+        self._connection.close()
 
     @staticmethod
     def join_operation(operation: str) -> str:
@@ -57,7 +58,7 @@ class MySQLDatabase(PowerDNSMixIn, W2UIMixIn, mysql.connector.MySQLConnection):
         else:
             logging.debug('"%s"', operation)
 
-        cursor = self.cursor(buffered=True)
+        cursor = self._connection.cursor(buffered=True)
         try:
             cursor.execute(operation, params)
             yield cursor
@@ -91,22 +92,22 @@ class MySQLDatabase(PowerDNSMixIn, W2UIMixIn, mysql.connector.MySQLConnection):
         """Run statements in one transaction on this connection; return the summed affected-row count.
 
         autocommit stays on for every single-statement path; this executor suspends it for its own duration and
-        restores it in finally, so an exception cannot return a connection to the pool mid-transaction. All
-        statements run on this connection, so LAST_INSERT_ID() carries across them.
+        restores it in finally, so an exception cannot leave the connection mid-transaction. All statements run on
+        the one connection, so LAST_INSERT_ID() carries across them.
 
         :param statements: The (operation, params) pairs to run in order.
         :returns: The total number of rows affected across all statements.
         """
-        self.autocommit = False
+        self._connection.autocommit = False
         total = 0
         try:
             for operation, params in statements:
                 total += self.modify(operation, params)
-            self.commit()
+            self._connection.commit()
         except Exception:
-            self.rollback()
+            self._connection.rollback()
             raise
         finally:
-            self.autocommit = True
+            self._connection.autocommit = True
 
         return total

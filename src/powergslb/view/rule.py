@@ -1,7 +1,7 @@
 """The cached ViewRule value object: compile a view rule once, then match clients without re-parsing."""
 
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import netaddr
@@ -21,11 +21,18 @@ class ViewRule:
 
     :param cidrs: The rule's CIDR tokens, pre-built as networks.
     :param geos: The rule's geo selectors as (kind, value) pairs, e.g. ('country', 'DE').
+    :param matches_all: Whether the rule matches every client; computed once at construction.
     """
     _geoip: ClassVar[GeoIPReader | None] = None
 
     cidrs: tuple[netaddr.IPNetwork, ...]
     geos: tuple[tuple[str, str], ...]
+    matches_all: bool = field(init=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Precompute matches_all: a CIDR with prefix 0 in both the IPv4 and IPv6 families."""
+        matches_all = {cidr.version for cidr in self.cidrs if cidr.prefixlen == 0} >= {4, 6}
+        object.__setattr__(self, 'matches_all', matches_all)
 
     @classmethod
     def configure(cls, geoip_config: dict[str, Any]) -> None:
@@ -69,24 +76,24 @@ class ViewRule:
     def matches(self, context: ClientContext) -> bool:
         """Return whether this rule matches the client, resolving the context geo on demand.
 
-        Tests the pre-built CIDRs first by direct membership (so the cached IPNetwork objects are reused, not
-        rebuilt); only when they miss and the rule has geo selectors does it resolve the client geo (once per
-        request, and only when a reader is configured) and store it on the context.
+        A match-all rule admits every client, so it short-circuits before any CIDR membership test - the common case.
+        Otherwise, tests the pre-built CIDRs by direct membership; only when they miss and the rule has geo selectors
+        does it resolve the client geo (once per request) and store it on the context.
 
         :param context: Per-request client data the policy may read.
         :returns: True when the client IP or its geo satisfies any token.
         """
-        if any(context.remote.ip in cidr for cidr in self.cidrs):
+        if self.matches_all:
             return True
+
+        client_ip = context.ip
+        if any(client_ip in cidr for cidr in self.cidrs):
+            return True
+
         if self.geos:
             if context.geo is None and self._geoip:
-                context.geo = self._geoip.lookup(context.remote.ip)
+                context.geo = self._geoip.lookup(client_ip)
             if context.geo is not None:
                 return any((kind == 'country' and value == context.geo.country) or
                            (kind == 'continent' and value == context.geo.continent) for kind, value in self.geos)
         return False
-
-    @property
-    def matches_all(self) -> bool:
-        """Return whether this rule matches every client: a CIDR with prefix 0 in both the IPv4 and IPv6 families."""
-        return {cidr.version for cidr in self.cidrs if cidr.prefixlen == 0} >= {4, 6}

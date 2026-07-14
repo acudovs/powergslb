@@ -93,8 +93,8 @@ def _record(**overrides: Any) -> dict[str, Any]:
 
 
 def _in_view(handler: PowerDNSRequestHandler, record: dict[str, Any]) -> bool:
-    """Run the handler's view test with a fresh context carrying the handler's client network."""
-    return handler._is_in_view(record, ClientContext(handler.context.remote))
+    """Run the handler's view test with a fresh context carrying the handler's client address."""
+    return handler._is_in_view(record, ClientContext(netaddr.IPNetwork(handler.context.ip)))
 
 
 # _set_remote_ip (the DNS interface honors the PowerDNS headers)
@@ -106,8 +106,8 @@ def test_set_remote_ip_from_real_remote_header() -> None:
         'X-Remotebackend-Remote': '172.22.0.1', 'X-Remotebackend-Real-Remote': '198.51.100.0/24'}
     handler._set_remote_ip()
     assert handler.remote_ip.format() == '172.22.0.1'  # remote_ip is the recursor, not the ECS subnet
-    assert handler.context.remote.ip.format() == '198.51.100.0'
-    assert handler.context.remote.prefixlen == 24  # the header prefix is the ECS source prefix
+    assert handler.context.ip.format() == '198.51.100.0'
+    assert handler.context.prefixlen == 24  # the header prefix is the ECS source prefix
 
 
 def test_set_remote_ip_invalid_real_remote_falls_back_to_peer(caplog: pytest.LogCaptureFixture) -> None:
@@ -116,8 +116,8 @@ def test_set_remote_ip_invalid_real_remote_falls_back_to_peer(caplog: pytest.Log
     handler.headers = {'X-Remotebackend-Real-Remote': 'not-an-ip'}  # type: ignore[assignment]
     with caplog.at_level(logging.ERROR):
         handler._set_remote_ip()
-    assert handler.context.remote.ip.format() == '127.0.0.1'
-    assert handler.context.remote.prefixlen == 32  # the peer is taken as a host network
+    assert handler.context.ip.format() == '127.0.0.1'
+    assert handler.context.prefixlen == 32  # the peer is taken as a host network
     assert 'header invalid' in caplog.text  # a present but malformed header is logged
 
 
@@ -138,8 +138,8 @@ def test_set_remote_ip_without_header_uses_peer(caplog: pytest.LogCaptureFixture
     with caplog.at_level(logging.ERROR):
         handler._set_remote_ip()
     assert handler.remote_ip.format() == '203.0.113.9'
-    assert handler.context.remote.ip.format() == '203.0.113.9'
-    assert handler.context.remote.prefixlen == 32  # no header means the peer as a host network
+    assert handler.context.ip.format() == '203.0.113.9'
+    assert handler.context.prefixlen == 32  # no header means the peer as a host network
     assert caplog.text == ''  # an absent header falls back silently
 
 
@@ -384,21 +384,21 @@ def test_filter_processes_qtypes_independently() -> None:
 def test_scope_prefix_match_all_view_is_zero() -> None:
     # Every record's view matches all clients -> globally cacheable.
     handler = _handler(['dns'])
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     assert handler._scope_prefix([_record(rule='0.0.0.0/0 ::/0')]) == 0
 
 
 def test_scope_prefix_specific_view_is_source_prefix() -> None:
     # A narrower view shaped the answer -> scope the client's source prefix.
     handler = _handler(['dns'])
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     assert handler._scope_prefix([_record(rule='10.0.0.0/8')]) == 24
 
 
 def test_scope_prefix_mixed_view_is_source_prefix() -> None:
     # If any record's view is not match-all, the rrset as a whole is subnet specific.
     handler = _handler(['dns'], remote_ip='2001:db8::1')
-    handler.context.remote.prefixlen = 56
+    handler.context.prefixlen = 56
     records = [_record(rule='0.0.0.0/0 ::/0'), _record(rule='2001:db8::/32')]
     assert handler._scope_prefix(records) == 56
 
@@ -406,34 +406,34 @@ def test_scope_prefix_mixed_view_is_source_prefix() -> None:
 def test_scope_prefix_single_family_rule_is_source_prefix() -> None:
     # A single-family match-all rule is not globally cacheable (other-family clients are out of view).
     handler = _handler(['dns'])
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     assert handler._scope_prefix([_record(rule='0.0.0.0/0')]) == 24
 
 
 def test_scope_prefix_malformed_rule_is_source_prefix() -> None:
     # A malformed view rule is treated as not match-all, so the rrset scopes to the source prefix.
     handler = _handler(['dns'])
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     assert handler._scope_prefix([_record(rule='not-a-cidr')]) == 24
 
 
 def test_scope_prefix_opt_out_source_prefix_is_zero() -> None:
     # A narrower view but an ECS opt-out (source prefix 0) resolves to scope 0.
     handler = _handler(['dns'])
-    handler.context.remote.prefixlen = 0
+    handler.context.prefixlen = 0
     assert handler._scope_prefix([_record(rule='10.0.0.0/8')]) == 0
 
 
 def test_scope_prefix_empty_answer_is_zero() -> None:
     handler = _handler(['dns'])
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     assert handler._scope_prefix([]) == 0
 
 
 def test_scope_prefix_infra_qtypes_always_zero() -> None:
     # SOA/NS/DS use global /0 scope regardless of view, even a narrower one (Google: consistent delegation).
     handler = _handler(['dns'])
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     for qtype in ('SOA', 'NS', 'DS'):
         assert handler._scope_prefix([_record(qtype=qtype, rule='10.0.0.0/8')]) == 0, qtype
 
@@ -441,7 +441,7 @@ def test_scope_prefix_infra_qtypes_always_zero() -> None:
 def test_scope_prefix_sticky_hash_match_all_is_min_prefix_source() -> None:
     # A match-all rrset under sticky-hash still varies by client network: scope = min(prefix, source).
     handler = _handler(['dns'], remote_ip='198.51.100.5')  # IPv4 client -> ipv4_prefix
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     coarse = '{"type": "sticky-hash", "ipv4_prefix": 16}'
     assert handler._scope_prefix([_record(rule='0.0.0.0/0 ::/0', policy_json=coarse)]) == 16  # prefix < source
     fine = '{"type": "sticky-hash", "ipv4_prefix": 28}'
@@ -451,7 +451,7 @@ def test_scope_prefix_sticky_hash_match_all_is_min_prefix_source() -> None:
 def test_scope_prefix_sticky_hash_opt_out_is_zero() -> None:
     # ECS opt-out (source prefix 0): the policy varies by network but there is no source prefix to scope to.
     handler = _handler(['dns'], remote_ip='198.51.100.5')
-    handler.context.remote.prefixlen = 0
+    handler.context.prefixlen = 0
     sticky = '{"type": "sticky-hash"}'
     assert handler._scope_prefix([_record(rule='0.0.0.0/0 ::/0', policy_json=sticky)]) == 0
 
@@ -468,7 +468,7 @@ def test_get_lookup_passes_qname_through_and_projects() -> None:
 
 def test_get_lookup_specific_view_carries_source_prefix_scope() -> None:
     handler = _handler(['dns', 'lookup', 'example.com.', 'A'], remote_ip='10.1.2.3')
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     handler.database.records = [_record(content='10.9.9.9', rule='10.0.0.0/8')]  # type: ignore[attr-defined]
     result = handler._get_lookup()
     assert result == [{'qname': 'example.com', 'qtype': 'A', 'content': '10.9.9.9', 'ttl': 60, 'scopeMask': 24}]
@@ -478,7 +478,7 @@ def test_get_lookup_scopes_each_qtype_independently() -> None:
     # PowerDNS sends every lookup as ANY, so one lookup returns the whole rrset bundle at the name. A
     # subnet-specific A rrset must not push its scope onto the NS rrset in the same response.
     handler = _handler(['dns', 'lookup', 'example.com.', 'ANY'], remote_ip='10.1.2.3')
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     handler.database.records = [  # type: ignore[attr-defined]
         _record(id=1, qtype='NS', content='ns1.example.com'),
         _record(id=2, qtype='NS', content='ns2.example.com'),
@@ -496,7 +496,7 @@ def test_get_lookup_public_client_mixed_rrset_scopes_source() -> None:
     # is subnet specific: scope is the source prefix, not 0, or a resolver would cache it globally and withhold
     # the Private record from private clients.
     handler = _handler(['dns', 'lookup', 'example.com.', 'A'], remote_ip='198.51.100.5')
-    handler.context.remote.prefixlen = 24
+    handler.context.prefixlen = 24
     handler.database.records = [  # type: ignore[attr-defined]
         _record(id=1, content='192.0.2.1', rule='0.0.0.0/0 ::/0'),
         _record(id=2, content='10.9.9.9', rule='10.0.0.0/8')]

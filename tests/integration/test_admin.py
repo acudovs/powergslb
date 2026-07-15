@@ -104,7 +104,7 @@ def test_list_users(w2ui: W2UIClient) -> None:
     data = w2ui.request('get-records', 'users').json()
     assert data['status'] == 'success'
     assert any(r['user'] == 'admin' for r in data['records'])
-    assert all(r['password'] == '********' for r in data['records'])
+    assert all(r['password'] == '*****' for r in data['records'])
 
 
 def test_list_records(w2ui: W2UIClient) -> None:
@@ -429,7 +429,7 @@ def test_crud_user_lifecycle(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -
     record = w2ui.record('users', recid)
     assert record['user'] == 'crudtestuser'
     assert record['name'] == 'CRUD Test User'
-    assert record['password'] == '********'
+    assert record['password'] == '*****'
 
 
 # regression: editing a user without changing the password must not reset it to the mask
@@ -445,7 +445,7 @@ def test_edit_user_keeps_password(admin_url: str, w2ui: W2UIClient, cleanup: lis
 
     # edit only the name, re-submitting the masked password as the admin UI does
     assert w2ui.save('users', recid=recid, user=user, name='Renamed User',
-                     password='********').json()['status'] == 'success'
+                     password='*****').json()['status'] == 'success'
     assert w2ui.record('users', recid)['name'] == 'Renamed User'
 
     # the original password must still authenticate; the mask must not
@@ -457,7 +457,7 @@ def test_edit_user_keeps_password(admin_url: str, w2ui: W2UIClient, cleanup: lis
 
     masked = requests.get(f'{admin_url}/admin/w2ui',
                           params={'cmd': 'get-records', 'data': 'domains'},
-                          auth=(user, '********'), verify=False, timeout=10)
+                          auth=(user, '*****'), verify=False, timeout=10)
     assert masked.status_code == 401
 
 

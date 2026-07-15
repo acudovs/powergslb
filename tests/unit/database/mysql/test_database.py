@@ -8,12 +8,14 @@ composition, so instances are built with __new__ (skipping the connecting __init
 cursor() yields a fake cursor is attached.
 """
 
+import logging
 from typing import Any
 
 import mysql.connector
 import pytest
 
 from powergslb.database.mysql.database import MySQLDatabase
+from powergslb.database.mysql.masked import Masked
 
 
 class _FakeCursor:
@@ -141,6 +143,31 @@ def test_modify_flattens_operation_before_running() -> None:
     database.modify('DELETE FROM t\n  WHERE id = %s', (1,))
     assert cursor.executed is not None
     assert cursor.executed[0] == 'DELETE FROM t WHERE id = %s'
+
+
+def test_unwrap_params_unwraps_masked_values() -> None:
+    unwrapped = MySQLDatabase._unwrap_params(('test', Masked('$6$salt$hash'), 7))
+    assert unwrapped == ('test', '$6$salt$hash', 7)
+
+
+def test_unwrap_params_leaves_ordinary_params_unchanged() -> None:
+    assert MySQLDatabase._unwrap_params(('example.com', 1)) == ('example.com', 1)
+
+
+def test_cursor_masks_only_the_masked_param_in_debug_log_but_still_binds_it(
+        caplog: pytest.LogCaptureFixture) -> None:
+    cursor = _FakeCursor(description=None, rows=[], rowcount=1)
+    database = _db_with_cursor(cursor)
+    operation = 'INSERT INTO `users` (`user`, `name`, `password`) VALUES (%s, %s, %s)'
+    with caplog.at_level(logging.DEBUG):
+        database.modify(operation, ('test', 'Test User', Masked('$6$salt$hash')))
+    # the hash reaches execute untouched, unwrapped from Masked
+    assert cursor.executed == (operation, ('test', 'Test User', '$6$salt$hash'))
+    # only the hash is masked; user and name stay visible in the log
+    assert '$6$salt$hash' not in caplog.text
+    assert "'*****'" in caplog.text
+    assert 'test' in caplog.text
+    assert 'Test User' in caplog.text
 
 
 def test_select_closes_cursor_even_on_error() -> None:

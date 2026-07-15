@@ -276,8 +276,8 @@ def test_log_message_dumps_masked_headers_at_debug(caplog: pytest.LogCaptureFixt
     assert record.levelname == 'DEBUG'
     message = record.getMessage()
     assert "'Host': 'gslb.example'" in message
-    assert "'Authorization': '***'" in message and 'c2VjcmV0' not in message  # masked, not leaked
-    assert "'Cookie': '***'" in message and 'sid=abc' not in message
+    assert "'Authorization': '*****'" in message and 'c2VjcmV0' not in message  # masked, not leaked
+    assert "'Cookie': '*****'" in message and 'sid=abc' not in message
 
 
 def test_log_error_skips_header_dump(caplog: pytest.LogCaptureFixture) -> None:

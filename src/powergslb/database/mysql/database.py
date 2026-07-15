@@ -8,6 +8,7 @@ from typing import Any, Self, cast
 import mysql.connector
 from mysql.connector.abstracts import MySQLConnectionAbstract
 
+from powergslb.database.mysql.masked import Masked
 from powergslb.database.mysql.powerdns import PowerDNSMixIn
 from powergslb.database.mysql.w2ui import W2UIMixIn
 
@@ -60,10 +61,19 @@ class MySQLDatabase(PowerDNSMixIn, W2UIMixIn):
 
         cursor = self._connection.cursor(buffered=True)
         try:
-            cursor.execute(operation, params)
+            cursor.execute(operation, self._unwrap_params(params))
             yield cursor
         finally:
             cursor.close()
+
+    @staticmethod
+    def _unwrap_params(params: tuple[Any, ...]) -> tuple[Any, ...]:
+        """Unwrap any Masked parameter to its real value before execution.
+
+        :param params: The statement placeholder values, some possibly Masked.
+        :returns: The parameters with every Masked replaced by its value.
+        """
+        return tuple(param.value if isinstance(param, Masked) else param for param in params)
 
     def select(self, operation: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         """Execute a result-set statement (SELECT, WITH...SELECT, SHOW, ...) and return its rows as dicts.

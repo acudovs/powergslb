@@ -574,6 +574,26 @@ def test_parse_query_malformed_becomes_empty() -> None:
     assert handler.query == {}
 
 
+# _masked_query
+
+def test_masked_query_masks_record_password() -> None:
+    handler = _handler(query={'cmd': 'save-record', 'data': 'users',
+                              'record': {'user': 'admin', 'password': 'secret'}})
+    masked = handler._masked_query()
+    assert masked['record']['password'] == '*****'
+    assert handler.query['record']['password'] == 'secret'  # original untouched
+
+
+def test_masked_query_leaves_passwordless_record_untouched() -> None:
+    handler = _handler(query={'cmd': 'save-record', 'data': 'domains', 'record': {'name': 'example.com'}})
+    assert handler._masked_query() is handler.query
+
+
+def test_masked_query_leaves_non_dict_query_untouched() -> None:
+    handler = _handler(query='cmd=get-records')
+    assert handler._masked_query() == 'cmd=get-records'
+
+
 # _delete_records
 
 def test_delete_records_success() -> None:

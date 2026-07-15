@@ -313,7 +313,17 @@ class AdminRequestHandler(HTTPRequestHandler):
             logging.error('query parse error: %s', e)
             self.query = {}
 
-        logging.debug('query: %s', self.query)
+        logging.debug('query: %s', self._masked_query())
+
+    def _masked_query(self) -> Any:
+        """Return the query with any posted record password masked for safe logging.
+
+        :returns: A shallow copy with record password masked, or self.query unchanged when there is none.
+        """
+        record = self.query.get('record') if isinstance(self.query, dict) else None
+        if isinstance(record, dict) and 'password' in record:
+            return {**self.query, 'record': {**record, 'password': self._mask}}
+        return self.query
 
     def _save_record(self) -> dict[str, Any]:
         """Handle the save-record command: validate the posted record, then insert or update it.

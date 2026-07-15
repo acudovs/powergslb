@@ -42,6 +42,9 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         'authorization', 'proxy-authorization', 'cookie', 'set-cookie',
     })
 
+    # Placeholder shown in place of a sensitive value in a log.
+    _mask: ClassVar[str] = '*****'
+
     def __init__(self,
                  *args: Any,
                  database_config: dict[str, Any],
@@ -182,7 +185,7 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         """
         self._log(logging.INFO, format, *args)
         if logging.getLogger().isEnabledFor(logging.DEBUG) and getattr(self, 'headers', None):
-            headers = {name: '***' if name.lower() in self.sensitive_headers else value
+            headers = {name: self._mask if name.lower() in self.sensitive_headers else value
                        for name, value in self.headers.items()}
             logging.debug('request headers from %s: %s', self._client_ip(), headers)
 

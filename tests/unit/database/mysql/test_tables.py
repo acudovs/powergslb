@@ -14,6 +14,7 @@ import pytest
 
 from powergslb.database import PageRequest
 from powergslb.database.mysql import tables as tables_module
+from powergslb.database.mysql.masked import Masked
 from powergslb.database.mysql.tables import DOMAINS, RECORDS, STATUS, TABLES, TYPES, USERS, Table
 from powergslb.system.password import hash_password, verify_password
 
@@ -299,13 +300,13 @@ def test_get_one_filters_by_recid(db: _FakeExecutor, data: str) -> None:
 def test_get_users_masks_password_as_literal(db: _FakeExecutor) -> None:
     USERS.get(db)
     assert _last_params(db) == ()
-    assert "'********' AS `password`" in _last_sql(db)
+    assert "'*****' AS `password`" in _last_sql(db)
 
 
 def test_get_users_with_recid_binds_only_the_id(db: _FakeExecutor) -> None:
     USERS.get(db, 3)
     assert _last_params(db) == (3,)
-    assert "'********' AS `password`" in _last_sql(db)
+    assert "'*****' AS `password`" in _last_sql(db)
 
 
 # the paged read: derived-table wrap and tuple return
@@ -652,7 +653,9 @@ def test_save_users_insert_hashes_password(db: _FakeExecutor) -> None:
     assert 'PASSWORD' not in _last_sql(db)
     user, name, stored = _last_params(db)
     assert (user, name) == ('bob', 'Bob')
-    assert verify_password('pw', stored)
+    # the hash is Masked so it never lands in the query log; the wrapped value is the real hash
+    assert isinstance(stored, Masked)
+    assert verify_password('pw', stored.value)
 
 
 def test_save_users_update_with_new_password_hashes_it(db: _FakeExecutor) -> None:
@@ -660,11 +663,12 @@ def test_save_users_update_with_new_password_hashes_it(db: _FakeExecutor) -> Non
     assert 'PASSWORD' not in _last_sql(db)
     user, name, stored, recid = _last_params(db)
     assert (user, name, recid) == ('bob', 'Bob', 2)
-    assert verify_password('newpw', stored)
+    assert isinstance(stored, Masked)
+    assert verify_password('newpw', stored.value)
 
 
 def test_save_users_update_with_masked_password_keeps_existing(db: _FakeExecutor) -> None:
-    USERS.save(db, 2, user='bob', name='Bob', password='********')
+    USERS.save(db, 2, user='bob', name='Bob', password='*****')
     assert 'password' not in _last_sql(db).lower()
     assert _last_params(db) == ('bob', 'Bob', 2)
 

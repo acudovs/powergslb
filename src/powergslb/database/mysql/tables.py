@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, ClassVar, Protocol
 
+from powergslb.database.mysql.masked import Masked
 from powergslb.database.page import PageRequest
 from powergslb.system.password import hash_password, verify_password
 
@@ -608,15 +609,13 @@ class Users(Table):
     The read projects a mask instead of the hash, so an update posting the mask keeps the existing password.
     """
 
-    _mask: ClassVar[str] = '********'
-
     def _projection(self, exposed: str) -> str:
         """Render one SELECT projection term; password projects the constant mask, never the hash.
 
         :param exposed: The exposed field name.
         :returns: The projection term for the SELECT list.
         """
-        return f"'{self._mask}' AS `password`" if exposed == 'password' else super()._projection(exposed)
+        return f"'{Masked.mask}' AS `password`" if exposed == 'password' else super()._projection(exposed)
 
     def save(self, db: Executor, save_recid: int, **fields: Any) -> int:
         """Insert or update a user row, hashing the password before binding.
@@ -631,12 +630,12 @@ class Users(Table):
         user, name, password = fields['user'], fields['name'], fields['password']
 
         if not save_recid:
-            return db.modify(self._insert, (user, name, hash_password(password)))
+            return db.modify(self._insert, (user, name, Masked(hash_password(password))))
 
-        if password == self._mask:
+        if password == Masked.mask:
             return db.modify(self._update_of(('user', 'name')), (user, name, save_recid))
 
-        return db.modify(self._update, (user, name, hash_password(password), save_recid))
+        return db.modify(self._update, (user, name, Masked(hash_password(password)), save_recid))
 
     def check_user(self, db: Selector, user: str, password: str) -> list[dict[str, Any]]:
         """Return [{'valid': 1}] if the user/password pair is valid, an empty list otherwise.

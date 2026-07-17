@@ -41,6 +41,8 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
     * [TLS parameters](#tls-parameters)
     * [Trust custom CA certificates](#trust-custom-ca-certificates)
 * [Traffic management patterns](#traffic-management-patterns)
+    * [Client-scoped patterns](#client-scoped-patterns)
+    * [Answer-selection patterns](#answer-selection-patterns)
 * [Performance](#performance)
     * [DNS query path](#dns-query-path)
     * [PowerDNS caching](#powerdns-caching)
@@ -63,7 +65,7 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
 * DNS GSLB configuration stored in a MySQL / MariaDB database
 * Master-Slave DNS GSLB using native MySQL / MariaDB [replication](https://mariadb.com/kb/en/standard-replication/)
 * Multi-Master DNS GSLB using native MySQL / MariaDB [Galera Cluster](https://galeracluster.com/)
-* Web-based administration interface using [w2ui](https://github.com/vitmalina/w2ui)
+* Web-based administration interface
 * JSON [HTTP API](#api) for DNS queries and CRUD administration
 * HTTPS support for the web server
 * Record selection:
@@ -765,9 +767,12 @@ in [database/README.md](database/README.md).
 
 ## Web administration interface
 
-The console offers a light and a dark theme.
+The admin console is a single-page app served over HTTPS behind Basic Auth. It manages every entity through editable
+grids - Domains, Monitors, Records, Routings, Types, Views, and Users - with inline add, edit, and delete. A live
+Status grid shows the current health of each record. Search, sort, and paging run server-side, so large record sets
+stay responsive. The console offers a light and a dark theme.
 
-**Status**
+**Status (Light theme)**
 
 ![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-status.png?raw=true)
 
@@ -849,8 +854,7 @@ The scope returned per name and query type:
 * [`sticky-hash`](#routing-policies) routing policy keys on the client network: scope = the policy's prefix, capped
   at the source prefix.
 * `SOA`, `NS` and `DS`: always scope `0`, for a consistent view of delegation.
-* No ECS option in the query: no ECS option in the response. An opt-out (source prefix `0`): scope `0`, answered
-  from the match-all views.
+* No ECS option in the query: no ECS option in the response (PowerDNS ignores the scope PowerGSLB returns).
 
 If every record at a name for a query type sits in a narrower (non-`Public`) view, an out-of-view client gets an
 empty (NODATA) answer that an ECS-aware resolver may cache globally at scope `0`, hiding the records from in-view
@@ -1089,9 +1093,16 @@ Traffic management in PowerGSLB works along two independent axes: a [view](#view
 see at all (by CIDR or GeoIP), and the rrset's [routing policy](#routing-policies) plus [weight](#weight-priority)
 decides *which of those* to answer. Combined with the [health checks](#health-checks), they express the common ways of
 shifting traffic across backends. Health checks run continuously, pruning down records before the policy picks, so every
-pattern is liveness-aware by default. Each pattern below is a view layout, a policy plus a weight layout, or both.
+pattern is liveness-aware by default.
 
-**Client-scoped patterns** use [views](#views) to serve one name differently per client, by network or location:
+The view and policy axes **stack**: the view filters first, so every routing policy operates on the per-client records.
+One name can therefore carry, say, a `weighted-random` canary *inside* each geo view, or active-passive failover
+*inside* the `Private` view. Steering by client and by routing policy together on a single rrset is what lets PowerGSLB
+serve client-scoped, health-checked, weighted answers at once.
+
+### Client-scoped patterns
+
+These use [views](#views) to serve one name differently per client, by network or location:
 
 | goal              | mechanism                  | view layout                                                         |
 |-------------------|----------------------------|---------------------------------------------------------------------|
@@ -1111,7 +1122,9 @@ pattern is liveness-aware by default. Each pattern below is a view layout, a pol
 Because ECS resolvers cache by subnet, always give any view-restricted name a `Public` (match-all) fallback record so
 an out-of-view client never gets an empty answer cached globally - see [EDNS Client Subnet](#edns-client-subnet-ecs).
 
-**Answer-selection patterns** pick which records to return from the candidates a view has already allowed:
+### Answer-selection patterns
+
+These pick which records to return from the candidates a view has already allowed:
 
 | goal                    | policy            | weight layout                                                     |
 |-------------------------|-------------------|-------------------------------------------------------------------|
@@ -1131,11 +1144,6 @@ an out-of-view client never gets an empty answer cached globally - see [EDNS Cli
 * **Sticky sessions** (`sticky-hash`) - each client network deterministically maps to the same endpoint via rendezvous
   hashing, so stateful backends stay pinned and a health flap or record change remaps only ~1/N clients instead of
   reshuffling everyone. It also keeps a client on one endpoint across queries, so a user never flips between backends.
-
-The view and policy axes **stack**: the view filters first, so every routing policy operates on the per-client records.
-One name can therefore carry, say, a `weighted-random` canary *inside* each geo view, or active-passive failover
-*inside* the `Private` view. Steering by client and by routing policy together on a single rrset is what lets PowerGSLB
-serve client-scoped, health-checked, weighted answers at once.
 
 ---
 
@@ -1208,7 +1216,7 @@ it is smaller than the original, so already-tiny assets stay uncompressed. At re
 precompressed twin the client accepts, or the original file otherwise. The response carries `Vary: Accept-Encoding`
 and `If-Modified-Since` handling, so caches keep the identity and compressed representations apart.
 
-**Dynamic responses.** The w2ui grid data served at `/admin/w2ui` is generated per request and compressed on the fly
+**Dynamic responses.** The admin grid data served at `/admin/w2ui` is generated per request and compressed on the fly
 with Brotli quality 5 or gzip level 6, tuned for low latency rather than maximum ratio. A response smaller than 256
 bytes is sent uncompressed, where the processing cost outweighs the saving. Each dynamic response carries
 `Cache-Control: no-store` and is never cached.

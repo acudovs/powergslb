@@ -12,7 +12,9 @@ Most tests drive the API through the w2ui client fixture; tests that exercise au
 requests use requests directly.
 """
 
+import datetime
 import gzip
+import json
 import re
 from typing import Any
 
@@ -123,6 +125,14 @@ def test_list_status(w2ui: W2UIClient) -> None:
     assert all({'domain', 'name', 'content', 'monitor', 'status', 'view'}.issubset(r.keys())
                for r in data['records'])
     assert all(r['status'] == 'On' for r in data['records'])
+
+
+def test_status_is_read_only(w2ui: W2UIClient) -> None:
+    # the status grid mirrors records but rejects writes before any field matters
+    save = w2ui.save('status', content='192.0.2.1').json()
+    assert save['status'] == 'error'
+    assert 'read-only' in save['message']
+    assert w2ui.delete('status', 1).json()['status'] == 'error'
 
 
 def test_unknown_command_and_data_return_error(w2ui: W2UIClient) -> None:
@@ -459,6 +469,147 @@ def test_edit_user_keeps_password(admin_url: str, w2ui: W2UIClient, cleanup: lis
                           params={'cmd': 'get-records', 'data': 'domains'},
                           auth=(user, '*****'), verify=False, timeout=10)
     assert masked.status_code == 401
+
+
+# audit trail
+
+def test_audit_logs_save_and_delete(w2ui: W2UIClient) -> None:
+    domain = 'audit-trail.test'
+    assert w2ui.save('domains', domain=domain).json()['status'] == 'success'
+    recid = w2ui.find_recid('domains', domain=domain)
+    assert recid is not None
+    assert w2ui.delete('domains', recid).json()['status'] == 'success'
+
+    rows = [row for row in w2ui.records('audit') if row['data'] == 'domains'
+            and domain in (row['record_before'] or '') + (row['record_after'] or '')]
+    by_action = {row['action']: row for row in rows}
+    assert set(by_action) == {'save', 'delete'}
+    assert all(row['user'] == 'admin' for row in rows)
+    assert by_action['save']['record_id'] == recid        # the insert is audited under the id it generated
+    assert by_action['delete']['record_id'] == recid
+    assert by_action['delete']['recid'] > by_action['save']['recid']  # newest-first: delete logged after save
+
+    # an insert has no before state, a delete no after state, and each stored side is the row itself
+    assert by_action['save']['record_before'] is None
+    assert json.loads(by_action['save']['record_after']) == {'recid': recid, 'domain': domain, 'description': ''}
+    assert json.loads(by_action['delete']['record_before'])['domain'] == domain
+    assert by_action['delete']['record_after'] is None
+
+
+def test_audit_update_records_both_states(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -> None:
+    domain = 'audit-update.test'
+    assert w2ui.save('domains', domain=domain, description='before').json()['status'] == 'success'
+    recid = w2ui.find_recid('domains', domain=domain)
+    assert recid is not None
+    cleanup.append(('domains', recid))
+    assert w2ui.save('domains', recid=recid, domain=domain, description='after').json()['status'] == 'success'
+
+    rows = [row for row in w2ui.records('audit') if row['data'] == 'domains'
+            and row['action'] == 'save' and row['record_id'] == recid]
+    updates = [row for row in rows if row['record_before'] is not None]
+    assert len(updates) == 1
+    assert json.loads(updates[0]['record_before'])['description'] == 'before'
+    assert json.loads(updates[0]['record_after'])['description'] == 'after'
+
+
+def test_audit_record_insert_is_logged_under_the_id_it_generated(
+        w2ui: W2UIClient, base_record: dict[str, Any], cleanup: list[tuple[str, int]]) -> None:
+    # a record insert writes the rrset first, and that statement pins the session id to the rrset
+    # (ON DUPLICATE KEY UPDATE `id` = LAST_INSERT_ID(`id`)). The record id the trail resolves must be the one the
+    # second statement generated: an rrset id is a valid records id too, so a mix-up would audit another record.
+    content = '192.0.2.235'
+    assert w2ui.save('records', **base_record, name='audit-insert', content=content).json()['status'] == 'success'
+    recid = w2ui.find_recid('records', name='audit-insert', content=content)
+    assert recid is not None
+    cleanup.append(('records', recid))
+
+    rows = [row for row in w2ui.records('audit') if row['data'] == 'records'
+            and row['action'] == 'save' and row['record_id'] == recid]
+    assert len(rows) == 1
+    assert rows[0]['record_before'] is None  # an insert has no before state
+    payload = json.loads(rows[0]['record_after'])
+    assert (payload['recid'], payload['content'], payload['name']) == (recid, content, 'audit-insert')
+
+
+def test_audit_delete_records_captures_joined_content(w2ui: W2UIClient, base_record: dict[str, Any]) -> None:
+    # deleting a record audits the joined row, not just the records-table fields.
+    content = '192.0.2.234'
+    assert w2ui.save('records', **base_record, name='audit-record', content=content).json()['status'] == 'success'
+    recid = w2ui.find_recid('records', name='audit-record', content=content)
+    assert recid is not None
+    assert w2ui.delete('records', recid).json()['status'] == 'success'  # the delete GCs the rrset too
+
+    rows = [row for row in w2ui.records('audit') if row['data'] == 'records'
+            and row['action'] == 'delete' and row['record_id'] == recid]
+    assert len(rows) == 1
+    payload = json.loads(rows[0]['record_before'])
+    assert payload['content'] == content
+    assert (payload['domain'], payload['name'], payload['name_type']) == ('example.com', 'audit-record', 'A')
+    assert (payload['monitor'], payload['view'], payload['policy']) == ('No check', 'Public', 'Round robin')
+
+
+def test_audit_delete_ignores_an_unparsable_id(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -> None:
+    # the delete targets the ids the pre-read resolved, so an id the database would coerce numerically
+    # ('<recid>abc' compares equal to <recid>) cannot remove a row behind the audit trail's back
+    domain = 'audit-coerce.test'
+    assert w2ui.save('domains', domain=domain).json()['status'] == 'success'
+    recid = w2ui.find_recid('domains', domain=domain)
+    assert recid is not None
+    cleanup.append(('domains', recid))
+
+    assert w2ui.delete('domains', f'{recid}abc').json()['status'] == 'error'
+    assert w2ui.find_recid('domains', domain=domain) == recid
+
+
+def test_audit_is_read_only(w2ui: W2UIClient) -> None:
+    # write is rejected before any field matters, so post a minimal record
+    save = w2ui.save('audit', user='x', record_after='{}').json()
+    assert save['status'] == 'error'
+    assert 'read-only' in save['message']
+    assert w2ui.delete('audit', 1).json()['status'] == 'error'
+
+
+def test_audit_masks_user_password(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -> None:
+    assert w2ui.save('users', user='audituser', name='Audit User',
+                     password='sup3rsecret').json()['status'] == 'success'
+    recid = w2ui.find_recid('users', user='audituser')
+    assert recid is not None
+    cleanup.append(('users', recid))
+
+    rows = [row for row in w2ui.records('audit') if row['data'] == 'users'
+            and json.loads(row['record_after'] or '{}').get('user') == 'audituser']
+    assert rows
+    # the stored row is read back for the trail, so neither the posted password nor its hash can appear
+    assert json.loads(rows[0]['record_after'])['password'] == '*****'
+    assert 'sup3rsecret' not in rows[0]['record_after'] and '$6$' not in rows[0]['record_after']
+
+
+def test_audit_search_by_logged_date(w2ui: W2UIClient, cleanup: list[tuple[str, int]]) -> None:
+    # the frontend posts a date search as an ISO yyyy-mm-dd string; the server compares it against the
+    # real datetime column as a half-open day range, so a write logged today is matched by today's date
+    domain = 'audit-date.test'
+    assert w2ui.save('domains', domain=domain).json()['status'] == 'success'
+    recid = w2ui.find_recid('domains', domain=domain)
+    assert recid is not None
+    cleanup.append(('domains', recid))
+
+    today = datetime.date.today().isoformat()
+    data = w2ui.request('get-records', 'audit', searchLogic='AND',
+                        **{'search[0][field]': 'logged', 'search[0][type]': 'date',
+                           'search[0][operator]': 'is', 'search[0][value]': today}).json()
+    assert data['status'] == 'success'
+    assert data['total'] >= 1
+    assert all(row['logged'].startswith(today) for row in data['records'])
+    assert any(row['data'] == 'domains' and row['record_id'] == recid for row in data['records'])
+
+
+def test_audit_paging_reports_total(w2ui: W2UIClient) -> None:
+    # the audit grid pages through the base limit/offset pipeline; a full page pays the second COUNT(*)
+    # for the total, which must cover at least the rows returned
+    page = w2ui.request('get-records', 'audit', limit=2, offset=0).json()
+    assert page['status'] == 'success'
+    assert len(page['records']) <= 2
+    assert page['total'] >= len(page['records'])
 
 
 # types CRUD
@@ -917,6 +1068,7 @@ def test_delete_rows_referenced_by_record_rejected(
     """A domain / view / monitor still referenced by a record cannot be deleted.
 
     The records foreign keys have no ON DELETE CASCADE, so each delete returns a JSON error and the row survives.
+    The audit row is written in the same transaction, so a rejected delete leaves no trail either.
     Teardown removes the record first (LIFO), after which the parent rows delete cleanly.
     """
     w2ui.save('domains', domain='ref-int.example')
@@ -942,6 +1094,9 @@ def test_delete_rows_referenced_by_record_rejected(
     for data, recid in (('domains', dom), ('views', view), ('monitors', mon)):
         r = w2ui.delete(data, recid)
         assert r.json()['status'] == 'error', f'{data}: delete of a referenced row should fail: {r.json()}'
+        assert not [row for row in w2ui.records('audit')
+                    if row['data'] == data and row['action'] == 'delete' and row['record_id'] == recid], \
+            f'{data}: the rolled-back delete left an audit row'
 
     assert w2ui.find_recid('domains', domain='ref-int.example') is not None
     assert w2ui.find_recid('views', view='Ref Int View') is not None

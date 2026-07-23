@@ -9,17 +9,20 @@
 html[data-theme="dark"] {
     color-scheme: dark;
 
-    --pg-bg: #1e1e1e;          /* page background           */
-    --pg-surface: #252526;     /* raised panels, forms      */
-    --pg-header: #2d2d30;      /* headers, toolbars         */
-    --pg-border: #3a3a3a;      /* separators, panel borders */
-    --pg-field: #3c3c3c;       /* input backgrounds         */
-    --pg-field-border: #555;   /* input / separator borders */
-    --pg-text: #d4d4d4;        /* primary text              */
-    --pg-muted: #9aa0a6;       /* labels, group headings    */
-    --pg-hover: #2a2d2e;       /* row / node hover          */
-    --pg-accent: #094771;      /* selection background      */
-    --pg-accent-text: #ffffff; /* selection text            */
+    --pg-bg: #1e1e1e;               /* page background           */
+    --pg-surface: #252526;          /* raised panels, forms      */
+    --pg-header: #2d2d30;           /* headers, toolbars         */
+    --pg-grid-head: #3a3a3e;        /* grid column-header band   */
+    --pg-border: #3a3a3a;           /* separators, panel borders */
+    --pg-field: #3c3c3c;            /* input backgrounds         */
+    --pg-field-border: #555;        /* input / separator borders */
+    --pg-text: #d4d4d4;             /* primary text              */
+    --pg-muted: #9aa0a6;            /* labels, group headings    */
+    --pg-hover: #37373d;            /* row / node hover          */
+    --pg-accent: #094771;           /* selection background      */
+    --pg-accent-text: #ffffff;      /* selection text            */
+    --pg-shadow: rgba(0, 0, 0, .4); /* panel elevation shadow    */
+    --pg-weekend: #e0736a;          /* calendar Sat/Sun dates    */
 }
 
 html[data-theme="dark"] body {
@@ -139,6 +142,7 @@ html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-title {
     color: var(--pg-text);
     background-image: none;
     background-color: var(--pg-header);
+    text-shadow: none;
 }
 
 html[data-theme="dark"] .w2ui-calendar .w2ui-calendar-jump {
@@ -183,17 +187,29 @@ html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td.w2ui-day-empt
     background-color: var(--pg-bg);
 }
 
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td.w2ui-saturday,
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td.w2ui-sunday {
+    color: var(--pg-weekend);
+}
+
 html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days tr.w2ui-day-title td {
     color: var(--pg-muted);
     border-color: var(--pg-surface);
     background-color: var(--pg-surface);
 }
 
+/* w2ui writes an inline background on the day cell at mousedown, so only !important can restyle it. */
 html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td:hover,
 html[data-theme="dark"] .w2ui-calendar-time td div:hover {
     color: var(--pg-accent-text);
-    border-color: var(--pg-border);
-    background-color: var(--pg-hover);
+    border-color: var(--pg-border) !important;
+    background-color: var(--pg-hover) !important;
+}
+
+html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td.w2ui-date:active {
+    color: var(--pg-accent-text);
+    border-color: var(--pg-border) !important;
+    background-color: var(--pg-accent) !important;
 }
 
 html[data-theme="dark"] .w2ui-calendar table.w2ui-calendar-days td.w2ui-today {
@@ -246,7 +262,7 @@ html[data-theme="dark"] .w2ui-grid .w2ui-grid-body {
 
 /* w2ui casts a light shadow below the column-header band; darken it so no white line bleeds under the toolbar. */
 html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-columns {
-    box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+    box-shadow: 0 1px 4px var(--pg-shadow);
 }
 
 html[data-theme="dark"] .w2ui-grid .w2ui-grid-body .w2ui-grid-records table tr.w2ui-odd {
@@ -277,7 +293,7 @@ html[data-theme="dark"] .w2ui-grid .w2ui-grid-body table td {
 html[data-theme="dark"] .w2ui-grid .w2ui-grid-body table .w2ui-head {
     color: var(--pg-text);
     background-image: none;
-    background-color: #3a3a3e;
+    background-color: var(--pg-grid-head);
     border-right-color: var(--pg-field-border);
     border-bottom-color: var(--pg-field-border);
 }
@@ -286,7 +302,7 @@ html[data-theme="dark"] .w2ui-grid .w2ui-grid-body table .w2ui-head {
 html[data-theme="dark"] .w2ui-grid .w2ui-grid-toolbar {
     background-color: var(--pg-header);
     border-bottom-color: var(--pg-field-border); /* the separator line above the header */
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    box-shadow: 0 1px 2px var(--pg-shadow);
 }
 
 html[data-theme="dark"] .w2ui-toolbar {
@@ -323,7 +339,7 @@ html[data-theme="dark"] .w2ui-grid .w2ui-grid-footer {
     background-image: none;
     background-color: var(--pg-surface);
     border-top-color: var(--pg-border);
-    box-shadow: 0 -1px 4px rgba(0, 0, 0, .4);
+    box-shadow: 0 -1px 4px var(--pg-shadow);
 }
 
 html[data-theme="dark"] .w2ui-grid .w2ui-grid-footer .w2ui-footer-center .w2ui-footer-nav a.w2ui-footer-btn {

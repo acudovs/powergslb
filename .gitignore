@@ -2,11 +2,9 @@
 *.egg-info/
 *.gz
 *.pyc
-.claude
 .coverage
-.idea
-.venv
-__pycache__/
+.idea/
+.venv/
 build/
 dist/
 htmlcov/

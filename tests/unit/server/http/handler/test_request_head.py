@@ -41,7 +41,9 @@ class _FakeDatabase:
         return None
 
     def check_user(self, user: str, password: str) -> list[dict[str, Any]]:
-        return [{'valid': 1}] if (user, password) == ('admin', 'secret') else []
+        if (user, password) == ('admin', 'secret'):
+            return [{'id': 1, 'user': 'admin', 'name': 'Administrator'}]
+        return []
 
 
 @pytest.fixture

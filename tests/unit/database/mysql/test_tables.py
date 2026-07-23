@@ -8,14 +8,15 @@ parameters and branch selection - no live database. Covers the base search/sort/
 admin CRUD tables (incl. the records transaction, users hashing and the status CASE).
 """
 
+from datetime import date
 from typing import Any
 
 import pytest
 
-from powergslb.database import PageRequest
+from powergslb.database import PageRequest, SearchClause, SortClause
 from powergslb.database.mysql import tables as tables_module
 from powergslb.database.mysql.masked import Masked
-from powergslb.database.mysql.tables import DOMAINS, RECORDS, STATUS, TABLES, TYPES, USERS, Table
+from powergslb.database.mysql.tables import AUDIT, DOMAINS, RECORDS, STATUS, TABLES, TYPES, USERS, AuditRow, Table
 from powergslb.system.password import hash_password, verify_password
 
 
@@ -26,6 +27,7 @@ class _FakeExecutor:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.select_result: list[dict[str, Any]] = []
         self.affected = 1
+        self.insert_id = 42  # the key an insert reports as generated; 0 means it generated none
         # when set, modify pops one count per call, so a transaction's per-statement rowcounts can be scripted
         self.affected_queue: list[int] | None = None
         # when set, select pops one result per call, so the page and COUNT queries can be scripted
@@ -43,8 +45,8 @@ class _FakeExecutor:
             return self.affected_queue.pop(0)
         return self.affected
 
-    def execute_transaction(self, statements: list[tuple[str, tuple[Any, ...]]]) -> int:
-        return sum(self.modify(operation, params) for operation, params in statements)
+    def last_insert_id(self) -> int:
+        return self.insert_id
 
 
 @pytest.fixture
@@ -63,14 +65,16 @@ def _last_params(db: _FakeExecutor) -> tuple[Any, ...]:
 # the registry holds every w2ui-token-addressable table, including the read-only status table
 
 def test_registry_holds_the_w2ui_tokens() -> None:
-    assert set(TABLES) == {'domains', 'monitors', 'records', 'routings', 'status', 'types', 'users', 'views'}
+    assert set(TABLES) == {'audit', 'domains', 'monitors', 'records', 'routings', 'status', 'types',
+                           'users', 'views'}
 
 
 # Users.check_user
 
 def test_check_user_valid_password(db: _FakeExecutor) -> None:
-    db.select_result = [{'password': hash_password('secret')}]
-    assert USERS.check_user(db, 'admin', 'secret') == [{'valid': 1}]
+    db.select_result = [{'id': 1, 'user': 'admin', 'name': 'Administrator', 'password': hash_password('secret')}]
+    # a valid pair returns the identity row without the password
+    assert USERS.check_user(db, 'admin', 'secret') == [{'id': 1, 'user': 'admin', 'name': 'Administrator'}]
     # only the user is bound; the salted hash is verified in Python, not in SQL
     assert _last_params(db) == ('admin',)
     assert 'PASSWORD' not in _last_sql(db)
@@ -99,6 +103,65 @@ def test_check_user_unknown_user_still_verifies(db: _FakeExecutor, monkeypatch: 
     db.select_result = []
     assert not USERS.check_user(db, 'ghost', 'secret')
     assert verified == [('secret', '')]
+
+
+# Audit: read-only through the CRUD path, written only via record()
+
+def test_audit_select_keeps_logged_datetime_and_exposes_columns(db: _FakeExecutor) -> None:
+    AUDIT.get(db)
+    sql = _last_sql(db)
+    assert '`id` AS `recid`' in sql
+    assert '`logged`' in sql
+    for column in ('`user`', '`client_ip`', '`action`', '`data`', '`record_id`',
+                   '`record_before`', '`record_after`'):
+        assert column in sql
+    assert 'FROM `audit`' in sql
+
+
+def test_audit_record_inserts_one_row(db: _FakeExecutor) -> None:
+    # an insert has no before state; the column takes NULL
+    assert AUDIT.record(db, [AuditRow('admin', '203.0.113.1', 'save', 'domains', 7,
+                                     None, '{"domain":"example.com"}')]) == 1
+    sql, params = db.calls[-1]
+    assert sql == ('INSERT INTO `audit` (`user`, `client_ip`, `action`, `data`, `record_id`, `record_before`, '
+                   '`record_after`) VALUES (%s, %s, %s, %s, %s, %s, %s)')
+    assert params == ('admin', '203.0.113.1', 'save', 'domains', 7, None, '{"domain":"example.com"}')
+
+
+def test_audit_record_inserts_multiple_rows(db: _FakeExecutor) -> None:
+    db.affected = 2
+    rows = [AuditRow('admin', '203.0.113.1', 'delete', 'domains', 1, '{"recid":1}', None),
+            AuditRow('admin', '203.0.113.1', 'delete', 'domains', 2, '{"recid":2}', None)]
+    assert AUDIT.record(db, rows) == 2
+    sql, params = db.calls[-1]
+    assert sql == ('INSERT INTO `audit` (`user`, `client_ip`, `action`, `data`, `record_id`, `record_before`, '
+                   '`record_after`) VALUES (%s, %s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s, %s)')
+    assert params == ('admin', '203.0.113.1', 'delete', 'domains', 1, '{"recid":1}', None,
+                      'admin', '203.0.113.1', 'delete', 'domains', 2, '{"recid":2}', None)
+
+
+def test_audit_record_empty_is_noop(db: _FakeExecutor) -> None:
+    assert AUDIT.record(db, []) == 0
+    assert not db.calls
+
+
+def test_audit_get_pages_by_recid_desc(db: _FakeExecutor) -> None:
+    AUDIT.get(db, page=PageRequest(sorts=(SortClause(field='recid', direction='desc'),), limit=50, offset=0))
+    sql = _last_sql(db)
+    assert 'ORDER BY `recid` DESC' in sql
+    assert 'LIMIT %s OFFSET %s' in sql
+
+
+def test_audit_save_is_rejected(db: _FakeExecutor) -> None:
+    with pytest.raises(ValueError, match='read-only'):
+        AUDIT.save(db, 0, user='admin')
+    assert not db.calls
+
+
+def test_audit_remove_is_rejected(db: _FakeExecutor) -> None:
+    with pytest.raises(ValueError, match='read-only'):
+        AUDIT.remove(db, [1])
+    assert not db.calls
 
 
 # remove expands the IN clause to one placeholder per id
@@ -212,7 +275,7 @@ def test_records_fast_path_empty_page_skips_join(db: _FakeExecutor) -> None:
 
 def test_records_falls_back_to_full_join_on_joined_field(db: _FakeExecutor) -> None:
     # a sort on domain (a joined column) needs the full join, so the base wrapped-join path runs
-    RECORDS.get(db, page=PageRequest(sorts=({'field': 'domain', 'direction': 'asc'},), limit=5))
+    RECORDS.get(db, page=PageRequest(sorts=(SortClause(field='domain', direction='asc'),), limit=5))
     assert len(db.calls) == 1
     sql = _last_sql(db)
     assert 'JOIN `rrsets`' in sql and 'ORDER BY `domain`, `recid` LIMIT %s' in sql
@@ -225,7 +288,7 @@ def test_status_fast_path_pages_records_then_joins(db: _FakeExecutor) -> None:
         [{'total': 5}],  # records-only count
         [{'recid': 2, 'content': 'b'}, {'recid': 1, 'content': 'a'}],  # page join, no status column
     ]
-    page = PageRequest(sorts=({'field': 'status', 'direction': 'asc'}, {'field': 'recid', 'direction': 'asc'}),
+    page = PageRequest(sorts=(SortClause(field='status', direction='asc'), SortClause(field='recid', direction='asc')),
                        limit=2, offset=0)
     rows, total = STATUS.get(db, page=page, down_ids=[2])
     assert total == 5
@@ -242,7 +305,7 @@ def test_status_fast_path_pages_records_then_joins(db: _FakeExecutor) -> None:
 
 def test_status_fast_path_without_down_ids(db: _FakeExecutor) -> None:
     db.select_queue = [[{'recid': 1, 'status': 'On'}], [{'recid': 1, 'content': 'a'}]]
-    rows, total = STATUS.get(db, page=PageRequest(sorts=({'field': 'status', 'direction': 'asc'},),
+    rows, total = STATUS.get(db, page=PageRequest(sorts=(SortClause(field='status', direction='asc'),),
                                                   limit=10, offset=0))
     assert (total, rows[0]['status']) == (1, 'On')
     page_sql = db.calls[0][0]
@@ -252,7 +315,7 @@ def test_status_fast_path_without_down_ids(db: _FakeExecutor) -> None:
 
 def test_status_falls_back_to_full_join_on_joined_field(db: _FakeExecutor) -> None:
     # a sort on name (a joined column) forces the CASE-over-wrapped-join full path
-    STATUS.get(db, page=PageRequest(sorts=({'field': 'name', 'direction': 'desc'},), limit=5), down_ids=[7])
+    STATUS.get(db, page=PageRequest(sorts=(SortClause(field='name', direction='desc'),), limit=5), down_ids=[7])
     sql = _last_sql(db)
     assert 'JOIN `rrsets`' in sql
     assert "CASE WHEN `r`.`disabled` OR `r`.`recid` IN (%s)" in sql
@@ -312,8 +375,8 @@ def test_get_users_with_recid_binds_only_the_id(db: _FakeExecutor) -> None:
 # the paged read: derived-table wrap and tuple return
 
 def _search(field: str = 'domain', search_type: str = 'text', operator: str = 'is',
-            value: Any = 'x') -> dict[str, Any]:
-    return {'field': field, 'type': search_type, 'operator': operator, 'value': value}
+            value: Any = 'x') -> SearchClause:
+    return SearchClause(field=field, type=search_type, operator=operator, value=value)
 
 
 def test_get_none_page_runs_unwrapped(db: _FakeExecutor) -> None:
@@ -403,6 +466,34 @@ def test_search_int_uncoercible_value_matches_nothing(db: _FakeExecutor) -> None
     assert _last_params(db) == ()
 
 
+# date search: half-open day range, never equality (the column carries a time part)
+
+def test_search_date_is_expands_to_day_range(db: _FakeExecutor) -> None:
+    AUDIT.get(db, page=PageRequest(searches=(_search('logged', 'date', 'is', '2026-07-18'),)))
+    assert 'WHERE `logged` >= %s AND `logged` < %s' in _last_sql(db)
+    assert _last_params(db) == (date(2026, 7, 18), date(2026, 7, 19))
+
+
+def test_search_date_between_includes_end_day(db: _FakeExecutor) -> None:
+    AUDIT.get(db, page=PageRequest(searches=(_search('logged', 'date', 'between', ['2026-07-01', '2026-07-31']),)))
+    assert 'WHERE `logged` >= %s AND `logged` < %s' in _last_sql(db)
+    assert _last_params(db) == (date(2026, 7, 1), date(2026, 8, 1))
+
+
+@pytest.mark.parametrize('value', ['not-a-date', '2026-13-01', ['2026-07-01'], '2026-07-01', None, [],
+                                   ['2026-01-01', '9999-12-31']])  # the max date has no day after it
+def test_search_date_malformed_value_matches_nothing(db: _FakeExecutor, value: Any) -> None:
+    AUDIT.get(db, page=PageRequest(searches=(_search('logged', 'date', 'between', value),)))
+    assert 'WHERE 0 = 1' in _last_sql(db)
+    assert _last_params(db) == ()
+
+
+def test_search_date_is_malformed_matches_nothing(db: _FakeExecutor) -> None:
+    AUDIT.get(db, page=PageRequest(searches=(_search('logged', 'date', 'is', 'nope'),)))
+    assert 'WHERE 0 = 1' in _last_sql(db)
+    assert _last_params(db) == ()
+
+
 # clause composition and fallbacks
 
 def test_search_unknown_operator_is_dropped(db: _FakeExecutor) -> None:
@@ -450,26 +541,26 @@ def test_search_dropped_clause_binds_no_params(db: _FakeExecutor) -> None:
 # ORDER BY and the deterministic tiebreaker
 
 def test_sort_order_by_whitelisted_fields_and_direction(db: _FakeExecutor) -> None:
-    page = PageRequest(sorts=({'field': 'domain', 'direction': 'desc'}, {'field': 'recid', 'direction': 'asc'}))
+    page = PageRequest(sorts=(SortClause(field='domain', direction='desc'), SortClause(field='recid', direction='asc')))
     DOMAINS.get(db, page=page)
     assert 'ORDER BY `domain` DESC, `recid`' in _last_sql(db)
 
 
 def test_sort_unknown_field_is_skipped(db: _FakeExecutor) -> None:
-    page = PageRequest(sorts=({'field': 'absent', 'direction': 'asc'},))
+    page = PageRequest(sorts=(SortClause(field='absent', direction='asc'),))
     DOMAINS.get(db, page=page)
     assert 'ORDER BY' not in _last_sql(db)
 
 
 def test_sort_without_limit_appends_no_tiebreaker(db: _FakeExecutor) -> None:
-    DOMAINS.get(db, page=PageRequest(sorts=({'field': 'domain', 'direction': 'asc'},)))
+    DOMAINS.get(db, page=PageRequest(sorts=(SortClause(field='domain', direction='asc'),)))
     assert _last_sql(db).endswith('ORDER BY `domain`')
 
 
 def test_limit_appends_recid_tiebreaker(db: _FakeExecutor) -> None:
     # a LIMITed query without a deterministic order could overlap or skip rows across pages
     db.select_queue = [[{'recid': 1}], [{'total': 3}]]
-    DOMAINS.get(db, page=PageRequest(sorts=({'field': 'domain', 'direction': 'asc'},), limit=1, offset=0))
+    DOMAINS.get(db, page=PageRequest(sorts=(SortClause(field='domain', direction='asc'),), limit=1, offset=0))
     page_sql, _ = db.calls[0]
     assert 'ORDER BY `domain`, `recid` LIMIT %s OFFSET %s' in page_sql
 
@@ -477,7 +568,7 @@ def test_limit_appends_recid_tiebreaker(db: _FakeExecutor) -> None:
 @pytest.mark.parametrize(('direction', 'order_by'), [('asc', 'ORDER BY `recid`'), ('desc', 'ORDER BY `recid` DESC')])
 def test_limit_tiebreaker_skips_already_sorted_field(db: _FakeExecutor, direction: str, order_by: str) -> None:
     db.select_queue = [[{'recid': 1}], [{'total': 3}]]
-    DOMAINS.get(db, page=PageRequest(sorts=({'field': 'recid', 'direction': direction},), limit=1, offset=0))
+    DOMAINS.get(db, page=PageRequest(sorts=(SortClause(field='recid', direction=direction),), limit=1, offset=0))
     page_sql, _ = db.calls[0]
     assert f'{order_by} LIMIT %s OFFSET %s' in page_sql
     assert page_sql.count('`recid`') == 2  # the SELECT alias and the single ORDER BY term
@@ -485,7 +576,7 @@ def test_limit_tiebreaker_skips_already_sorted_field(db: _FakeExecutor, directio
 
 def test_status_limit_appends_recid_tiebreaker(db: _FakeExecutor) -> None:
     # the status grid exposes recid too, so its paging order matches the records grid
-    STATUS.get(db, page=PageRequest(sorts=({'field': 'name', 'direction': 'desc'},), limit=5))
+    STATUS.get(db, page=PageRequest(sorts=(SortClause(field='name', direction='desc'),), limit=5))
     assert 'ORDER BY `name` DESC, `recid` LIMIT %s' in _last_sql(db)
 
 
@@ -614,6 +705,34 @@ def test_save_types_insert_and_update(db: _FakeExecutor) -> None:
     TYPES.save(db, 1, description='desc', name_type='A', recid=1)
     assert _last_sql(db).startswith('UPDATE')
     assert _last_params(db) == (1, 'A', 'desc', 1)
+
+
+# written_recid: the key of the row a save just wrote, for the audit trail's after read
+
+def test_written_recid_of_an_update_is_the_targeted_key(db: _FakeExecutor) -> None:
+    assert DOMAINS.written_recid(db, 7, domain='example.com') == 7
+    assert not db.calls  # the key is known, so no lookup runs
+
+
+def test_written_recid_of_an_insert_takes_the_generated_key(db: _FakeExecutor) -> None:
+    db.insert_id = 7
+    assert DOMAINS.written_recid(db, 0, domain='example.com') == 7
+    assert not db.calls  # the insert already reported its key, so no statement runs
+
+
+def test_written_recid_without_a_generated_key_raises(db: _FakeExecutor) -> None:
+    # a table whose insert generates nothing would otherwise be audited under a wrong or absent id
+    db.insert_id = 0
+    with pytest.raises(RuntimeError, match="'domains' insert generated no key"):
+        DOMAINS.written_recid(db, 0, domain='example.com')
+
+
+def test_written_recid_of_a_writable_key_is_the_posted_value(db: _FakeExecutor) -> None:
+    # types supplies its own key, so an insert has no AUTO_INCREMENT value to read back and an update
+    # that renames the key lands on the posted one, not on the key it targeted
+    assert TYPES.written_recid(db, 0, recid='99', name_type='A', description='desc') == 99
+    assert TYPES.written_recid(db, 1, recid='99', name_type='A', description='desc') == 99
+    assert not db.calls
 
 
 def test_get_types_projects_aliased_column(db: _FakeExecutor) -> None:

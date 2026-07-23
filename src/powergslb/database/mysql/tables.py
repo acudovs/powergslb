@@ -2,15 +2,16 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from types import MappingProxyType
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, NamedTuple, Protocol
 
 from powergslb.database.mysql.masked import Masked
-from powergslb.database.page import PageRequest
+from powergslb.database.page import PageRequest, SearchClause
 from powergslb.system.password import hash_password, verify_password
 
-__all__ = ['Selector', 'Executor', 'Table',
-           'DOMAINS', 'MONITORS', 'RECORDS', 'ROUTINGS', 'STATUS', 'TYPES', 'USERS', 'VIEWS', 'TABLES']
+__all__ = ['Selector', 'Executor', 'Table', 'AuditRow',
+           'AUDIT', 'DOMAINS', 'MONITORS', 'RECORDS', 'ROUTINGS', 'STATUS', 'TYPES', 'USERS', 'VIEWS', 'TABLES']
 
 
 class Selector(Protocol):
@@ -26,7 +27,7 @@ class Selector(Protocol):
 
 
 class Executor(Selector, Protocol):
-    """The full execution contract: the read side plus the write primitives."""
+    """The full execution contract: the read plus the write side."""
 
     def modify(self, operation: str, params: tuple[Any, ...] = ()) -> int:
         """Execute a write statement and return the affected row count.
@@ -36,11 +37,10 @@ class Executor(Selector, Protocol):
         :returns: The number of rows the statement affected.
         """
 
-    def execute_transaction(self, statements: list[tuple[str, tuple[Any, ...]]]) -> int:
-        """Run statements in one transaction and return the summed affected-row count.
+    def last_insert_id(self) -> int:
+        """Return the AUTO_INCREMENT value the most recent statement generated, or 0 when it generated none.
 
-        :param statements: The (operation, params) pairs to run in order.
-        :returns: The total number of rows affected across all statements.
+        :returns: The generated key, or 0.
         """
 
 
@@ -75,6 +75,7 @@ class Table:
     _operators: ClassVar[dict[str, frozenset[str]]] = {
         'text': frozenset({'is', 'begins', 'contains', 'ends'}),
         'int': frozenset({'is', 'in', 'not in', 'between'}),
+        'date': frozenset({'is', 'between'}),
     }
 
     def _column(self, exposed: str) -> str:
@@ -113,13 +114,21 @@ class Table:
 
     @property
     def _insert(self) -> str:
-        """Build the INSERT of the writable columns.
+        """Build the INSERT of one row of the writable columns.
 
-        :returns: The parametrized INSERT statement.
+        :returns: The parametrized single-row INSERT statement.
+        """
+        return self._insert_of(1)
+
+    def _insert_of(self, count: int) -> str:
+        """Build a multi-row INSERT of the writable columns.
+
+        :param count: The number of VALUES row groups.
+        :returns: The parametrized INSERT statement with count row groups.
         """
         columns = ', '.join(f'`{self._column(name)}`' for name in self.columns)
-        placeholders = ', '.join(['%s'] * len(self.columns))
-        return f'INSERT INTO `{self.name}` ({columns}) VALUES ({placeholders})'
+        group = '(' + ', '.join(['%s'] * len(self.columns)) + ')'
+        return f'INSERT INTO `{self.name}` ({columns}) VALUES {", ".join([group] * count)}'
 
     def _update_of(self, columns: tuple[str, ...]) -> str:
         """Build an UPDATE of the given writable columns by key.
@@ -200,24 +209,43 @@ class Table:
         except (IndexError, TypeError, ValueError):
             return cls._no_match
 
-    def _search_clause(self, search: dict[str, Any]) -> tuple[str, tuple[Any, ...]] | None:
+    @classmethod
+    def _date_clause(cls, column: str, operator: str, value: Any) -> tuple[str, tuple[Any, ...]]:
+        """Build one date search condition as a half-open day range; the column carries a time part.
+
+        :param column: The backtick-quoted, whitelisted column.
+        :param operator: The pre-validated w2ui date operator.
+        :param value: The search value; an ISO date string for is, a two-element list for between.
+        :returns: The (condition, params) pair or a no-match condition for a malformed or out-of-range value.
+        """
+        try:
+            if operator == 'is':
+                start = end = date.fromisoformat(str(value))
+            elif isinstance(value, list):
+                start, end = date.fromisoformat(str(value[0])), date.fromisoformat(str(value[1]))
+            else:
+                return cls._no_match
+
+            return f'{column} >= %s AND {column} < %s', (start, end + timedelta(days=1))
+
+        except (IndexError, OverflowError, TypeError, ValueError):
+            return cls._no_match
+
+    def _search_clause(self, search: SearchClause) -> tuple[str, tuple[Any, ...]] | None:
         """Build one WHERE condition from a w2ui search clause.
 
-        :param search: The w2ui search clause (field, type, operator, value).
+        :param search: The w2ui search clause.
         :returns: The (condition, params) pair, None when the search type or operator is unknown,
             or a no-match condition for an unknown field or malformed value.
         """
-        search_type = str(search.get('type'))
-        operator = search.get('operator')
-        if operator not in self._operators.get(search_type, frozenset()):
+        if search.operator not in self._operators.get(search.type, frozenset()):
             return None
 
-        field_name = search.get('field')
-        if field_name not in self.fields:
+        if search.field not in self.fields:
             return self._no_match
 
-        clause = self._text_clause if search_type == 'text' else self._int_clause
-        return clause(f'`{field_name}`', operator, search.get('value'))
+        clause = {'text': self._text_clause, 'int': self._int_clause, 'date': self._date_clause}[search.type]
+        return clause(f'`{search.field}`', search.operator, search.value)
 
     def _search(self, page: PageRequest) -> tuple[str, tuple[Any, ...]]:
         """Compose the WHERE clause from the page's searches.
@@ -262,8 +290,7 @@ class Table:
         :param page: The search/sort/paging request.
         :returns: The ORDER BY text (leading space) or an empty string.
         """
-        sorts = [(sort['field'], sort.get('direction') == 'desc')
-                 for sort in page.sorts if sort.get('field') in self.fields]
+        sorts = [(sort.field, sort.direction == 'desc') for sort in page.sorts if sort.field in self.fields]
         terms = [f'`{name}` DESC' if desc else f'`{name}`' for name, desc in sorts]
         if page.limit is not None and not any(name == 'recid' for name, _ in sorts):
             terms.append('`recid`')
@@ -338,6 +365,25 @@ class Table:
 
         return db.modify(self._insert, values)
 
+    def written_recid(self, db: Executor, save_recid: int, **fields: Any) -> int:
+        """Resolve the key of the most recent row of the statement just written.
+
+        :param db: The executor the save ran on.
+        :param save_recid: The key value the save targeted; 0 for an insert.
+        :param fields: The posted record; read only when the key is writable.
+        :returns: The key of the written row.
+        :raises RuntimeError: When an insert generated no key, so no row can be identified.
+        """
+        if 'recid' in self.columns:
+            return int(fields['recid'])
+        if save_recid:
+            return save_recid
+
+        recid = db.last_insert_id()
+        if not recid:
+            raise RuntimeError(f"'{self.name}' insert generated no key")
+        return recid
+
     def remove(self, db: Executor, ids: list[Any]) -> int:
         """Expand the DELETE's IN (%s) placeholder to the ids and delete; an empty list deletes nothing.
 
@@ -351,8 +397,61 @@ class Table:
         return db.modify(self._delete_of(len(params)), params)
 
 
+class AuditRow(NamedTuple):
+    """One audit trail row, in the AUDIT.columns bind order.
+
+    :param user: The login name of the user that made the write.
+    :param client_ip: The address the user came from.
+    :param action: The write action, save or delete.
+    :param data: The w2ui table token the write targeted.
+    :param record_id: The written row id.
+    :param record_before: The stored record as JSON before the write, None for an insert.
+    :param record_after: The stored record as JSON after the write, None for a delete.
+    """
+    user: str
+    client_ip: str
+    action: str
+    data: str
+    record_id: int
+    record_before: str | None
+    record_after: str | None
+
+
+class Audit(Table):
+    """The audit admin table: an append-only trail of admin writes, read-only through the CRUD path.
+
+    Reads flow through the base paging pipeline; writes come only from the dedicated record() insert.
+    """
+
+    def record(self, db: Executor, rows: Sequence[AuditRow]) -> int:
+        """Insert audit rows in one multi-row INSERT; an empty sequence inserts nothing.
+
+        :param db: The executor to run the statement on.
+        :param rows: The audit rows to insert.
+        :returns: The number of rows inserted.
+        """
+        if not rows:
+            return 0
+        params = tuple(value for row in rows for value in row)
+        return db.modify(self._insert_of(len(rows)), params)
+
+    def save(self, db: Executor, save_recid: int, **fields: Any) -> int:
+        """Reject the write: the audit table is read-only.
+
+        :raises ValueError: Always.
+        """
+        raise ValueError('audit is read-only')
+
+    def remove(self, db: Executor, ids: list[Any]) -> int:
+        """Reject the write: the audit table is read-only.
+
+        :raises ValueError: Always.
+        """
+        raise ValueError('audit is read-only')
+
+
 class Records(Table):
-    """The records admin table: reads the records, writes the rrset and record in one transaction.
+    """The records admin table: reads the records, writes the rrset and record as two statements.
 
     All joins are inner joins on NOT NULL foreign keys, so the join is 1:1 with records: a page that operates only
     on records table fields is answered by paging records by primary key first, then joining to just that page.
@@ -408,8 +507,8 @@ class Records(Table):
         :param page: The search/sort/paging request.
         :returns: True when every referenced field is local, so the page can skip the full join.
         """
-        referenced = {clause.get('field') for clause in page.searches}
-        referenced.update(clause.get('field') for clause in page.sorts)
+        referenced = {clause.field for clause in page.searches}
+        referenced.update(clause.field for clause in page.sorts)
         return referenced <= self._local_fields
 
     def _join_page(self, db: Selector, id_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -462,13 +561,13 @@ class Records(Table):
         return self._join_page(db, id_rows), total
 
     def save(self, db: Executor, save_recid: int, **fields: Any) -> int:
-        """Insert or update a record across the rrset and record tables in one transaction.
+        """Insert or update a record across the rrset and record tables.
 
-        Statement one upserts the rrset and pins its id with LAST_INSERT_ID. Statement two writes the record,
-        taking the rrset id from LAST_INSERT_ID() rather than a `rrsets` subquery (the record UPDATE can fire
-        the GC trigger and raise SQL error 1442). The summed affected-row count is returned.
+        Statement one upserts the rrset and pins its id with LAST_INSERT_ID. Statement two writes the record, taking
+        the rrset id from LAST_INSERT_ID() rather than a `rrsets` subquery (the record UPDATE can fire the GC trigger
+        and raise SQL error 1442). The two statements are atomic only when the caller has opened a transaction.
 
-        :param db: The executor to run the transaction on.
+        :param db: The executor to run the statements on.
         :param save_recid: The record id to update; 0 inserts a new record.
         :param fields: domain, name, name_type, ttl, policy, content, monitor, view, and optional disabled, weight.
         :returns: The summed affected-row count across both statements.
@@ -511,7 +610,8 @@ class Records(Table):
                     (SELECT `id` FROM `views` WHERE `view` = %s), %s, %s
             """, (content, monitor, view, disabled, weight))
 
-        return db.execute_transaction([rrset_upsert, record_write])
+        affected = db.modify(*rrset_upsert)
+        return affected + db.modify(*record_write)
 
 
 class Status(Records):
@@ -638,7 +738,7 @@ class Users(Table):
         return db.modify(self._update, (user, name, Masked(hash_password(password)), save_recid))
 
     def check_user(self, db: Selector, user: str, password: str) -> list[dict[str, Any]]:
-        """Return [{'valid': 1}] if the user/password pair is valid, an empty list otherwise.
+        """Return the identity row (without the password) if the user/password pair is valid, else an empty list.
 
         The stored crypt(3) hash carries its own salt, so the password is verified in Python rather than in SQL.
         An unknown user yields an empty stored hash, passed to verify_password.
@@ -646,16 +746,22 @@ class Users(Table):
         :param db: The executor to run the query on.
         :param user: The login name.
         :param password: The plaintext password to verify.
-        :returns: [{'valid': 1}] on a valid pair, an empty list otherwise.
+        :returns: [{id, user, name}] on a valid pair, an empty list otherwise.
         """
-        rows = db.select(f'SELECT `password` FROM `{self.name}` WHERE `user` = %s', (user,))
+        rows = db.select(f'SELECT `id`, `user`, `name`, `password` FROM `{self.name}` WHERE `user` = %s', (user,))
         stored = rows[0]['password'] if rows else ''
 
         if verify_password(password, stored):
-            return [{'valid': 1}]
+            return [{key: value for key, value in rows[0].items() if key != 'password'}]
 
         return []
 
+
+AUDIT = Audit(
+    name='audit',
+    fields=('recid', 'logged') + AuditRow._fields,
+    columns=AuditRow._fields
+)
 
 DOMAINS = Table(
     name='domains',
@@ -710,6 +816,7 @@ VIEWS = Table(
 
 # The w2ui data token -> table registry.
 TABLES: Mapping[str, Table] = MappingProxyType({
+    'audit': AUDIT,
     'domains': DOMAINS,
     'monitors': MONITORS,
     'records': RECORDS,

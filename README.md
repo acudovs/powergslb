@@ -68,6 +68,7 @@ policies (round-robin, weighted-random, sticky-hash), and DNS views (CIDR and Ge
 * Web-based administration interface
 * JSON [HTTP API](#api) for DNS queries and CRUD administration
 * HTTPS support for the web server
+* Audit trail of every admin write
 * Record selection:
     * DNS GSLB views (CIDR and GeoIP)
     * EDNS Client Subnet (ECS) support
@@ -106,7 +107,7 @@ threads down cooperatively on `SIGTERM` / `SIGINT`.
 <summary>Click to expand the class diagram</summary>
 
 The diagram below maps the application classes and their relationships. Standard-library and third-party base classes
-are marked `<<stdlib>>` / `<<builtin>>`; the two helper modules that hold free functions are shown as `<<module>>`
+are marked `<<stdlib>>` / `<<builtin>>`; the helper modules that hold free functions are shown as `<<module>>`
 pseudo-classes.
 
 ```mermaid
@@ -147,6 +148,7 @@ classDiagram
     }
     class password {
         <<module>>
+        +str MASK$
         +hash_password(password)$ str
         +verify_password(password, stored)$ bool
     }
@@ -335,6 +337,7 @@ classDiagram
     }
     class AdminRequestHandler {
         +route = "admin"
+        +UserContext | None user
         -dict _commands$
         +send_head() BytesIO | BinaryIO | None
         +content() str
@@ -353,7 +356,8 @@ classDiagram
         +join_operation(op)$ str
         +select(op, params) list
         +modify(op, params) int
-        +execute_transaction(stmts) int
+        +last_insert_id() int
+        +transaction() ContextManager
         +__enter__() Self
         +__exit__() None
     }
@@ -368,8 +372,8 @@ classDiagram
         <<abstract>>
         +check_user(user, password) list
         +get_data(data, recid, page, ...) tuple
-        +save_data(data, save_recid, ...) int
-        +delete_data(data, ids) int
+        +save_data(data, save_recid, user_context, ...) int
+        +delete_data(data, ids, user_context) int
     }
     class PageRequest {
         <<dataclass>>
@@ -380,6 +384,46 @@ classDiagram
         +int | None offset
         +from_query(query)$ PageRequest
     }
+    class SearchClause {
+        <<dataclass>>
+        +str field
+        +str type
+        +str operator
+        +Any value
+        +from_clause(clause)$ SearchClause
+    }
+    class SortClause {
+        <<dataclass>>
+        +str field
+        +str direction
+        +from_clause(clause)$ SortClause
+    }
+    class serialize {
+        <<module>>
+        +json_default(value)$ str
+    }
+    class Masked {
+        <<dataclass>>
+        +str mask$
+        +Any value
+    }
+    class UserContext {
+        <<NamedTuple>>
+        +int id
+        +str user
+        +str name
+        +str client_ip
+    }
+    class AuditRow {
+        <<NamedTuple>>
+        +str user
+        +str client_ip
+        +str action
+        +str data
+        +int record_id
+        +str | None record_before
+        +str | None record_after
+    }
     class Selector {
         <<Protocol>>
         +select(op, params) list
@@ -387,7 +431,7 @@ classDiagram
     class Executor {
         <<Protocol>>
         +modify(op, params) int
-        +execute_transaction(stmts) int
+        +last_insert_id() int
     }
     class Table {
         <<dataclass>>
@@ -399,6 +443,7 @@ classDiagram
         +Mapping defaults
         +get(db, recid, page, ...) tuple
         +save(db, save_recid, ...) int
+        +written_recid(db, save_recid, ...) int
         +remove(db, ids) int
     }
     class Records {
@@ -406,11 +451,15 @@ classDiagram
         +save(db, save_recid, ...) int
     }
     class Users {
-        -str _mask$
         +check_user(db, user, password) list
         +save(db, save_recid, ...) int
     }
     class Status {
+        +save(db, save_recid, ...) int
+        +remove(db, ids) int
+    }
+    class Audit {
+        +record(db, rows) int
         +save(db, save_recid, ...) int
         +remove(db, ids) int
     }
@@ -448,6 +497,7 @@ classDiagram
     Selector <|-- Executor
     Table <|-- Records
     Table <|-- Users
+    Table <|-- Audit
     Records <|-- Status
     ServiceThread <|.. MonitorManager : satisfies
     ServiceThread <|.. HTTPServerManager : satisfies
@@ -480,11 +530,21 @@ classDiagram
     AdminRequestHandler ..> ViewRule : resolve (validate)
     AdminRequestHandler ..> queryparser : parse_query
     AdminRequestHandler ..> PageRequest : builds
+    AdminRequestHandler ..> UserContext : builds
+    AdminRequestHandler ..> serialize : json_default
     queryparser ..> QueryParserError : raises
+    PageRequest o--> SearchClause : parses into
+    PageRequest o--> SortClause : parses into
     W2UIMixIn ..> Table : routes by token
+    W2UIMixIn ..> UserContext : audits under
+    W2UIMixIn ..> AuditRow : builds
+    W2UIMixIn ..> serialize : json_default
     Table ..> Executor : executes through
     Table ..> PageRequest : reads
+    Audit ..> AuditRow : inserts
     Users ..> password : hash / verify
+    Users ..> Masked : binds hash
+    Masked ..> password : MASK
     PowerDNSRequestHandler ..> RoutingPolicy : resolve
     PowerDNSRequestHandler ..> ViewRule : resolve
     PowerDNSRequestHandler ..> ClientContext : builds
@@ -769,8 +829,8 @@ in [database/README.md](database/README.md).
 
 The admin console is a single-page app served over HTTPS behind Basic Auth. It manages every entity through editable
 grids - Domains, Monitors, Records, Routings, Types, Views, and Users - with inline add, edit, and delete. A live
-Status grid shows the current health of each record. Search, sort, and paging run server-side, so large record sets
-stay responsive. The console offers a light and a dark theme.
+Status grid shows the current health of each record, and a read-only Audit grid shows every admin write. Search, sort,
+and paging run server-side, so large record sets stay responsive. The console offers a light and a dark theme.
 
 **Status (Light theme)**
 
@@ -795,6 +855,10 @@ stay responsive. The console offers a light and a dark theme.
 **Views**
 
 ![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-views.png?raw=true)
+
+**Audit**
+
+![](https://raw.githubusercontent.com/acudovs/powergslb/refs/heads/master/images/web-audit.png?raw=true)
 
 [More images](images)
 
@@ -1240,13 +1304,17 @@ PowerGSLB exposes two HTTP interfaces, both returning JSON:
   Parameters are form-encoded (also accepted on the GET query string); records are addressed by `cmd` and a `data`
   table, and `monitor` and `view` are matched by name, not id.
 
-  The same commands apply to every table - `data` is one of `domains`, `monitors`, `views`, `records`, `types`,
-  `users`, `status`:
+  The same commands apply to every table - `data` is one of `domains`, `monitors`, `views`, `records`, `routings`,
+  `types`, `users`, `status`, `audit`:
     * `get-records` - list a table; supports `search`, `sort`, and `limit`/`offset` paging.
     * `get-record` (`recid=<id>`) - fetch one row by id.
     * `get-items` (`field=<column>`) - list the values of one column; supports `search`.
     * `save-record` (`recid=0` to insert, `recid=<id>` to update) - write one row from `record[...]` fields.
     * `delete-records` (`selected[0]=<id>`) - delete rows by id.
+
+  `status` and `audit` are read-only (`get-*` only); `status` is the live health view and `audit` is the append-only
+  trail of admin writes (one row per record, holding the stored row before and after the write - an insert has no
+  before state, a delete no after state).
 
   An update re-sends the whole row, so editing one field (a record's weight, say) is a read-modify-write:
   `get-record`, change the field, `save-record` with the unchanged fields preserved.

@@ -91,6 +91,25 @@ CREATE TABLE `records` (
   CONSTRAINT `records_views_id_fk` FOREIGN KEY (`view_id`) REFERENCES `views` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Append-only trail of admin writes: one row per record.
+-- user is the login string, not an FK, so the trail survives user deletion or rename.
+CREATE TABLE `audit` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `logged` datetime NOT NULL DEFAULT current_timestamp(),
+  `user` varchar(255) NOT NULL,
+  `client_ip` varchar(45) NOT NULL,
+  `action` varchar(16) NOT NULL,
+  `data` varchar(32) NOT NULL,
+  `record_id` int NOT NULL,
+  `record_before` text DEFAULT NULL,
+  `record_after` text DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `audit_logged_index` (`logged`),
+  CONSTRAINT `audit_record_state_check` CHECK (`record_before` IS NOT NULL OR `record_after` IS NOT NULL),
+  CONSTRAINT `audit_record_before_check` CHECK (`record_before` IS NULL OR JSON_VALID(`record_before`)),
+  CONSTRAINT `audit_record_after_check` CHECK (`record_after` IS NULL OR JSON_VALID(`record_after`))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 DELIMITER //
 
 CREATE PROCEDURE `rrset_guard`(IN `p_rrset_id` INT, IN `p_domain_id` INT,

@@ -1,10 +1,13 @@
-"""Admin password hashing and constant-time verification."""
+"""Admin password hashing, constant-time verification, and the sensitive-value mask."""
 
 import hmac
 
 import legacycrypt as crypt
 
-__all__ = ['hash_password', 'verify_password']
+__all__ = ['MASK', 'hash_password', 'verify_password']
+
+# Placeholder shown in place of a sensitive value.
+MASK = '*****'
 
 
 def hash_password(password: str) -> str:

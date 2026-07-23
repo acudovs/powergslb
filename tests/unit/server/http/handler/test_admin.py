@@ -1,4 +1,4 @@
-# pylint: disable=missing-function-docstring, protected-access, attribute-defined-outside-init
+# pylint: disable=missing-function-docstring, protected-access, attribute-defined-outside-init, too-many-lines
 
 """Tests for AdminRequestHandler.
 
@@ -6,10 +6,13 @@ Basic-auth checking, the WWW-Authenticate response, the route (auth wall, w2ui C
 query/body parsing, the get/save/delete command handlers, the PageRequest plumbing into the SQL read
 pipeline, the status style annotation, and content() dispatch including its error wrapping. The handler is
 built with __new__ to skip the socket-opening __init__; the database is a fake exposing the token-dispatched
-get_data/save_data/delete_data entry points, rejecting unregistered tokens like the real mixin.
+get_data/save_data/delete_data entry points, rejecting unregistered tokens like the real mixin. The audit
+trail is covered in test_w2ui.py; here only the identity plumbing is asserted, the UserContext reaching
+each write.
 """
 
 import base64
+import datetime
 import email.utils
 import gzip
 import io
@@ -23,7 +26,7 @@ import brotli
 import netaddr
 import pytest
 
-from powergslb.database import PageRequest
+from powergslb.database import PageRequest, SearchClause, SortClause, UserContext
 from powergslb.monitor.status import StatusRegistry
 from powergslb.server.http.handler import admin as admin_module
 from powergslb.server.http.handler.admin import AdminRequestHandler
@@ -34,7 +37,7 @@ from .conftest import Recorder, build_recorder
 class _FakeDatabase:
     """Record calls and return configured results for the token-dispatched CRUD entry points."""
 
-    _tables = {'domains', 'monitors', 'records', 'routings', 'status', 'types', 'users', 'views'}
+    _tables = {'audit', 'domains', 'monitors', 'records', 'routings', 'status', 'types', 'users', 'views'}
 
     def __init__(self) -> None:
         self.get_result: list[dict[str, Any]] = []
@@ -42,9 +45,11 @@ class _FakeDatabase:
         self.save_count = 1
         self.delete_count = 1
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        self.user_context: UserContext | None = None  # the identity the last write was handed
         self.raise_on_get = False
+        self.raise_on_save = False  # when set, save_data raises (the write and its audit both fail)
 
-    def _record(self, name: str, *args: Any, **kwargs: Any) -> Any:
+    def _record(self, name: str, /, *args: Any, **kwargs: Any) -> Any:
         self.calls.append((name, args, kwargs))
 
     def _check(self, data: Any) -> None:
@@ -64,13 +69,17 @@ class _FakeDatabase:
         self._record('get_data', data, recid, page, **kwargs)
         return self._get()
 
-    def save_data(self, data: str, recid: int, **kwargs: Any) -> int:
+    def save_data(self, data: str, recid: int, user_context: UserContext, **kwargs: Any) -> int:
         self._check(data)
+        self.user_context = user_context
         self._record('save_data', data, recid, **kwargs)
+        if self.raise_on_save:
+            raise RuntimeError('db boom')
         return self.save_count
 
-    def delete_data(self, data: str, ids: list[Any]) -> int:
+    def delete_data(self, data: str, ids: list[Any], user_context: UserContext) -> int:
         self._check(data)
+        self.user_context = user_context
         self._record('delete_data', data, tuple(ids))
         return self.delete_count
 
@@ -87,6 +96,7 @@ def _handler(query: Any = None, body: bytes | None = None,
     handler.remote_ip = netaddr.IPAddress('203.0.113.1')
     handler.query = query
     handler.status_registry = status_registry or StatusRegistry()
+    handler.user = UserContext(1, 'admin', 'Administrator', '203.0.113.1')
     return handler
 
 
@@ -110,7 +120,7 @@ class _AuthDatabase:
 
     def check_user(self, user: str, password: str) -> list[dict[str, Any]]:
         self.checked = (user, password)
-        return [{'1': 1}] if self.ok else []
+        return [{'id': 1, 'user': user, 'name': 'Administrator'}] if self.ok else []
 
 
 def _basic(user: str, password: str) -> str:
@@ -125,17 +135,23 @@ def test_authorized_with_valid_credentials() -> None:
     handler.database = _AuthDatabase(ok=True)  # type: ignore[assignment]
     assert handler._is_authorized() is True
     assert handler.database.checked == ('admin', 'secret')  # type: ignore[attr-defined]
+    # the identity row plus the client address is plumbed onto the handler for the audit trail
+    assert handler.user == UserContext(1, 'admin', 'Administrator', '127.0.0.1')
 
 
 def test_unauthorized_with_wrong_credentials() -> None:
     handler = _recorder({'Authorization': _basic('admin', 'wrong')})
     handler.database = _AuthDatabase(ok=False)  # type: ignore[assignment]
+    handler.user = UserContext(9, 'stale', 'Stale', '198.51.100.9')  # a prior keep-alive request's identity
     assert handler._is_authorized() is False
+    assert handler.user is None  # a failed request clears any stale identity
 
 
 def test_unauthorized_without_header() -> None:
     handler = _recorder({})
+    handler.user = UserContext(9, 'stale', 'Stale', '198.51.100.9')
     assert handler._is_authorized() is False
+    assert handler.user is None
 
 
 def test_unauthorized_non_basic_scheme() -> None:
@@ -607,7 +623,18 @@ def test_delete_records_wraps_single_selected() -> None:
     handler = _handler()
     handler.query = {'data': 'records', 'selected': 7}
     handler._delete_records()
+    # a scalar selection is wrapped, so the database is handed a list of key values either way
     assert handler.database.calls[-1] == ('delete_data', ('records', (7,)), {})  # type: ignore[attr-defined]
+
+
+def test_delete_records_forwards_the_selection_unparsed() -> None:
+    handler = _handler()
+    # the database resolves the selection against the rows it is about to delete and audit; the handler
+    # forwards it verbatim, so nothing here decides which ids exist
+    handler.query = {'data': 'domains', 'selected': ['5', '99', '5abc']}
+    assert handler._delete_records() == {'status': 'success'}
+    assert handler.database.calls[-1] == (  # type: ignore[attr-defined]
+        'delete_data', ('domains', ('5', '99', '5abc')), {})
 
 
 def test_delete_records_not_implemented() -> None:
@@ -622,6 +649,24 @@ def test_delete_records_zero_count_is_error() -> None:
     handler.database.delete_count = 0  # type: ignore[attr-defined]
     handler.query = {'data': 'records', 'selected': [1]}
     assert handler._delete_records() == {'status': 'error', 'message': 'records not deleted'}
+
+
+# the identity handed to the write dispatchers, which audit the write under it
+
+def test_delete_records_passes_the_authenticated_identity() -> None:
+    handler = _handler()
+    handler.query = {'data': 'domains', 'selected': [5]}
+    handler._delete_records()
+    assert handler.database.user_context == UserContext(  # type: ignore[attr-defined]
+        1, 'admin', 'Administrator', '203.0.113.1')
+
+
+def test_save_record_passes_the_authenticated_identity() -> None:
+    handler = _handler()
+    handler.query = {'data': 'domains', 'recid': '0', 'record': {'domain': 'example.com'}}
+    handler._save_record()
+    assert handler.database.user_context == UserContext(  # type: ignore[attr-defined]
+        1, 'admin', 'Administrator', '203.0.113.1')
 
 
 # _get_items
@@ -650,7 +695,7 @@ def test_get_items_pushes_contains_clause() -> None:
     assert handler._get_items()['items'] == ['a']
     _, args, _ = handler.database.calls[-1]  # type: ignore[attr-defined]
     assert args == ('domains', 0, PageRequest(
-        searches=({'field': 'domain', 'type': 'text', 'operator': 'contains', 'value': 'typed'},), limit=250))
+        searches=(SearchClause(field='domain', type='text', operator='contains', value='typed'),), limit=250))
 
 
 def test_get_items_without_search_string_is_unfiltered() -> None:
@@ -741,8 +786,9 @@ def test_get_records_passes_page_request() -> None:
     handler._get_records()
     name, args, _ = handler.database.calls[-1]  # type: ignore[attr-defined]
     assert name == 'get_data'
-    assert args == ('records', 0, PageRequest(searches=({'field': 'domain'},), or_logic=True,
-                                              sorts=({'field': 'domain', 'direction': 'asc'},), limit=5, offset=10))
+    assert args == ('records', 0, PageRequest(searches=(SearchClause(field='domain'),), or_logic=True,
+                                              sorts=(SortClause(field='domain', direction='asc'),),
+                                              limit=5, offset=10))
 
 
 def test_get_records_uses_returned_total() -> None:
@@ -795,7 +841,7 @@ def test_save_record_success() -> None:
     handler.query = {'data': 'domains', 'recid': '0', 'record': {'domain': 'example.com'}}
     assert handler._save_record() == {'status': 'success'}
     expected_call = ('save_data', ('domains', 0), {'domain': 'example.com'})
-    assert handler.database.calls[-1] == expected_call  # type: ignore[attr-defined]
+    assert expected_call in handler.database.calls  # type: ignore[attr-defined]
 
 
 def test_save_record_not_implemented() -> None:
@@ -803,6 +849,13 @@ def test_save_record_not_implemented() -> None:
     handler.query = {'data': 'bogus', 'recid': '0', 'record': {}}
     with pytest.raises(ValueError):
         handler._save_record()
+
+
+def test_save_record_failed_write_is_an_internal_error() -> None:
+    # the database rejects an unauditable write by raising; content() answers it like any other internal failure
+    handler = _handler(query='cmd=save-record&data=domains&recid=0&record[domain]=example.com')
+    handler.database.raise_on_save = True  # type: ignore[attr-defined]
+    assert json.loads(handler.content()) == {'status': 'error', 'message': 'internal error'}
 
 
 def test_save_record_zero_count_is_error() -> None:
@@ -821,7 +874,7 @@ def test_save_record_monitor_valid_is_saved() -> None:
     handler.query = {'data': 'monitors', 'recid': '0',
                      'record': {'monitor': 'm', 'monitor_json': _VALID_MONITOR_JSON}}
     assert handler._save_record() == {'status': 'success'}
-    assert handler.database.calls[-1][0] == 'save_data'  # type: ignore[attr-defined]
+    assert 'save_data' in [call[0] for call in handler.database.calls]  # type: ignore[attr-defined]
 
 
 def test_save_record_monitor_invalid_raises_and_skips_db() -> None:
@@ -937,6 +990,15 @@ def test_content_dispatches_known_command() -> None:
     payload = json.loads(handler.content())
     assert payload['status'] == 'success'
     assert payload['total'] == 1
+
+
+def test_content_serializes_datetime_row_value() -> None:
+    handler = _handler(query='cmd=get-records&data=audit')
+    handler.database.get_result = [  # type: ignore[attr-defined]
+        {'recid': 1, 'logged': datetime.datetime(2026, 7, 18, 12, 34, 56)}]
+    payload = json.loads(handler.content())
+    assert payload['status'] == 'success'
+    assert payload['records'][0]['logged'] == '2026-07-18 12:34:56'
 
 
 def test_content_hides_internal_exception() -> None:

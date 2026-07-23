@@ -15,7 +15,7 @@ from typing import Any, Callable, ClassVar, BinaryIO
 
 import brotli
 
-from powergslb.database import PageRequest
+from powergslb.database import PageRequest, UserContext, json_default
 from powergslb.monitor import MonitorManager
 from powergslb.routing import RoutingPolicy
 from powergslb.server.http.handler.queryparser import QueryParserError, parse_query
@@ -32,6 +32,9 @@ class AdminRequestHandler(HTTPRequestHandler):
     SQL: the handler translates the query into a PageRequest and the database composes it into the SQL read.
     """
     route: ClassVar[str] = 'admin'
+
+    # The authenticated identity of the request being served, set per request by _is_authorized().
+    user: UserContext | None = None
 
     _cache_control: ClassVar[str | None] = 'no-store'
 
@@ -202,9 +205,12 @@ class AdminRequestHandler(HTTPRequestHandler):
     def _is_authorized(self) -> bool:
         """Validate Basic Auth credentials against the database; any parse failure counts as unauthorized.
 
+        On success the identity row (id, user, name) and the client address are stored on self.user as the
+        request's UserContext; a fresh or failed request resets it first.
+
         :returns: True when the request carries valid credentials.
         """
-        authorized = False
+        self.user = None
         authorization_header = self.headers.get('Authorization')
 
         if authorization_header:
@@ -214,13 +220,14 @@ class AdminRequestHandler(HTTPRequestHandler):
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logging.error('authorization error: %s', e)
             else:
-                authorized = scheme.lower() == 'basic' and bool(self.database.check_user(user, password))
-                if authorized:
+                rows = self.database.check_user(user, password) if scheme.lower() == 'basic' else []
+                if rows:
+                    self.user = UserContext(rows[0]['id'], rows[0]['user'], rows[0]['name'], self._client_ip())
                     logging.debug("user '%s' authorized", user)
                 else:
                     logging.error("user '%s' not authorized", user)
 
-        return authorized
+        return self.user is not None
 
     def _send_authenticate(self, code: int = 401) -> None:
         """Send the Basic Auth challenge with an HTML error body; a HEAD challenge carries no body.
@@ -241,6 +248,8 @@ class AdminRequestHandler(HTTPRequestHandler):
     def _delete_records(self) -> dict[str, Any]:
         """Handle the delete-records command: delete the selected rows from the database.
 
+        A scalar selection is wrapped, so the selected is always a list. Requires an authorized request (self.user set).
+
         :returns: The w2ui status reply.
         """
         data = self.query.get('data')
@@ -248,7 +257,8 @@ class AdminRequestHandler(HTTPRequestHandler):
         if not isinstance(selected, list):
             selected = [selected]
 
-        if not self.database.delete_data(data, selected):
+        assert self.user is not None
+        if not self.database.delete_data(data, selected, self.user):
             return {'status': 'error', 'message': 'records not deleted'}
         return {'status': 'success'}
 
@@ -328,6 +338,8 @@ class AdminRequestHandler(HTTPRequestHandler):
     def _save_record(self) -> dict[str, Any]:
         """Handle the save-record command: validate the posted record, then insert or update it.
 
+        An invalid record is rejected before the write. Requires an authorized request (self.user set).
+
         :returns: The w2ui status reply.
         """
         data = self.query.get('data')
@@ -336,7 +348,8 @@ class AdminRequestHandler(HTTPRequestHandler):
 
         self._validate_record(data, record)
 
-        if not self.database.save_data(data, recid, **record):
+        assert self.user is not None
+        if not self.database.save_data(data, recid, self.user, **record):
             return {'status': 'error', 'message': 'record not changed'}
         return {'status': 'success'}
 
@@ -391,4 +404,4 @@ class AdminRequestHandler(HTTPRequestHandler):
                 logging.error('%s: %s', type(e).__name__, e)
                 content = {'status': 'error', 'message': 'internal error'}
 
-        return json.dumps(content, separators=(',', ':'))
+        return json.dumps(content, separators=(',', ':'), default=json_default)

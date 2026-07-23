@@ -3,6 +3,8 @@
 import dataclasses
 from typing import Any, ClassVar
 
+from powergslb.system.password import MASK
+
 __all__ = ['Masked']
 
 
@@ -12,7 +14,7 @@ class Masked:
 
     :param value: The real bind value.
     """
-    mask: ClassVar[str] = '*****'
+    mask: ClassVar[str] = MASK
 
     value: Any
 

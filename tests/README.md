@@ -25,6 +25,7 @@ tests/
 │   ├── test_admin.py                   admin HTTPS API: CRUD, search, sort, pagination, static files, malformed input
 │   ├── test_dns_backend.py             DNS HTTP backend: record types, routing, headers, getAllDomains
 │   ├── test_dns_records.py             records via admin: disabled, views, geo, weight, routing policies, IPv6
+│   ├── test_ecs.py                     ECS scopeMask per answer row, plus the CLIENT-SUBNET option dig echoes
 │   ├── test_health.py                  static health status reporting and DNS consistency
 │   ├── test_lifecycle.py               systemctl stop/restart: no SIGKILL, clean rebind (needs POWERGSLB_CONTAINER)
 │   ├── test_monitor_health.py          active fall/rise lifecycle, interpolation, bad-config resilience, all-down rule
@@ -39,11 +40,16 @@ tests/
     ├── client/
     │   ├── test_context.py            ClientContext: carries the pre-parsed client network plus a mutable geo
     │   └── test_geo.py                ClientGeo: defaults to unknown, equality
-    ├── database/mysql/
-    │   ├── test_database.py            MySQLDatabase: SQL flattener, context manager, autocommit, result shaping
-    │   ├── test_powerdns.py            PowerDNSMixIn SQL builders: gslb_checks/gslb_domains/gslb_records
-    │   ├── test_tables.py              Table SQL/behavior: search/sort/paging pipeline, CRUD, records/users/status
-    │   └── test_w2ui.py                W2UIMixIn router: token rejection, per-method delegation smoke tests
+    ├── database/
+    │   ├── test_page.py                PageRequest.from_query: paging precedence, sort/search clause gates, wildcard
+    │   ├── test_serialize.py           json_default: datetime rendering shared by the trail and the JSON responses
+    │   └── mysql/
+    │       ├── test_database.py        MySQLDatabase: SQL flattener, context manager, autocommit/transaction, rows
+    │       ├── test_masked.py          Masked: reprs as the mask, binds the real value
+    │       ├── test_powerdns.py        PowerDNSMixIn SQL builders: gslb_checks/gslb_domains/gslb_records
+    │       ├── test_tables.py          Table SQL/behavior: search/sort/paging, CRUD, records/users/status/audit
+    │       └── test_w2ui.py            W2UIMixIn router: token rejection, delegation, the write+audit transaction,
+    │                                   the delete pre-read, audit row building/masking, rollback on a bad row
     ├── monitor/
     │   ├── check/
     │   │   ├── test_base.py            Check: type registry, create() validation branches, timeout clamp
@@ -65,7 +71,7 @@ tests/
     ├── server/http/
     │   ├── test_server.py              HTTPServerManager: config unpacking, bundled-resources root, plain/TLS run()
     │   └── handler/
-    │       ├── test_admin.py           AdminRequestHandler: auth, route, w2ui dispatch, static assets
+    │       ├── test_admin.py           AdminRequestHandler: auth, route, w2ui dispatch, identity, static assets
     │       ├── test_powerdns.py        PowerDNSRequestHandler: header override, route, view/health/policy pipeline
     │       ├── test_queryparser.py     w2ui query-string parser: flat/nested/indexed/array forms, helpers
     │       ├── test_request.py         HTTPRequestHandler base: handle() errors, body, route skeleton, writers

@@ -100,8 +100,6 @@ var openPopupForm = function (event, record, popup_width, popup_height, form_nam
     })
 };
 
-var panelStyle = 'border: 1px solid #dfdfdf; padding: 5px;';
-
 var reloadInterval = 3000;
 var reloadIntervalId = 0;
 
@@ -122,6 +120,8 @@ var stopAutoReload = function () {
         w2ui.gridStatus.toolbar.uncheck('reload');
     }
 };
+
+var panelStyle = 'border: 1px solid #dfdfdf; padding: 5px;';
 
 var config = {
 
@@ -162,14 +162,16 @@ var config = {
                 ]
             },
             {
-                id: 'users', text: 'Users', expanded: true, group: true,
+                id: 'admin', text: 'Admin', expanded: true, group: true,
                 nodes: [
-                    {id: 'gridUsers', text: 'Users', img: 'icon-page'}
+                    {id: 'gridUsers', text: 'Users', img: 'icon-page'},
+                    {id: 'gridAudit', text: 'Audit', img: 'icon-page'}
                 ]
             }
         ],
         onClick: function (event) {
             switch (event.target) {
+                case 'gridAudit':
                 case 'gridDomains':
                 case 'gridMonitors':
                 case 'gridRecords':
@@ -467,6 +469,34 @@ var config = {
     },
 
     // ====================================================
+    // Views
+    // ====================================================
+
+    gridViews: {
+        name: 'gridViews',
+        postData: {data: 'views'},
+        columns: [
+            {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
+            {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true},
+            {field: 'rule', caption: 'Rule', size: '300px', resizable: true, sortable: true}
+        ],
+        searches: [
+            {field: 'recid', caption: 'ID', type: 'int'},
+            {field: 'view', caption: 'View', type: 'text'},
+            {field: 'rule', caption: 'Rule', type: 'text'}
+        ]
+    },
+
+    formViews: {
+        name: 'formViews',
+        postData: {data: 'views'},
+        fields: [
+            {field: 'view', type: 'text', required: true, html: {caption: 'View: '}},
+            {field: 'rule', type: 'text', required: true, html: {caption: 'Rule: '}}
+        ]
+    },
+
+    // ====================================================
     // Users
     // ====================================================
 
@@ -496,33 +526,59 @@ var config = {
     },
 
     // ====================================================
-    // Views
+    // Audit
     // ====================================================
 
-    gridViews: {
-        name: 'gridViews',
-        postData: {data: 'views'},
+    gridAudit: {
+        name: 'gridAudit',
+        postData: {data: 'audit'},
+        url: w2uiUrl,
         columns: [
             {field: 'recid', caption: 'ID', size: '50px', resizable: true, sortable: true},
-            {field: 'view', caption: 'View', size: '100px', resizable: true, sortable: true},
-            {field: 'rule', caption: 'Rule', size: '300px', resizable: true, sortable: true}
+            {field: 'logged', caption: 'Logged', size: '145px', resizable: true, sortable: true},
+            {field: 'user', caption: 'User', size: '100px', resizable: true, sortable: true},
+            {field: 'client_ip', caption: 'Client IP', size: '120px', resizable: true, sortable: true},
+            {field: 'action', caption: 'Action', size: '55px', resizable: true, sortable: true},
+            {field: 'data', caption: 'Table', size: '70px', resizable: true, sortable: true},
+            {field: 'record_id', caption: 'Record ID', size: '70px', resizable: true, sortable: true},
+            {field: 'record_before', caption: 'Before', size: '370px', resizable: true, sortable: true},
+            {field: 'record_after', caption: 'After', size: '370px', resizable: true, sortable: true}
         ],
         searches: [
             {field: 'recid', caption: 'ID', type: 'int'},
-            {field: 'view', caption: 'View', type: 'text'},
-            {field: 'rule', caption: 'Rule', type: 'text'}
-        ]
-    },
-
-    formViews: {
-        name: 'formViews',
-        postData: {data: 'views'},
-        fields: [
-            {field: 'view', type: 'text', required: true, html: {caption: 'View: '}},
-            {field: 'rule', type: 'text', required: true, html: {caption: 'Rule: '}}
-        ]
+            {field: 'logged', caption: 'Logged', type: 'date'},
+            {field: 'user', caption: 'User', type: 'text'},
+            {field: 'client_ip', caption: 'Client IP', type: 'text'},
+            {field: 'action', caption: 'Action', type: 'text'},
+            {field: 'data', caption: 'Table', type: 'text'},
+            {field: 'record_id', caption: 'Record ID', type: 'int'},
+            {field: 'record_before', caption: 'Before', type: 'text'},
+            {field: 'record_after', caption: 'After', type: 'text'}
+        ],
+        show: {
+            footer: true,
+            toolbar: true,
+            toolbarReload: true,
+            toolbarColumns: true,
+            toolbarSearch: true
+        },
+        sortData: [
+            {field: 'recid', direction: 'desc'}
+        ],
+        toolbar: {items: [{type: 'spacer'}, themeToolbarItem()], onClick: themeToolbarClick}
     }
 };
+
+// Every column of every grid renders its value as escaped text instead of markup.
+var escapeCell = function (record, index, colIndex) {
+    return w2utils.encodeTags(this.getCellValue(index, colIndex));
+};
+
+Object.keys(config).forEach(function (name) {
+    (config[name].columns || []).forEach(function (column) {
+        column.render = escapeCell;
+    });
+});
 
 // Apply the shared configuration to every editable PowerGSLB entity, keyed by base name.
 ['Domains', 'Monitors', 'Records', 'Routings', 'Types', 'Users', 'Views'].forEach(
@@ -571,13 +627,18 @@ var config = {
 // ====================================================
 
 $(function () {
-    // on page initialization
+    // Override add button caption.
     w2obj.grid.prototype.buttons.add.caption = 'Add';
+    // Search posts and the server parses date value in this format.
+    w2utils.settings.date_format = 'yyyy-mm-dd';
+
+    // On page initialization.
     $('#powergslb').w2layout(config.layout);
     w2ui.layout.content('left', $().w2sidebar(config.sidebar));
     w2ui.layout.content('main', $().w2grid(config.gridStatus));
 
-    // in memory initialization
+    // In memory initialization.
+    $().w2grid(config.gridAudit);
     $().w2grid(config.gridDomains);
     $().w2grid(config.gridMonitors);
     $().w2grid(config.gridRecords);
@@ -590,6 +651,6 @@ $(function () {
     $().w2form(config.formRecords);
     $().w2form(config.formRoutings);
     $().w2form(config.formTypes);
-    $().w2form(config.formViews);
     $().w2form(config.formUsers);
+    $().w2form(config.formViews);
 });

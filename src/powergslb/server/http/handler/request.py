@@ -11,6 +11,7 @@ import netaddr
 import powergslb.monitor
 from powergslb.database import Database
 from powergslb.monitor.status import StatusRegistry
+from powergslb.system.password import MASK
 from powergslb.version import VERSION
 
 __all__ = ['HTTPRequestHandler']
@@ -38,12 +39,10 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
     _cache_control: ClassVar[str | None] = None
 
     # Header names (lowercased) whose values carry credentials and are masked in the debug header dump.
-    sensitive_headers: ClassVar[frozenset[str]] = frozenset({
+    _sensitive_headers: ClassVar[frozenset[str]] = frozenset({
         'authorization', 'proxy-authorization', 'cookie', 'set-cookie',
     })
-
-    # Placeholder shown in place of a sensitive value in a log.
-    _mask: ClassVar[str] = '*****'
+    _mask: ClassVar[str] = MASK
 
     def __init__(self,
                  *args: Any,
@@ -185,7 +184,7 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         """
         self._log(logging.INFO, format, *args)
         if logging.getLogger().isEnabledFor(logging.DEBUG) and getattr(self, 'headers', None):
-            headers = {name: self._mask if name.lower() in self.sensitive_headers else value
+            headers = {name: self._mask if name.lower() in self._sensitive_headers else value
                        for name, value in self.headers.items()}
             logging.debug('request headers from %s: %s', self._client_ip(), headers)
 

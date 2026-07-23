@@ -22,11 +22,12 @@ class _FakeCursor:
     """Minimal stand-in for a buffered mysql.connector cursor."""
 
     def __init__(self, description: Any, rows: list[tuple[Any, ...]], rowcount: int,
-                 raise_on_execute: Exception | None = None) -> None:
+                 raise_on_execute: Exception | None = None, lastrowid: int | None = None) -> None:
         self.description = description
         self._rows = rows
         self.rowcount = rowcount
         self._raise = raise_on_execute
+        self.lastrowid = lastrowid
         self.executed: tuple[str, tuple[Any, ...]] | None = None
         self.closed = False
 
@@ -71,6 +72,7 @@ class _FakeConnection:
 def _db_with_cursor(cursor: _FakeCursor) -> MySQLDatabase:
     database = MySQLDatabase.__new__(MySQLDatabase)
     database._connection = _FakeConnection(cursor)  # type: ignore[assignment]
+    database._last_insert_id = 0
     return database
 
 
@@ -137,6 +139,24 @@ def test_modify_returns_rowcount() -> None:
     assert cursor.closed is True
 
 
+def test_last_insert_id_outlives_the_closed_cursor() -> None:
+    # the generated key is kept before the cursor closes, so it is readable after the statement returns
+    cursor = _FakeCursor(description=None, rows=[], rowcount=1, lastrowid=42)
+    database = _db_with_cursor(cursor)
+    database.modify('INSERT INTO t (x) VALUES (%s)', (1,))
+    assert cursor.closed is True
+    assert database.last_insert_id() == 42
+
+
+def test_last_insert_id_is_zero_when_the_statement_generated_none() -> None:
+    # a statement that generates no key reports None, which reads back as 0 rather than a stale id
+    cursor = _FakeCursor(description=None, rows=[], rowcount=1, lastrowid=None)
+    database = _db_with_cursor(cursor)
+    database._last_insert_id = 42
+    database.modify('UPDATE t SET x = %s', (1,))
+    assert database.last_insert_id() == 0
+
+
 def test_modify_flattens_operation_before_running() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=0)
     database = _db_with_cursor(cursor)
@@ -178,21 +198,23 @@ def test_select_closes_cursor_even_on_error() -> None:
     assert cursor.closed is True
 
 
-def test_execute_transaction_commits_and_sums_rowcounts() -> None:
+def test_transaction_commits_the_block_as_a_unit() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=3)
     database = _db_with_cursor(cursor)
-    total = database.execute_transaction([('INSERT INTO t VALUES (%s)', (1,)), ('UPDATE t SET x = %s', (2,))])
-    assert total == 6  # 3 + 3
+    with database.transaction():
+        assert database.modify('INSERT INTO t VALUES (%s)', (1,)) == 3
+        assert database.modify('UPDATE t SET x = %s', (2,)) == 3
     # autocommit is suspended for the transaction, the statements commit as a unit, then autocommit is restored.
     assert database._connection.events == [  # type: ignore[attr-defined]
         'autocommit=False', 'commit', 'autocommit=True']
 
 
-def test_execute_transaction_rolls_back_and_reraises_on_error() -> None:
+def test_transaction_rolls_back_and_reraises_on_error() -> None:
     cursor = _FakeCursor(description=None, rows=[], rowcount=0, raise_on_execute=RuntimeError('boom'))
     database = _db_with_cursor(cursor)
     with pytest.raises(RuntimeError):
-        database.execute_transaction([('INSERT INTO t VALUES (%s)', (1,))])
+        with database.transaction():
+            database.modify('INSERT INTO t VALUES (%s)', (1,))
     # rolled back, never committed, and autocommit restored even on the error path
     assert database._connection.events == [  # type: ignore[attr-defined]
         'autocommit=False', 'rollback', 'autocommit=True']

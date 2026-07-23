@@ -37,63 +37,76 @@ path JOIN the pieces back together per query.
 
 ## Entity-relationship diagram
 
-Crow's-foot notation: `||` is "exactly one", `o{` is "zero or more". `users` has no foreign keys; it stands alone.
+Crow's-foot notation: `||` is "exactly one", `o{` is "zero or more". `users` and `audit` have no foreign keys; they
+stand alone.
 
 ```mermaid
 erDiagram
-    domains  ||--o{ rrsets   : "owns"
-    types    ||--o{ rrsets   : "typed as"
-    routings ||--o{ rrsets   : "routed by"
-    rrsets   ||--o{ records  : "contains"
-    monitors ||--o{ records  : "checked by"
-    views    ||--o{ records  : "scoped to"
+    domains ||--o{ rrsets: "owns"
+    types ||--o{ rrsets: "typed as"
+    routings ||--o{ rrsets: "routed by"
+    rrsets ||--o{ records: "contains"
+    monitors ||--o{ records: "checked by"
+    views ||--o{ records: "scoped to"
 
     users {
-        int     id        PK
-        varchar user      UK
+        int id PK
+        varchar user UK
         varchar name
-        varchar password  "crypt(3) SHA-512 ($6$)"
+        varchar password "crypt(3) SHA-512 ($6$)"
     }
     views {
-        int     id    PK
-        varchar view  UK
-        varchar rule  UK "CIDR + geo tokens"
+        int id PK
+        varchar view UK
+        varchar rule UK "CIDR + geo tokens"
     }
     types {
-        int     value        PK "IANA numeric type"
-        varchar type         UK "A, CNAME, SOA, ..."
-        varchar description  UK
+        int value PK "IANA numeric type"
+        varchar type UK "A, CNAME, SOA, ..."
+        varchar description UK
     }
     monitors {
-        int     id            PK
-        varchar monitor       UK
-        varchar monitor_json     "CHECK JSON_VALID"
+        int id PK
+        varchar monitor UK
+        varchar monitor_json "CHECK JSON_VALID"
     }
     routings {
-        int     id           PK
-        varchar policy       UK
-        varchar policy_json     "CHECK JSON_VALID"
+        int id PK
+        varchar policy UK
+        varchar policy_json "CHECK JSON_VALID"
     }
     domains {
-        int     id      PK
-        varchar domain  UK
+        int id PK
+        varchar domain UK
+        varchar description "DEFAULT ''"
     }
     rrsets {
-        int     id           PK
-        int     domain_id    FK "-> domains.id"
-        varchar name            "relative: '@' = apex"
-        int     type_value   FK "-> types.value"
-        int     ttl
-        int     routing_id   FK "-> routings.id"
+        int id PK
+        int domain_id FK "-> domains.id"
+        varchar name "relative: '@' = apex"
+        int type_value FK "-> types.value"
+        int ttl
+        int routing_id FK "-> routings.id"
     }
     records {
-        int     id          PK
-        int     rrset_id    FK "-> rrsets.id"
+        int id PK
+        int rrset_id FK "-> rrsets.id"
         varchar content
-        int     monitor_id  FK "-> monitors.id"
-        int     view_id     FK "-> views.id"
+        int monitor_id FK "-> monitors.id"
+        int view_id FK "-> views.id"
         tinyint disabled
-        int     weight
+        int weight
+    }
+    audit {
+        int id PK
+        datetime logged "DEFAULT current_timestamp"
+        varchar user "login string, not an FK"
+        varchar client_ip "client IP"
+        varchar action "save or delete"
+        varchar data "table token"
+        int record_id "affected row"
+        text record_before "NULL on insert; CHECK JSON_VALID"
+        text record_after "NULL on delete; CHECK JSON_VALID"
     }
 ```
 
@@ -103,18 +116,19 @@ Unique keys not shown as columns: `rrsets (domain_id, name, type_value)` and `re
 
 ## Table reference
 
-Eight tables.
+Nine tables.
 
-| Table      | Purpose                                                                                                |
-|------------|--------------------------------------------------------------------------------------------------------|
-| `users`    | Admin-interface accounts. `password` is a crypt(3) SHA-512 hash (Linux shadow `$6$` format).           |
-| `views`    | Named client groups. `rule` is a space-separated list of CIDR and geo tokens matched per query.        |
-| `types`    | DNS record-type catalogue keyed by the numeric type value (`A=1`, `CNAME=5`, `SOA=6`, ...).            |
-| `monitors` | Health-check definitions as `monitor_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed.      |
-| `routings` | Routing-policy definitions as `policy_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed.     |
-| `domains`  | Authoritative zones, one row per zone apex (`example.com`).                                            |
-| `rrsets`   | One `(domain_id, name, type_value)`; owns `ttl` and `routing_id`.                                      |
-| `records`  | One answer inside an rrset: `content`, plus `monitor_id`, `view_id`, `disabled`, `weight`.             |
+| Table      | Purpose                                                                                            |
+|------------|----------------------------------------------------------------------------------------------------|
+| `users`    | Admin-interface accounts. `password` is a crypt(3) SHA-512 hash (Linux shadow `$6$` format).       |
+| `views`    | Named client groups. `rule` is a space-separated list of CIDR and geo tokens matched per query.    |
+| `types`    | DNS record-type catalogue keyed by the numeric type value (`A=1`, `CNAME=5`, `SOA=6`, ...).        |
+| `monitors` | Health-check definitions as `monitor_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed.  |
+| `routings` | Routing-policy definitions as `policy_json`; `CHECK (JSON_VALID(...))` keeps the JSON well-formed. |
+| `domains`  | Authoritative zones, one row per zone apex (`example.com`).                                        |
+| `rrsets`   | One `(domain_id, name, type_value)`; owns `ttl` and `routing_id`.                                  |
+| `records`  | One answer inside an rrset: `content`, plus `monitor_id`, `view_id`, `disabled`, `weight`.         |
+| `audit`    | Append-only trail of admin writes: one row per record with its before and after state.             |
 
 Key relationships and constraints:
 
@@ -125,7 +139,15 @@ Key relationships and constraints:
 - Foreign keys point `rrsets -> domains, types, routings` and `records -> rrsets, monitors, views`. A populated rrset
   cannot be deleted because its records reference it; you delete the records and the rrset is garbage-collected (below).
 - CHECK constraints: SOA only at the apex (`type_value <> 6 OR name = '@'`), `ttl <= 2147483647`,
-  `JSON_VALID(monitor_json)` on `monitors`, and `JSON_VALID(policy_json)` on `routings`.
+  `JSON_VALID(monitor_json)` on `monitors`, `JSON_VALID(policy_json)` on `routings`, and on `audit` both payloads
+  (`record_before` / `record_after`) valid JSON when present, with at least one of them present.
+
+The `audit` table is append-only and is never trimmed automatically. An operator prunes it by age.
+The `audit_logged_index` on `logged` keeps the delete cheap:
+
+```sql
+DELETE FROM `audit` WHERE `logged` < NOW() - INTERVAL 90 DAY;
+```
 
 ---
 
@@ -198,7 +220,7 @@ matching, routing-policy selection, password hashing, w2ui grid shaping). The ru
 
 The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql/`):
 
-**Read path** - `PowerDNSMixIn` (`powerdns.py`):
+**DNS query path** (read-only) - `PowerDNSMixIn` (`powerdns.py`):
 
 - `gslb_records(qname, qtype)` resolves the owning zone by a longest-suffix match: the candidate parent zones of
   `qname` matched against `domains.domain` with `domain IN (...)` and the longest match wins (most-specific zone).
@@ -207,16 +229,19 @@ The Python layer is two mixins on `MySQLDatabase` (`src/powergslb/database/mysql
 - `gslb_checks()` returns every record's id, content, and `monitor_json` for the monitor threads.
 - `gslb_domains()` returns each zone's apex SOA content for the PowerDNS zone cache.
 
-**Write path** - `W2UIMixIn` (`w2ui.py`) routing to the `Table` classes (`tables.py`):
+**Admin CRUD path** (read-write) - `W2UIMixIn` (`w2ui.py`) routing to the `Table` classes (`tables.py`):
 
-- `check_user` authenticates an admin request against `users`.
+- `check_user` authenticates an admin request against `users`, returning the identity row (id, user, name) on success.
 - `get_data` / `save_data` / `delete_data` resolve the w2ui data token against the `TABLES` registry and delegate
   to the table, which owns its SQL; search, sort and paging run in SQL (a `PageRequest`).
+- `save_data` / `delete_data` run the CRUD write and its audit rows in one transaction, so a committed admin write
+  always carries a trail. The write that changed nothing records nothing, and a failing audit rolls the write back.
 - The `status` token's `Status.get` adds the On/Off `CASE` over `disabled` and the down-id snapshot on top of the
   records join.
-- `Records.save` writes the rrset and record levels in one transaction: an `INSERT ... ON DUPLICATE KEY UPDATE`
-  upserts the rrset and pins its id with `LAST_INSERT_ID(id)`, then the record statement reads that id back from
-  `LAST_INSERT_ID()` - honoring the "no `rrsets` reference in a `records` write" rule above.
+- `Records.save` writes the rrset and record statements: an `INSERT ... ON DUPLICATE KEY UPDATE` upserts the rrset and
+  pins its id with `LAST_INSERT_ID(id)`, then the record statement reads that id back from `LAST_INSERT_ID()` -
+  honoring the "no `rrsets` reference in a `records` write" rule above.
+- The `audit` token is read-only (`Audit.save`/`remove` raise); its rows come only from `Audit.record`.
 
 ---
 

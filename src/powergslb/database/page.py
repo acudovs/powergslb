@@ -3,14 +3,70 @@
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ['PageRequest']
+__all__ = ['PageRequest', 'SearchClause', 'SortClause']
 
 # A combo search whose whole text is one of these is a "match all".
 _WILDCARDS = frozenset('*+.?^$')
 
 
+def _text(value: Any) -> str:
+    """Narrow a raw query value to a string.
+
+    :param value: The raw identifier from the parsed query.
+    :returns: The value when it is a string, the empty string otherwise.
+    """
+    return value if isinstance(value, str) else ''
+
+
+@dataclass(frozen=True, kw_only=True)
+class SearchClause:
+    """One w2ui search clause, its identifiers narrowed to strings.
+
+    An identifier the query did not post as a string is empty, which no whitelist accepts.
+
+    :param field: The exposed field name to search.
+    :param type: The clause type (text, int, date).
+    :param operator: The comparison operator, valid for the type.
+    :param value: The raw value, interpreted by the type's clause builder.
+    """
+    field: str = ''
+    type: str = ''
+    operator: str = ''
+    value: Any = None
+
+    @classmethod
+    def from_clause(cls, clause: dict[str, Any]) -> 'SearchClause':
+        """Build a clause from one raw w2ui search dict.
+
+        :param clause: The raw search clause from the parsed query.
+        :returns: The narrowed clause.
+        """
+        return cls(field=_text(clause.get('field')), type=_text(clause.get('type')),
+                   operator=_text(clause.get('operator')), value=clause.get('value'))
+
+
+@dataclass(frozen=True, kw_only=True)
+class SortClause:
+    """One w2ui sort clause, its identifiers narrowed to strings.
+
+    :param field: The exposed field name to sort by.
+    :param direction: The sort direction; desc sorts descending, anything else ascending.
+    """
+    field: str = ''
+    direction: str = ''
+
+    @classmethod
+    def from_clause(cls, clause: dict[str, Any]) -> 'SortClause':
+        """Build a clause from one raw w2ui sort dict.
+
+        :param clause: The raw sort clause from the parsed query.
+        :returns: The narrowed clause.
+        """
+        return cls(field=_text(clause.get('field')), direction=_text(clause.get('direction')))
+
+
 def _clauses(value: Any) -> tuple[dict[str, Any], ...]:
-    """Keep only the dict clauses of a list value; any other shape yields no clauses.
+    """Keep only the dict clauses of a list value.
 
     :param value: The raw search or sort value from the parsed query.
     :returns: The dict clauses, or an empty tuple when the value is not a list.
@@ -20,7 +76,7 @@ def _clauses(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(clause for clause in value if isinstance(clause, dict))
 
 
-def _searches(query: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+def _searches(query: dict[str, Any]) -> tuple[SearchClause, ...]:
     """Build search clauses from the query.
 
     A grid posts a list of clause dicts; a combo posts a flat typed string. A combo string that is a single
@@ -36,24 +92,24 @@ def _searches(query: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     if isinstance(search, str):
         if search in _WILDCARDS:
             return ()
-        return ({'field': query.get('field'), 'type': 'text', 'operator': 'contains', 'value': search},)
+        return (SearchClause(field=_text(query.get('field')), type='text', operator='contains', value=search),)
 
-    return _clauses(search)
+    return tuple(SearchClause.from_clause(clause) for clause in _clauses(search))
 
 
 @dataclass(frozen=True, kw_only=True)
 class PageRequest:
     """The search, sort and paging parameters of one w2ui read request.
 
-    :param searches: The w2ui search clauses (field, type, operator, value).
+    :param searches: The w2ui search clauses.
     :param or_logic: Whether the searches combine with OR instead of AND.
-    :param sorts: The w2ui sort clauses (field, direction).
+    :param sorts: The w2ui sort clauses.
     :param limit: The page size, or None for an unbounded read.
     :param offset: The page start, or None when only a cap (max) was requested.
     """
-    searches: tuple[dict[str, Any], ...] = ()
+    searches: tuple[SearchClause, ...] = ()
     or_logic: bool = False
-    sorts: tuple[dict[str, Any], ...] = ()
+    sorts: tuple[SortClause, ...] = ()
     limit: int | None = None
     offset: int | None = None
 
@@ -80,6 +136,6 @@ class PageRequest:
 
         return cls(searches=_searches(query),
                    or_logic=query.get('searchLogic') == 'OR',
-                   sorts=_clauses(query.get('sort')),
+                   sorts=tuple(SortClause.from_clause(clause) for clause in _clauses(query.get('sort'))),
                    limit=limit,
                    offset=offset)

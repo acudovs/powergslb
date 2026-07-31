@@ -3,7 +3,7 @@
 [logging]
 # https://docs.python.org/3/library/logging.html
 format = "%(levelname)s [%(threadName)s] %(module)s.%(funcName)s:%(lineno)d %(message)s"
-level = "INFO"
+level = "WARNING"
 
 [database]
 # https://dev.mysql.com/doc/connector-python/en/connector-python-connectargs.html
@@ -14,6 +14,15 @@ host = "127.0.0.1"
 port = 3306
 unix_socket = "/var/lib/mysql/mysql.sock"
 connection_timeout = 1
+
+# Connection ping settings (connection.ping parameters)
+ping_reconnect = false     # Attempt to reconnect if connection is lost
+ping_attempts = 1          # Number of ping attempts
+ping_delay = 0             # Delay between ping attempts in seconds
+
+# Statement retry settings (exponential backoff on transient failures)
+max_retries = 2            # Maximum retry attempts for transient connection failures
+base_delay = 0.5           # Base delay in seconds for exponential backoff (0.5s, 1.0s, ...)
 
 [server]
 address = "127.0.0.1"

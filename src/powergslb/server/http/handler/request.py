@@ -210,7 +210,12 @@ class HTTPRequestHandler(SimpleHTTPRequestHandler, abc.ABC):
         except (BrokenPipeError, ConnectionError, TimeoutError) as e:
             logging.debug('connection closed: %s: %s', type(e).__name__, e)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error('%s: %s', type(e).__name__, e)
+            # Infrastructure errors (2003/2005) already logged at database layer; log at lower level to prevent spam
+            error_msg = str(e).lower()
+            if '2003' in error_msg or '2005' in error_msg or 'can\'t connect' in error_msg or 'unknown mysql server host' in error_msg:
+                logging.warning('%s: %s', type(e).__name__, e)
+            else:
+                logging.error('%s: %s', type(e).__name__, e)
             self.close_connection = True
             # send_error needs a parsed request; self.command is unset until then.
             if getattr(self, 'command', None):
